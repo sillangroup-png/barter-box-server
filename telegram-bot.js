@@ -11,10 +11,39 @@ function normalizeLogin(s){
   return String(s || "").trim().toLowerCase().replace(/^@/, "");
 }
 
-function findDealByLogin(state, login){
+// Один и тот же блогер может делать несколько интеграций в разные даты
+// (например, @luinaofficial 16 июля, 20 июля, 30 июля — три разные записи
+// в influencerDeals). Поэтому ищем ВСЕ совпадения по логину, а не первое.
+function findDealsByLogin(state, login){
   const target = normalizeLogin(login);
-  if(!target) return null;
-  return state.influencerDeals.find(d => normalizeLogin(d.blogerLogin) === target) || null;
+  if(!target) return [];
+  return state.influencerDeals.filter(d => normalizeLogin(d.blogerLogin) === target);
+}
+
+// Оставлено для обратной совместимости (возвращает первое совпадение).
+function findDealByLogin(state, login){
+  return findDealsByLogin(state, login)[0] || null;
+}
+
+// Разбирает дату из подписи в формат YYYY-MM-DD (как хранится в plannedDate/publishedDate).
+// Понимает: 20.07, 20.07.2026, 2026-07-20, 20/07.
+function parseDateToken(token){
+  if(!token) return null;
+  const t = token.trim();
+  let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if(m) return `${m[1]}-${m[2].padStart(2,"0")}-${m[3].padStart(2,"0")}`;
+  m = t.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})$/);
+  if(m) return `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  m = t.match(/^(\d{1,2})[.\/](\d{1,2})$/);
+  if(m){
+    const year = new Date().getFullYear();
+    return `${year}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  }
+  return null;
+}
+
+function dealDateLabel(d){
+  return d.publishedDate || d.plannedDate || "без даты";
 }
 
 async function downloadTelegramFile(token, fileId){
@@ -109,7 +138,9 @@ function startTelegramBot(state, persist){
   bot.onText(/\/start/, (msg)=>{
     bot.sendMessage(msg.chat.id,
       "Пришлите скриншот статистики Instagram-поста с подписью — логином блогера (например: @dana.style).\n" +
-      "Я распознаю цифры на скриншоте и обновлю данные во вкладке «Инфлюенс интеграции крупные»."
+      "Я распознаю цифры на скриншоте и обновлю данные во вкладке «Инфлюенс интеграции крупные».\n\n" +
+      "Если у блогера несколько интеграций в разные даты, добавьте дату поста через пробел, " +
+      "например: @dana.style 20.07 — иначе я уточню, какую именно дату вы имеете в виду."
     );
   });
 
@@ -120,11 +151,36 @@ function startTelegramBot(state, persist){
       bot.sendMessage(chatId, "Добавьте подпись к фото — логин блогера (например: @dana.style) — и отправьте ещё раз.");
       return;
     }
-    const deal = findDealByLogin(state, caption);
-    if(!deal){
-      bot.sendMessage(chatId, `Блогер «${caption}» не найден среди интеграций «Инфлюенс крупные». Сначала добавьте интеграцию в приложении, затем присылайте скриншоты.`);
+    const tokens = caption.split(/\s+/);
+    const loginToken = tokens[0];
+    const dateToken = tokens.slice(1).join(" ").trim();
+
+    const matches = findDealsByLogin(state, loginToken);
+    if(matches.length === 0){
+      bot.sendMessage(chatId, `Блогер «${loginToken}» не найден среди интеграций «Инфлюенс крупные». Сначала добавьте интеграцию в приложении, затем присылайте скриншоты.`);
       return;
     }
+
+    let deal = null;
+    if(matches.length === 1){
+      deal = matches[0];
+    }else{
+      // У блогера несколько интеграций (разные даты постов) — без даты в подписи
+      // непонятно, какую запись обновлять, поэтому просим уточнить.
+      const parsedDate = parseDateToken(dateToken);
+      if(parsedDate){
+        deal = matches.find(d => d.publishedDate === parsedDate || d.plannedDate === parsedDate) || null;
+      }
+      if(!deal){
+        const optionsList = matches.map(d => `• ${dealDateLabel(d)} (${d.status || "—"}, ${d.platform || ""})`).join("\n");
+        bot.sendMessage(chatId,
+          `У блогера «${loginToken}» несколько интеграций «Инфлюенс крупные» — уточните дату поста в подписи, ` +
+          `например: «${loginToken} 20.07».\n\nДоступные даты:\n${optionsList}`
+        );
+        return;
+      }
+    }
+
     try{
       bot.sendMessage(chatId, "Читаю скриншот…");
       const sizes = msg.photo;
@@ -142,7 +198,7 @@ function startTelegramBot(state, persist){
       persist();
 
       const lines = [
-        `Обновлено: ${deal.blogerLogin}`,
+        `Обновлено: ${deal.blogerLogin} (интеграция от ${dealDateLabel(deal)})`,
         `Охват: ${stats.views ?? "—"}`,
         `Лайки: ${stats.likes ?? "—"} · Комментарии: ${stats.comments ?? "—"} · Сохранения: ${stats.saves ?? "—"}`,
       ];
@@ -160,4 +216,4 @@ function startTelegramBot(state, persist){
   return bot;
 }
 
-module.exports = { startTelegramBot, findDealByLogin };
+module.exports = { startTelegramBot, findDealByLogin, findDealsByLogin, parseDateToken };
