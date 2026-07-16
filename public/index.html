@@ -366,6 +366,16 @@ function parseCsv(text){
 }
 function fmtNum(v){ return (v===null || v===undefined || v==="") ? "—" : Number(v).toLocaleString("ru-RU"); }
 function pubOf(orderId){ return DataManager.state.publications.find(p=>p.orderId===orderId); }
+// Проверяет, попадает ли дата (в формате YYYY-MM-DD или ISO-строка) в диапазон [from, to].
+// Пустая dateStr при заданном диапазоне считается непопаданием (строка просто не пройдёт фильтр).
+function inDateRange(dateStr, from, to){
+  if(!from && !to) return true;
+  if(!dateStr) return false;
+  const d = String(dateStr).slice(0,10);
+  if(from && d < from) return false;
+  if(to && d > to) return false;
+  return true;
+}
 function latestMeasurement(pub){
   return (pub && pub.measurements && pub.measurements.length) ? pub.measurements[pub.measurements.length-1] : null;
 }
@@ -477,7 +487,7 @@ async function withBusy(button, fn){
 const SESSION_KEY = "barterBoxApp_session"; // роль/код водителя — только для ЭТОГО браузера
 const UI = {
   role: null, driverCode: null, tab: "dashboard",
-  filters: {campaign:"", driver:"", city:"", status:"", search:""},
+  filters: {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""},
   topSort: "views",
   selectedOrderIds: new Set(),
   openOrderId: null, driverAwaiting: null, driverReasonCode: null,
@@ -817,6 +827,7 @@ function tplDeliveries(){
       const s = f.search.toLowerCase();
       if(!(o.blogger.toLowerCase().includes(s) || o.address.toLowerCase().includes(s) || o.phone.includes(s))) return false;
     }
+    if((f.dateFrom || f.dateTo) && !inDateRange(o.deliveredAt || o.assignedAt, f.dateFrom, f.dateTo)) return false;
     return true;
   });
 
@@ -841,6 +852,10 @@ function tplDeliveries(){
           <option value="__problem__" ${f.status==='__problem__'?'selected':''}>⚠️ Требует реакции</option>
           ${Object.entries(STATUS_META).map(([k,m])=>`<option value="${k}" ${f.status===k?'selected':''}>${escapeHtml(m.label)}</option>`).join("")}
         </select>
+        <span style="align-self:center;color:var(--ink-mute);font-size:12px">дата с</span>
+        <input type="date" id="f-date-from" value="${f.dateFrom||''}">
+        <span style="align-self:center;color:var(--ink-mute);font-size:12px">по</span>
+        <input type="date" id="f-date-to" value="${f.dateTo||''}">
         <button class="btn btn-ghost btn-sm" id="clear-filters-btn">Сброс</button>
       </div>
 
@@ -951,6 +966,10 @@ function tplPublications(){
   let rows = orders.filter(o=>{
     if(f.campaign && String(o.campaignId)!==f.campaign) return false;
     if(f.search && !o.blogger.toLowerCase().includes(f.search.toLowerCase())) return false;
+    if(f.dateFrom || f.dateTo){
+      const pub = pubOf(o.id);
+      if(!inDateRange(pub && pub.publishedAt, f.dateFrom, f.dateTo)) return false;
+    }
     return true;
   });
   return `
@@ -970,6 +989,10 @@ function tplPublications(){
       <div class="toolbar">
         <input type="search" class="fill" id="fp-search" placeholder="Поиск по блогеру" value="${escapeHtml(f.search)}">
         <select id="fp-campaign"><option value="">Все проекты</option>${campaigns.map(c=>`<option value="${c.id}" ${f.campaign==String(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join("")}</select>
+        <span style="align-self:center;color:var(--ink-mute);font-size:12px">дата публ. с</span>
+        <input type="date" id="fp-date-from" value="${f.dateFrom||''}">
+        <span style="align-self:center;color:var(--ink-mute);font-size:12px">по</span>
+        <input type="date" id="fp-date-to" value="${f.dateTo||''}">
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
@@ -1141,6 +1164,12 @@ function tplReport(){
       const s = f.search.toLowerCase();
       if(!(o.blogger.toLowerCase().includes(s) || o.address.toLowerCase().includes(s))) return false;
     }
+    if(f.dateFrom || f.dateTo){
+      const pub = pubOf(o.id);
+      const inDelivery = inDateRange(o.deliveredAt, f.dateFrom, f.dateTo);
+      const inPub = inDateRange(pub && pub.publishedAt, f.dateFrom, f.dateTo);
+      if(!inDelivery && !inPub) return false;
+    }
     return true;
   });
   return `
@@ -1151,6 +1180,10 @@ function tplReport(){
       <div class="toolbar">
         <input type="search" class="fill" id="fr-search" placeholder="Поиск по блогеру / адресу" value="${escapeHtml(f.search)}">
         <select id="fr-campaign"><option value="">Все проекты</option>${campaigns.map(c=>`<option value="${c.id}" ${f.campaign==String(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join("")}</select>
+        <span style="align-self:center;color:var(--ink-mute);font-size:12px">дата (доставка/публ.) с</span>
+        <input type="date" id="fr-date-from" value="${f.dateFrom||''}">
+        <span style="align-self:center;color:var(--ink-mute);font-size:12px">по</span>
+        <input type="date" id="fr-date-to" value="${f.dateTo||''}">
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
@@ -1556,8 +1589,10 @@ function wireDeskTab(){
     document.getElementById("f-driver").onchange = e=>{ UI.filters.driver = e.target.value; renderDeskTab(); };
     document.getElementById("f-city").onchange = e=>{ UI.filters.city = e.target.value; renderDeskTab(); };
     document.getElementById("f-status").onchange = e=>{ UI.filters.status = e.target.value; renderDeskTab(); };
+    document.getElementById("f-date-from").onchange = e=>{ UI.filters.dateFrom = e.target.value; renderDeskTab(); };
+    document.getElementById("f-date-to").onchange = e=>{ UI.filters.dateTo = e.target.value; renderDeskTab(); };
     document.getElementById("clear-filters-btn").onclick = ()=>{
-      UI.filters = {campaign:"", driver:"", city:"", status:"", search:""};
+      UI.filters = {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""};
       renderDeskTab();
     };
 
@@ -1710,6 +1745,8 @@ function wireDeskTab(){
     const fpSearch = document.getElementById("fp-search");
     fpSearch.oninput = debounce(()=>{ UI.filters.search = fpSearch.value; renderDeskTab(); }, 250);
     document.getElementById("fp-campaign").onchange = e=>{ UI.filters.campaign = e.target.value; renderDeskTab(); };
+    document.getElementById("fp-date-from").onchange = e=>{ UI.filters.dateFrom = e.target.value; renderDeskTab(); };
+    document.getElementById("fp-date-to").onchange = e=>{ UI.filters.dateTo = e.target.value; renderDeskTab(); };
 
     document.querySelectorAll(".add-pub-btn").forEach(btn=>{
       btn.onclick = ()=> modalAddPublication(parseInt(btn.dataset.order,10));
@@ -1851,6 +1888,8 @@ function wireDeskTab(){
     const frSearch = document.getElementById("fr-search");
     frSearch.oninput = debounce(()=>{ UI.filters.search = frSearch.value; renderDeskTab(); }, 250);
     document.getElementById("fr-campaign").onchange = e=>{ UI.filters.campaign = e.target.value; renderDeskTab(); };
+    document.getElementById("fr-date-from").onchange = e=>{ UI.filters.dateFrom = e.target.value; renderDeskTab(); };
+    document.getElementById("fr-date-to").onchange = e=>{ UI.filters.dateTo = e.target.value; renderDeskTab(); };
 
     document.getElementById("export-report-csv-btn").onclick = ()=>{
       const header = ["ID","Блогер","Проект","Город","Водитель","Статус доставки","Дата доставки","Платформа","Дата публикации","Охват","ER%","Продажи шт","Выручка","Bitrix"];
