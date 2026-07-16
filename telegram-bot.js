@@ -27,8 +27,18 @@ async function downloadTelegramFile(token, fileId){
   return Buffer.from(arrBuf);
 }
 
+function sniffImageMediaType(buf){
+  if(buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png";
+  if(buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if(buf.length >= 6 && buf.toString("ascii", 0, 6) === "GIF87a") return "image/gif";
+  if(buf.length >= 6 && buf.toString("ascii", 0, 6) === "GIF89a") return "image/gif";
+  if(buf.length >= 12 && buf.toString("ascii", 0, 4) === "RIFF" && buf.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+  return "image/jpeg";
+}
+
 async function analyzeScreenshot(anthropicKey, model, imageBuffer){
   const base64 = imageBuffer.toString("base64");
+  const mediaType = sniffImageMediaType(imageBuffer);
   const prompt = "Это скриншот статистики публикации в Instagram (Reels/Stories/пост). " +
     "Извлеки числовые метрики, которые видно на изображении: просмотры/охват, лайки, комментарии, " +
     "сохранения, переходы по ссылке/клики (если есть). Если какой-то метрики не видно — верни null. " +
@@ -43,28 +53,42 @@ async function analyzeScreenshot(anthropicKey, model, imageBuffer){
     },
     body: JSON.stringify({
       model,
-      max_tokens: 300,
-      messages: [{
-        role: "user",
-        content: [
-          {type: "image", source: {type: "base64", media_type: "image/jpeg", data: base64}},
-          {type: "text", text: prompt},
-        ],
-      }],
+      max_tokens: 1024,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {type: "image", source: {type: "base64", media_type: mediaType, data: base64}},
+            {type: "text", text: prompt},
+          ],
+        },
+        // Префилл ответа ассистента — заставляет модель начать сразу с "{",
+        // без вступительных фраз, которые раньше иногда обрезались лимитом токенов.
+        {role: "assistant", content: "{"},
+      ],
     }),
   });
   const data = await resp.json();
   if(data.error) throw new Error(data.error.message || "Ошибка Anthropic API");
-  const text = (data.content && data.content[0] && data.content[0].text) || "";
-  const match = text.match(/\{[\s\S]*\}/);
-  if(!match) throw new Error("Модель не вернула JSON: " + text.slice(0, 200));
-  return JSON.parse(match[0]);
+  const completion = (data.content && data.content[0] && data.content[0].text) || "";
+  const fullText = "{" + completion;
+  const match = fullText.match(/\{[\s\S]*\}/);
+  if(!match){
+    console.error("Telegram-бот: модель не вернула JSON, сырой ответ:", fullText.slice(0, 500));
+    throw new Error("модель не смогла распознать данные на скриншоте, попробуйте другой скриншот (крупнее/чётче)");
+  }
+  try{
+    return JSON.parse(match[0]);
+  }catch(e){
+    console.error("Telegram-бот: не удалось распарсить JSON от модели:", fullText.slice(0, 500));
+    throw new Error("не удалось разобрать ответ модели, попробуйте ещё раз");
+  }
 }
 
 function startTelegramBot(state, persist){
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
-  const model = process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022";
+  const model = process.env.ANTHROPIC_MODEL || "claude-sonnet-5";
 
   if(!token){
     console.log("TELEGRAM_BOT_TOKEN не задан — Telegram-бот для инфлюенс-статистики выключен.");
