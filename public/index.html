@@ -725,6 +725,7 @@ function tplMarketerDashboard(){
   const ranked = publications.map(p=>({p, o: DataManager.find("orders", p.orderId), m: latestMeasurement(p)}))
     .filter(x=>x.o && x.m).sort((a,b)=>(b.m.views||0)-(a.m.views||0)).slice(0,3);
   return `
+    <div class="panel-title">Бартерные рассылки</div>
     <div class="grid-kpi">
       <div class="kpi"><div class="num">${ms.pubCount}</div><div class="lbl">Публикаций зафиксировано</div></div>
       <div class="kpi warn"><div class="num">${ms.gap.length}</div><div class="lbl">Доставлено, но нет публикации</div></div>
