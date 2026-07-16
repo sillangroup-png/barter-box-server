@@ -62,16 +62,12 @@ async function analyzeScreenshot(anthropicKey, model, imageBuffer){
             {type: "text", text: prompt},
           ],
         },
-        // Префилл ответа ассистента — заставляет модель начать сразу с "{",
-        // без вступительных фраз, которые раньше иногда обрезались лимитом токенов.
-        {role: "assistant", content: "{"},
       ],
     }),
   });
   const data = await resp.json();
   if(data.error) throw new Error(data.error.message || "Ошибка Anthropic API");
-  const completion = (data.content && data.content[0] && data.content[0].text) || "";
-  const fullText = "{" + completion;
+  const fullText = (data.content && data.content[0] && data.content[0].text) || "";
   const match = fullText.match(/\{[\s\S]*\}/);
   if(!match){
     console.error("Telegram-бот: модель не вернула JSON, сырой ответ:", fullText.slice(0, 500));
