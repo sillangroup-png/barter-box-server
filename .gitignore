@@ -1,0 +1,9 @@
+node_modules/
+data/state.json
+data/*.bak*
+uploads/*.jpg
+uploads/*.jpeg
+uploads/*.png
+!uploads/.gitkeep
+logs/
+.env
