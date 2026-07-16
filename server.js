@@ -33,11 +33,22 @@ const CAMPAIGN_STAGES = [
   "Упаковка на складе","Товары в офисе","Скомплектовано","В доставке","Учёт закрыт","Проект закрыт"
 ];
 const RETURN_STATUSES = ["В офисе","Ожидает решения","Оформлен возврат","Принят на складе","Закрыт"];
+const DEAL_STATUSES = ["Запланирована","Опубликована","Оплачена","Закрыта"];
+
+// ---------- Авторизация менеджера/логиста и маркетолога ----------
+// Пара логин/пароль — общая на роль (как код у водителей), задаётся переменными
+// окружения на хостинге (Render → Environment), а НЕ хранится в коде: репозиторий
+// публичный, поэтому реальные значения не должны попадать в git.
+const AUTH = {
+  manager:  {login: process.env.MANAGER_LOGIN  || null, password: process.env.MANAGER_PASSWORD  || null},
+  marketer: {login: process.env.MARKETER_LOGIN || null, password: process.env.MARKETER_PASSWORD || null},
+};
+const authTokens = new Map(); // token -> role
 
 /* =========================================================================
    1. ХРАНИЛИЩЕ: всё состояние — один объект в памяти, зеркалится в JSON-файл
    ========================================================================= */
-function emptyState(){ return {drivers:[], campaigns:[], orders:[], returns:[], publications:[]}; }
+function emptyState(){ return {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[]}; }
 
 function seedState(){
   const drivers = [
@@ -111,7 +122,35 @@ function seedState(){
       ],
     },
   ];
-  return {drivers, campaigns, orders, returns, publications};
+
+  // Демо: крупные инфлюенс-интеграции + история продаж (для расчёта ROMI с кривой затухания)
+  const influencerDeals = [
+    {id:1, blogerLogin:"@dana.style", platform:"Instagram Reels", product:"Уход премиум",
+     plannedDate: fmtDate(days(-14)), publishedDate: fmtDate(days(-14)),
+     plannedReach:150000, plannedClicks:3000, reach:214000, clicks:4100,
+     likes:0, comments:0, saves:0, lastUpdatedFrom:"", lastUpdatedAt:"",
+     cost:350000, status:"Опубликована", notes:"Крупный блогер, охват выше плана"},
+    {id:2, blogerLogin:"@erlan_review", platform:"YouTube Shorts", product:"Уход премиум",
+     plannedDate: fmtDate(days(-6)), publishedDate: fmtDate(days(-6)),
+     plannedReach:80000, plannedClicks:1500, reach:76000, clicks:1300,
+     likes:0, comments:0, saves:0, lastUpdatedFrom:"", lastUpdatedAt:"",
+     cost:220000, status:"Опубликована", notes:""},
+  ];
+  const salesByDay = [];
+  // 21 день истории по товару "Уход премиум": база ~40 продаж/день + всплески в дни постов
+  for(let i=-20;i<=0;i++){
+    const d = fmtDate(days(i));
+    let revenue = 40 + Math.round(Math.random()*6-3); // база с небольшим шумом
+    if(i===-14) revenue += 90;      // день публикации @dana.style
+    else if(i===-13) revenue += 45; // +1 день, 50% затухания
+    else if(i===-12) revenue += 18; // +2 дня, 20% затухания
+    else if(i===-6) revenue += 50;  // день публикации @erlan_review
+    else if(i===-5) revenue += 25;
+    else if(i===-4) revenue += 10;
+    salesByDay.push({id: salesByDay.length+1, date:d, product:"Уход премиум", revenue: revenue*3500});
+  }
+
+  return {drivers, campaigns, orders, returns, publications, influencerDeals, salesByDay};
 }
 
 let state = loadState();
@@ -177,6 +216,22 @@ const upload = multer({
 // ---------- state & health ----------
 app.get("/api/state", (req,res)=> res.json(state));
 app.get("/api/health", (req,res)=> res.json({ok:true, orders: state.orders.length, time:new Date().toISOString()}));
+
+// ---------- авторизация (менеджер/логист, маркетолог) ----------
+app.post("/api/auth/login", (req,res)=>{
+  const {role, login, password} = req.body || {};
+  const cfg = AUTH[role];
+  if(!cfg) return res.status(400).json({error:"Неизвестная роль"});
+  if(!cfg.login || !cfg.password){
+    return res.status(503).json({error:"Логин для этой роли ещё не настроен на сервере (нужны переменные окружения)"});
+  }
+  if(login !== cfg.login || password !== cfg.password){
+    return res.status(401).json({error:"Неверный логин или пароль"});
+  }
+  const token = require("crypto").randomBytes(24).toString("hex");
+  authTokens.set(token, role);
+  res.json({ok:true, token});
+});
 
 // ---------- drivers ----------
 app.post("/api/drivers", (req,res)=>{
@@ -438,6 +493,100 @@ app.post("/api/publications/import", (req,res)=>{
   res.json({created, measured, skipped});
 });
 
+// ---------- инфлюенс-интеграции (крупные) ----------
+app.post("/api/influencer-deals", (req,res)=>{
+  const b = req.body || {};
+  if(!b.blogerLogin) return res.status(400).json({error:"blogerLogin обязателен"});
+  const deal = {
+    id: nextId("influencerDeals"), blogerLogin: b.blogerLogin, platform: b.platform || PLATFORMS[0],
+    product: b.product || "", plannedDate: b.plannedDate || "", publishedDate: b.publishedDate || "",
+    plannedReach: b.plannedReach || 0, plannedClicks: b.plannedClicks || 0,
+    reach: b.reach || 0, clicks: b.clicks || 0, cost: b.cost || 0,
+    likes: b.likes || 0, comments: b.comments || 0, saves: b.saves || 0,
+    lastUpdatedFrom: "", lastUpdatedAt: "",
+    status: b.status || DEAL_STATUSES[0], notes: b.notes || "",
+  };
+  state.influencerDeals.push(deal);
+  persist();
+  res.json(deal);
+});
+app.patch("/api/influencer-deals/:id", (req,res)=>{
+  const d = state.influencerDeals.find(d=>d.id===+req.params.id);
+  if(!d) return res.status(404).json({error:"not found"});
+  Object.assign(d, req.body || {});
+  persist();
+  res.json(d);
+});
+app.delete("/api/influencer-deals/:id", (req,res)=>{
+  const id = +req.params.id;
+  state.influencerDeals = state.influencerDeals.filter(d=>d.id!==id);
+  persist();
+  res.json({ok:true});
+});
+app.post("/api/influencer-deals/import", (req,res)=>{
+  const {rows} = req.body || {};
+  if(!Array.isArray(rows)) return res.status(400).json({error:"rows[] обязателен"});
+  let added = 0;
+  rows.forEach(r=>{
+    const blogerLogin = (r["блогер"] || r["blogger"] || r["логин"] || "").trim();
+    if(!blogerLogin) return;
+    state.influencerDeals.push({
+      id: nextId("influencerDeals"), blogerLogin,
+      platform: r["платформа"] || r["platform"] || PLATFORMS[0],
+      product: r["продукт"] || r["product"] || "",
+      plannedDate: r["план_дата"] || r["planned_date"] || "",
+      publishedDate: r["факт_дата"] || r["published_date"] || "",
+      plannedReach: parseInt(r["план_охват"] || r["planned_reach"] || 0, 10) || 0,
+      plannedClicks: parseInt(r["план_клики"] || r["planned_clicks"] || 0, 10) || 0,
+      reach: parseInt(r["охват"] || r["reach"] || 0, 10) || 0,
+      clicks: parseInt(r["клики"] || r["clicks"] || 0, 10) || 0,
+      cost: parseInt(r["расход"] || r["cost"] || 0, 10) || 0,
+      likes:0, comments:0, saves:0, lastUpdatedFrom:"", lastUpdatedAt:"",
+      status: r["статус"] || r["status"] || DEAL_STATUSES[0],
+      notes: r["комментарий"] || r["notes"] || "",
+    });
+    added++;
+  });
+  persist();
+  res.json({added});
+});
+
+// ---------- продажи по дням (вручную из 1С) — нужны для расчёта ROMI блогеров ----------
+app.post("/api/sales", (req,res)=>{
+  const b = req.body || {};
+  if(!b.date || !b.product) return res.status(400).json({error:"date и product обязательны"});
+  let row = state.salesByDay.find(s=>s.date===b.date && s.product===b.product);
+  if(row){ row.revenue = b.revenue || 0; }
+  else{
+    row = {id: nextId("salesByDay"), date: b.date, product: b.product, revenue: b.revenue || 0};
+    state.salesByDay.push(row);
+  }
+  persist();
+  res.json(row);
+});
+app.delete("/api/sales/:id", (req,res)=>{
+  const id = +req.params.id;
+  state.salesByDay = state.salesByDay.filter(s=>s.id!==id);
+  persist();
+  res.json({ok:true});
+});
+app.post("/api/sales/import", (req,res)=>{
+  const {rows} = req.body || {};
+  if(!Array.isArray(rows)) return res.status(400).json({error:"rows[] обязателен"});
+  let added = 0, updated = 0;
+  rows.forEach(r=>{
+    const date = (r["дата"] || r["date"] || "").trim();
+    const product = (r["продукт"] || r["product"] || "").trim();
+    if(!date || !product) return;
+    const revenue = parseInt(r["выручка"] || r["revenue"] || 0, 10) || 0;
+    let row = state.salesByDay.find(s=>s.date===date && s.product===product);
+    if(row){ row.revenue = revenue; updated++; }
+    else{ state.salesByDay.push({id: nextId("salesByDay"), date, product, revenue}); added++; }
+  });
+  persist();
+  res.json({added, updated});
+});
+
 // 404 для неизвестных API-путей (чтобы не отдавать index.html вместо ошибки)
 app.use("/api", (req,res)=> res.status(404).json({error:"not found"}));
 
@@ -451,3 +600,11 @@ app.listen(PORT, ()=>{
   console.log(`Barter Box сервер запущен: http://localhost:${PORT}`);
   console.log(`Заказов в базе: ${state.orders.length}`);
 });
+
+// Telegram-бот для инфлюенс-статистики: работает в этом же процессе (long polling,
+// без отдельного сервиса на Render), включается только если заданы оба env var'а.
+try{
+  require("./telegram-bot").startTelegramBot(state, persist);
+}catch(e){
+  console.error("Не удалось запустить Telegram-бота:", e.message);
+}
