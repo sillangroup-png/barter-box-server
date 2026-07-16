@@ -218,6 +218,7 @@ const RETURN_STATUSES = ["В офисе","Ожидает решения","Офо
 const BOX_TYPES = ["Уход премиум","Бьюти-бокс","Гаджет-набор"];
 const PLATFORMS = ["Instagram Reels","Instagram Stories","TikTok","YouTube Shorts","Отзыв / пост"];
 const BLOGGER_TIERS = ["Малый (эффект 1–7 дней)","Крупный (эффект 2–3 недели)"];
+const DEAL_STATUSES = ["Запланирована","Опубликована","Оплачена","Закрыта"];
 
 /* =========================================================================
    2. API-КЛИЕНТ — вся запись/чтение идёт на общий сервер, а не в localStorage
@@ -273,6 +274,17 @@ const Api = {
   deletePublication: (id)=> apiFetch("/api/publications/"+id, {method:"DELETE"}),
   addMeasurement: (pubId, m)=> apiFetch("/api/publications/"+pubId+"/measurements", {method:"POST", headers:jsonHeaders, body:JSON.stringify(m)}),
   importPublications: (rows)=> apiFetch("/api/publications/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
+
+  login: (role, login, password)=> apiFetch("/api/auth/login", {method:"POST", headers:jsonHeaders, body:JSON.stringify({role, login, password})}),
+
+  createDeal: (d)=> apiFetch("/api/influencer-deals", {method:"POST", headers:jsonHeaders, body:JSON.stringify(d)}),
+  updateDeal: (id, changes)=> apiFetch("/api/influencer-deals/"+id, {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
+  deleteDeal: (id)=> apiFetch("/api/influencer-deals/"+id, {method:"DELETE"}),
+  importDeals: (rows)=> apiFetch("/api/influencer-deals/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
+
+  saveSale: (s)=> apiFetch("/api/sales", {method:"POST", headers:jsonHeaders, body:JSON.stringify(s)}),
+  deleteSale: (id)=> apiFetch("/api/sales/"+id, {method:"DELETE"}),
+  importSales: (rows)=> apiFetch("/api/sales/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
 };
 
 /* =========================================================================
@@ -281,7 +293,7 @@ const Api = {
    ОТКУДА берутся данные и КАК они изменяются)
    ========================================================================= */
 const DataManager = {
-  state: {drivers:[], campaigns:[], orders:[], returns:[], publications:[]},
+  state: {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[]},
   async load(){ this.state = await Api.getState(); return this.state; },
   async refresh(){ this.state = await Api.getState(); return this.state; },
   find(collection, id){ return this.state[collection].find(i=> (i.id===id) || (i.code===id)); },
@@ -373,6 +385,83 @@ function marketingSummary(){
   const gap = orders.filter(o=>o.status==="delivered" && !pubOf(o.id));
   return {totalReach, totalSales, totalRevenue, avgEr, gap, pubCount: publications.length};
 }
+/* ---------- ROMI крупных инфлюенс-интеграций (кривая затухания) ----------
+   Логика (как договорились с заказчиком):
+   1) база дня = среднее по «чистым» дням (без эффекта чьей-либо интеграции) по этому товару;
+   2) вклад интеграции в конкретный день живёт только 3 дня (100% / 50% / 20%), дальше — 0;
+   3) если в один день активны несколько интеграций по одному товару — прирост дня
+      (продажи минус база) делится между ними пропорционально их весам в этот день,
+      а не достаётся целиком той, что публиковалась позже;
+   4) чистый вклад интеграции = сумма её долей по всем дням;
+   5) ROMI = чистый вклад / расход.
+   Если по товару вообще нет ни одного «чистого» дня в загруженной истории продаж —
+   считать не из чего, ROMI для таких интеграций помечается как «недостаточно данных»
+   (пока не догрузят историю задним числом — так и решили с заказчиком). */
+function daysBetween(a,b){ return Math.round((new Date(a).getTime()-new Date(b).getTime())/86400000); }
+function decayWeight(daysSincePost){
+  if(daysSincePost===0) return 1;
+  if(daysSincePost===1) return 0.5;
+  if(daysSincePost===2) return 0.2;
+  return 0;
+}
+function computeInfluencerRomi(){
+  const {influencerDeals, salesByDay} = DataManager.state;
+  const byProduct = {};
+  salesByDay.forEach(s=>{ (byProduct[s.product] = byProduct[s.product] || []).push(s); });
+
+  function isCleanDay(product, dateStr){
+    return !influencerDeals.some(d=>{
+      if(d.product!==product || !d.publishedDate) return false;
+      const diff = daysBetween(dateStr, d.publishedDate);
+      return diff>=0 && diff<=2;
+    });
+  }
+  const baselineByProduct = {};
+  Object.keys(byProduct).forEach(product=>{
+    const clean = byProduct[product].filter(s=>isCleanDay(product, s.date));
+    baselineByProduct[product] = clean.length ? clean.reduce((a,s)=>a+s.revenue,0)/clean.length : null;
+  });
+
+  const contribution = {};
+  influencerDeals.forEach(d=> contribution[d.id]=0);
+
+  Object.keys(byProduct).forEach(product=>{
+    const base = baselineByProduct[product];
+    if(base==null) return;
+    byProduct[product].forEach(s=>{
+      const uplift = Math.max(0, s.revenue - base);
+      if(uplift<=0) return;
+      const active = influencerDeals
+        .filter(d=>d.product===product && d.publishedDate)
+        .map(d=>({d, diff: daysBetween(s.date, d.publishedDate)}))
+        .filter(x=>x.diff>=0 && x.diff<=2)
+        .map(x=>({d:x.d, w: decayWeight(x.diff)}));
+      const totalW = active.reduce((a,x)=>a+x.w,0);
+      if(totalW<=0) return;
+      active.forEach(x=>{ contribution[x.d.id] += uplift * (x.w/totalW); });
+    });
+  });
+
+  return influencerDeals.map(d=>{
+    const netContribution = Math.round(contribution[d.id]||0);
+    const hasBaseline = baselineByProduct[d.product]!=null;
+    const romi = (hasBaseline && d.cost>0) ? (netContribution / d.cost) : null;
+    return {deal:d, netContribution, romi, hasBaseline};
+  });
+}
+function influencerSummary(){
+  const rows = computeInfluencerRomi();
+  const totalCost = rows.reduce((s,r)=>s+(r.deal.cost||0),0);
+  const totalReach = rows.reduce((s,r)=>s+(r.deal.reach||0),0);
+  const totalClicks = rows.reduce((s,r)=>s+(r.deal.clicks||0),0);
+  const plannedReach = rows.reduce((s,r)=>s+(r.deal.plannedReach||0),0);
+  const plannedClicks = rows.reduce((s,r)=>s+(r.deal.plannedClicks||0),0);
+  const withRomi = rows.filter(r=>r.romi!=null);
+  const avgRomi = withRomi.length ? withRomi.reduce((a,r)=>a+r.romi,0)/withRomi.length : null;
+  const top = withRomi.slice().sort((a,b)=>b.romi-a.romi)[0] || null;
+  return {rows, totalCost, totalReach, totalClicks, plannedReach, plannedClicks, avgRomi, top, count: rows.length};
+}
+
 async function withBusy(button, fn){
   // блокирует кнопку на время сетевого запроса, чтобы не наслать двойной клик
   if(!button) return fn();
@@ -424,11 +513,44 @@ function renderLogin(){
         <div id="login-body"></div>
       </div>
     </div>`;
-  document.getElementById("pick-manager").onclick = ()=>{ UI.role="manager"; saveSession(); UI.tab="dashboard"; render(); };
-  document.getElementById("pick-marketer").onclick = ()=>{ UI.role="marketer"; saveSession(); UI.tab="dashboard"; render(); };
+  function selectRoleBtn(id){
+    document.querySelectorAll(".role-btn").forEach(b=>b.classList.remove("selected"));
+    document.getElementById(id).classList.add("selected");
+  }
+  function renderStaffLoginForm(role){
+    selectRoleBtn(role==="manager" ? "pick-manager" : "pick-marketer");
+    const body = document.getElementById("login-body");
+    body.innerHTML = `
+      <div class="field" style="text-align:left">
+        <label>Логин</label>
+        <input type="text" id="staff-login-input" autocomplete="username">
+      </div>
+      <div class="field" style="text-align:left">
+        <label>Пароль</label>
+        <input type="password" id="staff-password-input" autocomplete="current-password">
+      </div>
+      <button class="btn btn-primary" id="staff-login-btn" style="width:100%;justify-content:center">Войти</button>
+    `;
+    const submit = async ()=>{
+      const login = document.getElementById("staff-login-input").value.trim();
+      const password = document.getElementById("staff-password-input").value;
+      if(!login || !password){ toast("Введите логин и пароль", true); return; }
+      const btn = document.getElementById("staff-login-btn");
+      try{
+        await withBusy(btn, ()=> Api.login(role, login, password));
+        UI.role = role; saveSession(); UI.tab = "dashboard"; render();
+      }catch(e){ toast(e.message, true); }
+    };
+    document.getElementById("staff-login-btn").onclick = submit;
+    ["staff-login-input","staff-password-input"].forEach(id=>{
+      document.getElementById(id).addEventListener("keydown", e=>{ if(e.key==="Enter") submit(); });
+    });
+  }
+  document.getElementById("pick-manager").onclick = ()=> renderStaffLoginForm("manager");
+  document.getElementById("pick-marketer").onclick = ()=> renderStaffLoginForm("marketer");
   document.getElementById("pick-driver").onclick = ()=>{
     const body = document.getElementById("login-body");
-    document.getElementById("pick-driver").classList.add("selected");
+    selectRoleBtn("pick-driver");
     body.innerHTML = `
       <div class="field" style="text-align:left">
         <label>Персональный код водителя</label>
@@ -463,10 +585,11 @@ const MANAGER_TABS = [
   {id:"report",      label:"Сводный отчёт"},
 ];
 const MARKETER_TABS = [
-  {id:"dashboard",     label:"Дашборд"},
-  {id:"publications",  label:"Публикации и охваты"},
-  {id:"topBloggers",   label:"Топ блогеров"},
-  {id:"report",        label:"Сводный отчёт"},
+  {id:"dashboard",        label:"Дашборд"},
+  {id:"publications",     label:"Публикации и охваты"},
+  {id:"topBloggers",      label:"Топ блогеров"},
+  {id:"influencerDeals",  label:"Инфлюенс интеграции крупные"},
+  {id:"report",           label:"Сводный отчёт"},
 ];
 function tabsForRole(){ return UI.role==="marketer" ? MARKETER_TABS : MANAGER_TABS; }
 function roleLabel(){ return UI.role==="marketer" ? "📊 Маркетолог" : "👤 Менеджер / логист"; }
@@ -512,6 +635,7 @@ function renderDeskTab(){
   else if(UI.tab==="returns") main.innerHTML = tplReturns();
   else if(UI.tab==="publications") main.innerHTML = tplPublications();
   else if(UI.tab==="topBloggers") main.innerHTML = tplTopBloggers();
+  else if(UI.tab==="influencerDeals") main.innerHTML = tplInfluencerDeals();
   else if(UI.tab==="report") main.innerHTML = tplReport();
   wireDeskTab();
 }
@@ -523,7 +647,6 @@ function tplDashboard(){
   const delivered = orders.filter(o=>o.status==="delivered").length;
   const problem = orders.filter(o=>(STATUS_META[o.status]||{}).group==="problem").length;
   const noPhoto = orders.filter(o=>o.status==="delivered" && !o.photo).length;
-  const notSynced = orders.filter(o=>o.status==="delivered" && !o.bitrixSynced).length;
   const unassigned = orders.filter(o=>!o.driverCode).length;
   const ms = marketingSummary();
 
@@ -540,7 +663,6 @@ function tplDashboard(){
       <div class="kpi warn"><div class="num">${problem}</div><div class="lbl">Требуют реакции</div></div>
       <div class="kpi"><div class="num">${unassigned}</div><div class="lbl">Не назначены</div></div>
       <div class="kpi bad"><div class="num">${noPhoto}</div><div class="lbl">Доставлено без фото</div></div>
-      <div class="kpi bad"><div class="num">${notSynced}</div><div class="lbl">Не закрыто в Bitrix</div></div>
     </div>
 
     <div class="panel">
@@ -554,6 +676,8 @@ function tplDashboard(){
         <div class="kpi warn"><div class="num">${ms.gap.length}</div><div class="lbl">Ждут публикации</div></div>
       </div>
     </div>
+
+    ${tplInfluencerDashboardBlock()}
 
     <div class="panel">
       <div class="panel-title">Бартер-проекты</div>
@@ -599,6 +723,9 @@ function tplMarketerDashboard(){
       <div class="kpi"><div class="num">${ms.totalSales}</div><div class="lbl">Продаж по промокодам, шт.</div></div>
       <div class="kpi ok"><div class="num">${fmtNum(ms.totalRevenue)} ₸</div><div class="lbl">Выручка по промокодам</div></div>
     </div>
+
+    ${tplInfluencerDashboardBlock()}
+
     <div class="panel">
       <div class="panel-title">Топ-3 блогера по охвату</div>
       <div class="table-wrap"><table>
@@ -620,6 +747,27 @@ function tplMarketerDashboard(){
         <tbody>${ms.gap.map(o=>`<tr><td>${escapeHtml(o.blogger)}</td><td>${escapeHtml(campaignName(o.campaignId))}</td><td>${escapeHtml(o.deliveredAt||"")}</td></tr>`).join("")}</tbody>
       </table></div>
     </div>` : ""}
+  `;
+}
+
+/* ---------- Блок «Инфлюенс интеграции крупные» (общий, на оба дашборда) ---------- */
+function tplInfluencerDashboardBlock(){
+  const s = influencerSummary();
+  if(!s.count) return "";
+  return `
+    <div class="panel">
+      <div class="panel-title">Инфлюенс интеграции крупные
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">детали — вкладка «Инфлюенс интеграции крупные» (роль «Маркетолог»)</span>
+      </div>
+      <div class="grid-kpi" style="margin-bottom:0">
+        <div class="kpi"><div class="num">${s.count}</div><div class="lbl">Интеграций</div></div>
+        <div class="kpi bad"><div class="num">${fmtNum(s.totalCost)} ₸</div><div class="lbl">Расход</div></div>
+        <div class="kpi ok"><div class="num">${fmtNum(s.totalReach)}</div><div class="lbl">Охват (план ${fmtNum(s.plannedReach)})</div></div>
+        <div class="kpi"><div class="num">${fmtNum(s.totalClicks)}</div><div class="lbl">Клики (план ${fmtNum(s.plannedClicks)})</div></div>
+        <div class="kpi ${s.avgRomi==null?'':(s.avgRomi>=1?'ok':'warn')}"><div class="num">${s.avgRomi==null?'—':s.avgRomi.toFixed(2)}</div><div class="lbl">Средний ROMI</div></div>
+        <div class="kpi"><div class="num" style="font-size:14px">${s.top?escapeHtml(s.top.deal.blogerLogin):'—'}</div><div class="lbl">Лучший ROMI${s.top?` (${s.top.romi.toFixed(2)})`:''}</div></div>
+      </div>
+    </div>
   `;
 }
 
@@ -899,6 +1047,86 @@ function tplTopBloggers(){
           </tr>`).join("") || `<tr><td class="empty" colspan="9">Пока нет опубликованных постов с замерами</td></tr>`}
         </tbody>
       </table></div>
+    </div>
+  `;
+}
+
+/* ---------- Инфлюенс интеграции крупные (план/факт, расход, ROMI) ---------- */
+function tplInfluencerDeals(){
+  const s = influencerSummary();
+  const {salesByDay} = DataManager.state;
+  const salesSorted = salesByDay.slice().sort((a,b)=> a.date<b.date?1:-1).slice(0,30);
+  return `
+    <div class="panel">
+      <div class="panel-title">
+        Инфлюенс интеграции крупные
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" id="template-deal-csv-btn">Шаблон CSV</button>
+          <button class="btn btn-ghost btn-sm" id="import-deal-csv-btn">Импорт CSV</button>
+          <input type="file" id="import-deal-csv-input" accept=".csv" class="hide">
+          <button class="btn btn-primary btn-sm" id="new-deal-btn">+ Интеграция</button>
+        </div>
+      </div>
+      <div class="login-hint" style="margin-bottom:12px">
+        ROMI считается по продажам из «Продажи по дням (1С)» ниже: база — среднее по дням без чьей-либо
+        активности, вклад каждой интеграции живёт 3 дня (100% / 50% / 20%) и делится между теми, кто активен
+        в этот день одновременно. Если по товару ещё нет ни одного «чистого» дня — ROMI покажет «нет данных»:
+        догрузите историю продаж за 2–4 недели до первой интеграции по этому товару.
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Блогер</th><th>Платформа</th><th>Продукт</th><th>Дата план</th><th>Дата факт</th>
+          <th>План охват/клики</th><th>Факт охват/клики</th><th>Расход</th><th>Вклад в продажи</th><th>ROMI</th><th>Статус</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${s.rows.map(r=>{
+            const d = r.deal;
+            return `<tr>
+              <td><b>${escapeHtml(d.blogerLogin)}</b>${d.lastUpdatedFrom==="telegram"?' <span class="badge badge-progress" title="Обновлено через Telegram-бота">TG</span>':''}</td>
+              <td>${escapeHtml(d.platform)}</td>
+              <td>${escapeHtml(d.product)}</td>
+              <td>${escapeHtml(d.plannedDate||"—")}</td>
+              <td>${escapeHtml(d.publishedDate||"—")}</td>
+              <td>${fmtNum(d.plannedReach)} / ${fmtNum(d.plannedClicks)}</td>
+              <td>${fmtNum(d.reach)} / ${fmtNum(d.clicks)}</td>
+              <td>${fmtNum(d.cost)} ₸</td>
+              <td>${r.hasBaseline ? fmtNum(r.netContribution)+" ₸" : `<span style="color:var(--ink-mute)">нет данных</span>`}</td>
+              <td>${r.romi==null ? "—" : `<b style="color:${r.romi>=1?'var(--ok)':'var(--warn)'}">${r.romi.toFixed(2)}</b>`}</td>
+              <td><select class="deal-status-select" data-id="${d.id}">${DEAL_STATUSES.map(st=>`<option ${st===d.status?'selected':''}>${st}</option>`).join("")}</select></td>
+              <td>
+                <button class="btn btn-ghost btn-sm edit-deal-btn" data-id="${d.id}">✎</button>
+                <button class="btn btn-danger btn-sm del-deal-btn" data-id="${d.id}">✕</button>
+              </td>
+            </tr>`;
+          }).join("") || `<tr><td class="empty" colspan="12">Интеграций пока нет</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">
+        Продажи по дням (1С)
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" id="template-sale-csv-btn">Шаблон CSV</button>
+          <button class="btn btn-ghost btn-sm" id="import-sale-csv-btn">Импорт CSV</button>
+          <input type="file" id="import-sale-csv-input" accept=".csv" class="hide">
+          <button class="btn btn-primary btn-sm" id="new-sale-btn">+ Продажи за день</button>
+        </div>
+      </div>
+      <div class="login-hint" style="margin-bottom:12px">
+        Для расчёта ROMI важно догрузить историю за 2–4 недели до первой интеграции по товару (одной строкой
+        на день+товар — при повторной загрузке той же пары дата+товар значение просто перезапишется).
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Дата</th><th>Продукт</th><th>Выручка</th><th></th></tr></thead>
+        <tbody>
+          ${salesSorted.map(row=>`<tr>
+            <td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.product)}</td><td>${fmtNum(row.revenue)} ₸</td>
+            <td><button class="btn btn-danger btn-sm del-sale-btn" data-id="${row.id}">✕</button></td>
+          </tr>`).join("") || `<tr><td class="empty" colspan="4">Продаж пока не загружено</td></tr>`}
+        </tbody>
+      </table></div>
+      ${salesByDay.length>30 ? `<div style="margin-top:8px;color:var(--ink-mute);font-size:11.5px">Показаны последние 30 записей из ${salesByDay.length}</div>` : ""}
     </div>
   `;
 }
@@ -1212,6 +1440,90 @@ function modalPublicationHistory(orderId){
   document.getElementById("m-add").onclick = ()=>{ closeModal(); modalAddMeasurement(orderId,false); };
 }
 
+function modalDeal(existing){
+  const isEdit = !!existing;
+  const d = existing || {blogerLogin:"", platform:PLATFORMS[0], product:BOX_TYPES[0], plannedDate:"", publishedDate:"", plannedReach:0, plannedClicks:0, reach:0, clicks:0, likes:0, comments:0, saves:0, cost:0, notes:""};
+  const botHint = d.lastUpdatedFrom==="telegram"
+    ? `<div class="login-hint">Последнее обновление — из Telegram-бота (${escapeHtml((d.lastUpdatedAt||"").replace("T"," ").slice(0,16))}). Лайки/комментарии/сохранения ниже — из распознанного скриншота.</div>`
+    : "";
+  openModal(`
+    <h3>${isEdit?'Изменить':'Новая'} интеграция · Инфлюенс крупные</h3>
+    <div class="form-row">
+      <div class="field"><label>Логин блогера (Instagram)</label><input id="m-login" placeholder="@username" value="${escapeHtml(d.blogerLogin)}"></div>
+      <div class="field"><label>Платформа</label><select id="m-platform">${PLATFORMS.map(p=>`<option ${p===d.platform?'selected':''}>${p}</option>`).join("")}</select></div>
+      <div class="field"><label>Продукт</label><select id="m-product">${BOX_TYPES.map(b=>`<option ${b===d.product?'selected':''}>${b}</option>`).join("")}</select></div>
+      <div class="field"><label>Дата план</label><input id="m-planned-date" type="date" value="${d.plannedDate||''}"></div>
+      <div class="field"><label>Дата факт (публикации)</label><input id="m-published-date" type="date" value="${d.publishedDate||''}"></div>
+      <div class="field"><label>План охват</label><input id="m-planned-reach" type="number" value="${d.plannedReach||0}"></div>
+      <div class="field"><label>План клики</label><input id="m-planned-clicks" type="number" value="${d.plannedClicks||0}"></div>
+      <div class="field"><label>Факт охват</label><input id="m-reach" type="number" value="${d.reach||0}"></div>
+      <div class="field"><label>Факт клики</label><input id="m-clicks" type="number" value="${d.clicks||0}"></div>
+      <div class="field"><label>Лайки</label><input id="m-likes" type="number" value="${d.likes||0}"></div>
+      <div class="field"><label>Комментарии</label><input id="m-comments" type="number" value="${d.comments||0}"></div>
+      <div class="field"><label>Сохранения</label><input id="m-saves" type="number" value="${d.saves||0}"></div>
+      <div class="field"><label>Расход, ₸</label><input id="m-cost" type="number" value="${d.cost||0}"></div>
+    </div>
+    ${botHint}
+    <div class="field"><label>Комментарий</label><textarea id="m-notes">${escapeHtml(d.notes||"")}</textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="m-cancel">Отмена</button>
+      <button class="btn btn-primary" id="m-save">${isEdit?'Сохранить':'Добавить'}</button>
+    </div>
+  `);
+  document.getElementById("m-cancel").onclick = closeModal;
+  document.getElementById("m-save").onclick = async ()=>{
+    const btn = document.getElementById("m-save");
+    const blogerLogin = document.getElementById("m-login").value.trim();
+    if(!blogerLogin){ toast("Укажите логин блогера", true); return; }
+    const payload = {
+      blogerLogin, platform: document.getElementById("m-platform").value, product: document.getElementById("m-product").value,
+      plannedDate: document.getElementById("m-planned-date").value, publishedDate: document.getElementById("m-published-date").value,
+      plannedReach: parseInt(document.getElementById("m-planned-reach").value,10)||0,
+      plannedClicks: parseInt(document.getElementById("m-planned-clicks").value,10)||0,
+      reach: parseInt(document.getElementById("m-reach").value,10)||0,
+      clicks: parseInt(document.getElementById("m-clicks").value,10)||0,
+      likes: parseInt(document.getElementById("m-likes").value,10)||0,
+      comments: parseInt(document.getElementById("m-comments").value,10)||0,
+      saves: parseInt(document.getElementById("m-saves").value,10)||0,
+      cost: parseInt(document.getElementById("m-cost").value,10)||0,
+      notes: document.getElementById("m-notes").value.trim(),
+    };
+    try{
+      await withBusy(btn, ()=> isEdit ? Api.updateDeal(existing.id, payload) : Api.createDeal(payload));
+      closeModal(); toast(isEdit?"Интеграция обновлена":"Интеграция добавлена"); await DataManager.refresh(); render();
+    }catch(e){ toast(e.message, true); }
+  };
+}
+
+function modalSale(){
+  const today = new Date().toISOString().slice(0,10);
+  openModal(`
+    <h3>Продажи за день (из 1С)</h3>
+    <div class="form-row">
+      <div class="field"><label>Дата</label><input id="m-sdate" type="date" value="${today}"></div>
+      <div class="field"><label>Продукт</label><select id="m-sproduct">${BOX_TYPES.map(b=>`<option>${b}</option>`).join("")}</select></div>
+      <div class="field"><label>Выручка, ₸</label><input id="m-srevenue" type="number" value="0"></div>
+    </div>
+    <div class="login-hint">Если для этой пары дата+продукт запись уже есть — значение перезапишется.</div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="m-cancel">Отмена</button>
+      <button class="btn btn-primary" id="m-save">Сохранить</button>
+    </div>
+  `);
+  document.getElementById("m-cancel").onclick = closeModal;
+  document.getElementById("m-save").onclick = async ()=>{
+    const btn = document.getElementById("m-save");
+    try{
+      await withBusy(btn, ()=> Api.saveSale({
+        date: document.getElementById("m-sdate").value,
+        product: document.getElementById("m-sproduct").value,
+        revenue: parseInt(document.getElementById("m-srevenue").value,10)||0,
+      }));
+      closeModal(); toast("Продажи сохранены"); await DataManager.refresh(); render();
+    }catch(e){ toast(e.message, true); }
+  };
+}
+
 /* =========================================================================
    9. ОБРАБОТЧИКИ ВКЛАДОК
    ========================================================================= */
@@ -1458,6 +1770,81 @@ function wireDeskTab(){
 
   else if(UI.tab==="topBloggers"){
     document.getElementById("top-sort-select").onchange = e=>{ UI.topSort = e.target.value; renderDeskTab(); };
+  }
+
+  else if(UI.tab==="influencerDeals"){
+    document.getElementById("new-deal-btn").onclick = ()=> modalDeal(null);
+    document.getElementById("new-sale-btn").onclick = ()=> modalSale();
+
+    document.querySelectorAll(".edit-deal-btn").forEach(btn=>{
+      btn.onclick = ()=>{
+        const deal = DataManager.state.influencerDeals.find(d=>d.id===parseInt(btn.dataset.id,10));
+        if(deal) modalDeal(deal);
+      };
+    });
+    document.querySelectorAll(".del-deal-btn").forEach(btn=>{
+      btn.onclick = async ()=>{
+        if(!confirm("Удалить интеграцию?")) return;
+        try{ await Api.deleteDeal(parseInt(btn.dataset.id,10)); await DataManager.refresh(); render(); }
+        catch(e){ toast(e.message, true); }
+      };
+    });
+    document.querySelectorAll(".deal-status-select").forEach(sel=>{
+      sel.onchange = async ()=>{
+        try{ await Api.updateDeal(parseInt(sel.dataset.id,10), {status: sel.value}); await DataManager.refresh(); }
+        catch(e){ toast(e.message, true); render(); }
+      };
+    });
+    document.querySelectorAll(".del-sale-btn").forEach(btn=>{
+      btn.onclick = async ()=>{
+        try{ await Api.deleteSale(parseInt(btn.dataset.id,10)); await DataManager.refresh(); render(); }
+        catch(e){ toast(e.message, true); }
+      };
+    });
+
+    document.getElementById("template-deal-csv-btn").onclick = ()=>{
+      const header = ["блогер","платформа","продукт","план_дата","факт_дата","план_охват","план_клики","охват","клики","расход","статус","комментарий"];
+      const example = ["@big_blogger","Instagram Reels","Уход премиум","2026-07-20","2026-07-20","200000","4000","","","400000","Запланирована",""];
+      const csv = [header, example].map(row=>row.map(csvEscape).join(",")).join("\n");
+      downloadFile("barter-box-influencer-deals-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
+      toast("Шаблон скачан");
+    };
+    document.getElementById("import-deal-csv-btn").onclick = ()=> document.getElementById("import-deal-csv-input").click();
+    document.getElementById("import-deal-csv-input").onchange = (e)=>{
+      const file = e.target.files[0];
+      if(!file) return;
+      const reader = new FileReader();
+      reader.onload = async ()=>{
+        const rows = parseCsv(String(reader.result));
+        try{ const res = await Api.importDeals(rows); toast(`Импортировано интеграций: ${res.added}`); }
+        catch(e){ toast(e.message, true); }
+        e.target.value = "";
+        await DataManager.refresh(); render();
+      };
+      reader.readAsText(file, "UTF-8");
+    };
+
+    document.getElementById("template-sale-csv-btn").onclick = ()=>{
+      const header = ["дата","продукт","выручка"];
+      const example = ["2026-07-01","Уход премиум","145000"];
+      const csv = [header, example].map(row=>row.map(csvEscape).join(",")).join("\n");
+      downloadFile("barter-box-sales-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
+      toast("Шаблон скачан — удобно для загрузки истории 1С задним числом");
+    };
+    document.getElementById("import-sale-csv-btn").onclick = ()=> document.getElementById("import-sale-csv-input").click();
+    document.getElementById("import-sale-csv-input").onchange = (e)=>{
+      const file = e.target.files[0];
+      if(!file) return;
+      const reader = new FileReader();
+      reader.onload = async ()=>{
+        const rows = parseCsv(String(reader.result));
+        try{ const res = await Api.importSales(rows); toast(`Продажи: добавлено ${res.added}, обновлено ${res.updated}`); }
+        catch(e){ toast(e.message, true); }
+        e.target.value = "";
+        await DataManager.refresh(); render();
+      };
+      reader.readAsText(file, "UTF-8");
+    };
   }
 
   else if(UI.tab==="report"){
@@ -1752,6 +2139,32 @@ async function runSelfTests(){
     const own = driverOrders();
     if(own.some(o=>o.driverCode!==UI.driverCode)) throw new Error("leak of foreign orders");
     UI.driverCode = before;
+  });
+  TestSuite.test("computeInfluencerRomi делит прирост между активными интеграциями и обнуляет остаточный эффект", ()=>{
+    const savedDeals = DataManager.state.influencerDeals;
+    const savedSales = DataManager.state.salesByDay;
+    DataManager.state.influencerDeals = [
+      {id:9001, blogerLogin:"@test_a", platform:"Instagram Reels", product:"ТестТовар", plannedDate:"2026-01-01", publishedDate:"2026-01-01", plannedReach:0, plannedClicks:0, reach:0, clicks:0, cost:1000, status:"Опубликована", notes:""},
+      {id:9002, blogerLogin:"@test_b", platform:"Instagram Reels", product:"ТестТовар", plannedDate:"2026-01-02", publishedDate:"2026-01-02", plannedReach:0, plannedClicks:0, reach:0, clicks:0, cost:1000, status:"Опубликована", notes:""},
+    ];
+    DataManager.state.salesByDay = [
+      {id:9101, date:"2025-12-30", product:"ТестТовар", revenue:100}, // чистый день (база)
+      {id:9102, date:"2025-12-31", product:"ТестТовар", revenue:100}, // чистый день (база)
+      {id:9103, date:"2026-01-02", product:"ТестТовар", revenue:250}, // A(+1день,вес.5) и B(+0,вес1) активны одновременно
+      {id:9104, date:"2026-01-05", product:"ТестТовар", revenue:100}, // обе интеграции уже >2 дней — чистый день, остаточного эффекта быть не должно
+    ];
+    try{
+      const rows = computeInfluencerRomi();
+      const a = rows.find(r=>r.deal.id===9001);
+      const b = rows.find(r=>r.deal.id===9002);
+      if(!a || !b) throw new Error("тестовые интеграции не найдены в результате");
+      if(Math.abs(a.netContribution-50)>1) throw new Error("вклад A рассчитан неверно: "+a.netContribution);
+      if(Math.abs(b.netContribution-100)>1) throw new Error("вклад B рассчитан неверно: "+b.netContribution);
+      if(Math.abs(a.romi-0.05)>0.01) throw new Error("ROMI A рассчитан неверно: "+a.romi);
+    } finally {
+      DataManager.state.influencerDeals = savedDeals;
+      DataManager.state.salesByDay = savedSales;
+    }
   });
   TestSuite.test("marketingSummary агрегирует суммарный охват по всем публикациям", ()=>{
     const ms = marketingSummary();
