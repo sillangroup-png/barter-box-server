@@ -67,7 +67,11 @@ async function analyzeScreenshot(anthropicKey, model, imageBuffer){
   });
   const data = await resp.json();
   if(data.error) throw new Error(data.error.message || "Ошибка Anthropic API");
-  const fullText = (data.content && data.content[0] && data.content[0].text) || "";
+  // Модель может вернуть несколько блоков контента (например, "thinking" перед "text") —
+  // берём и склеиваем именно текстовые блоки, а не слепо content[0].
+  const blocks = Array.isArray(data.content) ? data.content : [];
+  const fullText = blocks.filter(b => b && b.type === "text" && typeof b.text === "string").map(b => b.text).join("\n");
+  console.log("Telegram-бот: сырой ответ модели (для отладки):", JSON.stringify(data.content).slice(0, 800));
   const match = fullText.match(/\{[\s\S]*\}/);
   if(!match){
     console.error("Telegram-бот: модель не вернула JSON, сырой ответ:", fullText.slice(0, 500));
