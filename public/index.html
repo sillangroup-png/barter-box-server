@@ -393,7 +393,10 @@ function marketingSummary(){
   const ers = withM.map(x=>erPercent(x.m)).filter(v=>v!=null);
   const avgEr = ers.length ? ers.reduce((a,b)=>a+b,0)/ers.length : null;
   const gap = orders.filter(o=>o.status==="delivered" && !pubOf(o.id));
-  return {totalReach, totalSales, totalRevenue, avgEr, gap, pubCount: publications.length};
+  // "На доставке" — запланированные рассылки, которые ещё не доставлены и не отменены
+  // (созданы/назначены/приняты/в маршруте, включая проблемные статусы — они всё ещё в процессе).
+  const onDelivery = orders.filter(o=>o.status!=="delivered" && o.status!=="cancelled").length;
+  return {totalReach, totalSales, totalRevenue, avgEr, gap, pubCount: publications.length, onDelivery};
 }
 /* ---------- ROMI крупных инфлюенс-интеграций (кривая затухания) ----------
    Логика (как договорились с заказчиком):
@@ -727,6 +730,7 @@ function tplMarketerDashboard(){
   return `
     <div class="panel-title">Бартерные рассылки</div>
     <div class="grid-kpi">
+      <div class="kpi"><div class="num">${ms.onDelivery}</div><div class="lbl">На доставке</div></div>
       <div class="kpi"><div class="num">${ms.pubCount}</div><div class="lbl">Публикаций зафиксировано</div></div>
       <div class="kpi warn"><div class="num">${ms.gap.length}</div><div class="lbl">Доставлено, но нет публикации</div></div>
       <div class="kpi ok"><div class="num">${fmtNum(ms.totalReach)}</div><div class="lbl">Суммарный охват</div></div>
