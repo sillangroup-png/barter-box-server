@@ -465,14 +465,36 @@ function computeInfluencerRomi(){
 function influencerSummary(){
   const rows = computeInfluencerRomi();
   const totalCost = rows.reduce((s,r)=>s+(r.deal.cost||0),0);
+  const plannedCost = rows.reduce((s,r)=>s+(r.deal.plannedCost||0),0);
   const totalReach = rows.reduce((s,r)=>s+(r.deal.reach||0),0);
   const totalClicks = rows.reduce((s,r)=>s+(r.deal.clicks||0),0);
   const plannedReach = rows.reduce((s,r)=>s+(r.deal.plannedReach||0),0);
   const plannedClicks = rows.reduce((s,r)=>s+(r.deal.plannedClicks||0),0);
+  // "Продажи факт" — сумма вклада всех интеграций (0, если по товару ещё нет базы для ROMI).
+  const totalSalesContribution = rows.reduce((s,r)=>s+(r.netContribution||0),0);
+  // Постов запланировано — все интеграции; факт — те, у кого проставлена дата публикации.
+  const plannedPosts = rows.length;
+  const actualPosts = rows.filter(r=>r.deal.publishedDate).length;
   const withRomi = rows.filter(r=>r.romi!=null);
   const avgRomi = withRomi.length ? withRomi.reduce((a,r)=>a+r.romi,0)/withRomi.length : null;
   const top = withRomi.slice().sort((a,b)=>b.romi-a.romi)[0] || null;
-  return {rows, totalCost, totalReach, totalClicks, plannedReach, plannedClicks, avgRomi, top, count: rows.length};
+  return {rows, totalCost, plannedCost, totalReach, totalClicks, plannedReach, plannedClicks,
+    totalSalesContribution, plannedPosts, actualPosts, avgRomi, top, count: rows.length};
+}
+// Агрегация по блогеру для рейтингов «Топ блогеров» среди платных инфлюенс-интеграций
+// (используется только база influencerDeals — крупные платные интеграции, не бартерные рассылки).
+function influencerBloggerAgg(rows){
+  const map = {};
+  rows.forEach(r=>{
+    const login = r.deal.blogerLogin || "—";
+    if(!map[login]) map[login] = {login, reach:0, clicks:0, contribution:0, dealsCount:0};
+    const a = map[login];
+    a.reach += r.deal.reach||0;
+    a.clicks += r.deal.clicks||0;
+    a.contribution += r.netContribution||0;
+    a.dealsCount++;
+  });
+  return Object.values(map);
 }
 
 async function withBusy(button, fn){
@@ -775,10 +797,11 @@ function tplInfluencerDashboardBlock(){
         <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">детали — вкладка «Инфлюенс интеграции крупные» (роль «Маркетолог»)</span>
       </div>
       <div class="grid-kpi" style="margin-bottom:0">
-        <div class="kpi"><div class="num">${s.count}</div><div class="lbl">Интеграций</div></div>
-        <div class="kpi bad"><div class="num">${fmtNum(s.totalCost)} ₸</div><div class="lbl">Расход</div></div>
+        <div class="kpi"><div class="num">${s.actualPosts}</div><div class="lbl">Постов факт (план ${s.plannedPosts})</div></div>
+        <div class="kpi bad"><div class="num">${fmtNum(s.totalCost)} ₸</div><div class="lbl">Расход (план ${fmtNum(s.plannedCost)} ₸)</div></div>
         <div class="kpi ok"><div class="num">${fmtNum(s.totalReach)}</div><div class="lbl">Охват (план ${fmtNum(s.plannedReach)})</div></div>
         <div class="kpi"><div class="num">${fmtNum(s.totalClicks)}</div><div class="lbl">Клики (план ${fmtNum(s.plannedClicks)})</div></div>
+        <div class="kpi ok"><div class="num">${fmtNum(s.totalSalesContribution)} ₸</div><div class="lbl">Продажи, факт (вклад)</div></div>
         <div class="kpi ${s.avgRomi==null?'':(s.avgRomi>=1?'ok':'warn')}"><div class="num">${s.avgRomi==null?'—':s.avgRomi.toFixed(2)}</div><div class="lbl">Средний ROMI</div></div>
         <div class="kpi"><div class="num" style="font-size:14px">${s.top?escapeHtml(s.top.deal.blogerLogin):'—'}</div><div class="lbl">Лучший ROMI${s.top?` (${s.top.romi.toFixed(2)})`:''}</div></div>
       </div>
@@ -1080,6 +1103,54 @@ function tplTopBloggers(){
 }
 
 /* ---------- Инфлюенс интеграции крупные (план/факт, расход, ROMI) ---------- */
+/* ---------- Топ блогеров среди платных инфлюенс-интеграций (только influencerDeals) ---------- */
+function tplInfluencerTopBloggers(rows){
+  const agg = influencerBloggerAgg(rows);
+  if(!agg.length) return "";
+  const medals = ["🥇","🥈","🥉"];
+
+  const bySales = agg.filter(a=>a.contribution>0).slice().sort((a,b)=>b.contribution-a.contribution);
+  const byConversion = agg.filter(a=>a.reach>0)
+    .map(a=>({...a, conv: a.clicks/a.reach*100}))
+    .sort((a,b)=>b.conv-a.conv);
+  const byReach = agg.filter(a=>a.reach>0).slice().sort((a,b)=>b.reach-a.reach);
+
+  const miniTable = (list, valueLabel, valueFn, emptyMsg) => `
+    <table>
+      <thead><tr><th>#</th><th>Блогер</th><th>${valueLabel}</th></tr></thead>
+      <tbody>
+        ${list.map((a,i)=>`<tr>
+          <td>${i<3?medals[i]:i+1}</td>
+          <td>${escapeHtml(a.login)}</td>
+          <td>${valueFn(a)}</td>
+        </tr>`).join("") || `<tr><td class="empty" colspan="3">${emptyMsg}</td></tr>`}
+      </tbody>
+    </table>`;
+
+  return `
+    <div class="panel">
+      <div class="panel-title">
+        Топ блогеров (платный инфлюенс)
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">только база «Инфлюенс интеграции крупные», бартерные рассылки не учитываются</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">
+        <div>
+          <div style="font-weight:600;font-size:13px;margin-bottom:8px">По продажам (вклад)</div>
+          <div class="table-wrap">${miniTable(bySales, "Вклад, ₸", a=>fmtNum(Math.round(a.contribution)), "Нет данных — не хватает базы для ROMI")}</div>
+        </div>
+        <div>
+          <div style="font-weight:600;font-size:13px;margin-bottom:8px">По конверсии просмотр → клик</div>
+          <div class="table-wrap">${miniTable(byConversion, "Конверсия", a=>fmtPercent(a.conv), "Нет данных по кликам/охвату")}</div>
+        </div>
+        <div>
+          <div style="font-weight:600;font-size:13px;margin-bottom:8px">По охватам</div>
+          <div class="table-wrap">${miniTable(byReach, "Охват", a=>fmtNum(a.reach), "Нет данных по охвату")}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function tplInfluencerDeals(){
   const s = influencerSummary();
   const {salesByDay} = DataManager.state;
@@ -1104,7 +1175,7 @@ function tplInfluencerDeals(){
       <div class="table-wrap"><table>
         <thead><tr>
           <th>Блогер</th><th>Платформа</th><th>Продукт</th><th>Дата план</th><th>Дата факт</th>
-          <th>План охват/клики</th><th>Факт охват/клики</th><th>Расход</th><th>Вклад в продажи</th><th>ROMI</th><th>Статус</th><th></th>
+          <th>План охват/клики</th><th>Факт охват/клики</th><th>План/факт расход</th><th>Вклад в продажи</th><th>ROMI</th><th>Статус</th><th></th>
         </tr></thead>
         <tbody>
           ${s.rows.map(r=>{
@@ -1117,7 +1188,7 @@ function tplInfluencerDeals(){
               <td>${escapeHtml(d.publishedDate||"—")}</td>
               <td>${fmtNum(d.plannedReach)} / ${fmtNum(d.plannedClicks)}</td>
               <td>${fmtNum(d.reach)} / ${fmtNum(d.clicks)}</td>
-              <td>${fmtNum(d.cost)} ₸</td>
+              <td>${fmtNum(d.plannedCost)} / ${fmtNum(d.cost)} ₸</td>
               <td>${r.hasBaseline ? fmtNum(r.netContribution)+" ₸" : `<span style="color:var(--ink-mute)">нет данных</span>`}</td>
               <td>${r.romi==null ? "—" : `<b style="color:${r.romi>=1?'var(--ok)':'var(--warn)'}">${r.romi.toFixed(2)}</b>`}</td>
               <td><select class="deal-status-select" data-id="${d.id}">${DEAL_STATUSES.map(st=>`<option ${st===d.status?'selected':''}>${st}</option>`).join("")}</select></td>
@@ -1130,6 +1201,8 @@ function tplInfluencerDeals(){
         </tbody>
       </table></div>
     </div>
+
+    ${tplInfluencerTopBloggers(s.rows)}
 
     <div class="panel">
       <div class="panel-title">
@@ -1480,7 +1553,7 @@ function modalPublicationHistory(orderId){
 
 function modalDeal(existing){
   const isEdit = !!existing;
-  const d = existing || {blogerLogin:"", platform:PLATFORMS[0], product:BOX_TYPES[0], plannedDate:"", publishedDate:"", plannedReach:0, plannedClicks:0, reach:0, clicks:0, likes:0, comments:0, saves:0, cost:0, notes:""};
+  const d = existing || {blogerLogin:"", platform:PLATFORMS[0], product:BOX_TYPES[0], plannedDate:"", publishedDate:"", plannedReach:0, plannedClicks:0, reach:0, clicks:0, likes:0, comments:0, saves:0, cost:0, plannedCost:0, notes:""};
   const botHint = d.lastUpdatedFrom==="telegram"
     ? `<div class="login-hint">Последнее обновление — из Telegram-бота (${escapeHtml((d.lastUpdatedAt||"").replace("T"," ").slice(0,16))}). Лайки/комментарии/сохранения ниже — из распознанного скриншота.</div>`
     : "";
@@ -1499,7 +1572,8 @@ function modalDeal(existing){
       <div class="field"><label>Лайки</label><input id="m-likes" type="number" value="${d.likes||0}"></div>
       <div class="field"><label>Комментарии</label><input id="m-comments" type="number" value="${d.comments||0}"></div>
       <div class="field"><label>Сохранения</label><input id="m-saves" type="number" value="${d.saves||0}"></div>
-      <div class="field"><label>Расход, ₸</label><input id="m-cost" type="number" value="${d.cost||0}"></div>
+      <div class="field"><label>План расход, ₸</label><input id="m-planned-cost" type="number" value="${d.plannedCost||0}"></div>
+      <div class="field"><label>Факт расход, ₸</label><input id="m-cost" type="number" value="${d.cost||0}"></div>
     </div>
     ${botHint}
     <div class="field"><label>Комментарий</label><textarea id="m-notes">${escapeHtml(d.notes||"")}</textarea></div>
@@ -1523,6 +1597,7 @@ function modalDeal(existing){
       likes: parseInt(document.getElementById("m-likes").value,10)||0,
       comments: parseInt(document.getElementById("m-comments").value,10)||0,
       saves: parseInt(document.getElementById("m-saves").value,10)||0,
+      plannedCost: parseInt(document.getElementById("m-planned-cost").value,10)||0,
       cost: parseInt(document.getElementById("m-cost").value,10)||0,
       notes: document.getElementById("m-notes").value.trim(),
     };
@@ -1845,8 +1920,8 @@ function wireDeskTab(){
     });
 
     document.getElementById("template-deal-csv-btn").onclick = ()=>{
-      const header = ["блогер","платформа","продукт","план_дата","факт_дата","план_охват","план_клики","охват","клики","расход","статус","комментарий"];
-      const example = ["@big_blogger","Instagram Reels","Уход премиум","2026-07-20","2026-07-20","200000","4000","","","400000","Запланирована",""];
+      const header = ["блогер","платформа","продукт","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","статус","комментарий"];
+      const example = ["@big_blogger","Instagram Reels","Уход премиум","2026-07-20","2026-07-20","200000","4000","","","400000","400000","Запланирована",""];
       const csv = [header, example].map(row=>row.map(csvEscape).join(",")).join("\n");
       downloadFile("barter-box-influencer-deals-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
       toast("Шаблон скачан");
