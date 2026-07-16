@@ -1,0 +1,1796 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Barter Box · управление бартер-рассылками, доставкой и маркетингом</title>
+<style>
+:root{
+  --blue:#2fc6f6;
+  --action:#338af3;
+  --action-d:#2679dd;
+  --canvas:#eef2f5;
+  --panel:#ffffff;
+  --ink:#2c333a;
+  --ink-soft:#5b6670;
+  --ink-mute:#8a949c;
+  --line:#e2e7ec;
+  --line-2:#d5dbe0;
+  --ok:#3fae53;
+  --ok-bg:#e8f7ec;
+  --warn:#e08a1f;
+  --warn-bg:#fdf2e1;
+  --bad:#d94f4f;
+  --bad-bg:#fbe9e9;
+  --plan:#7b6fd0;
+  --plan-bg:#efecfb;
+  --radius:10px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  background:var(--canvas);color:var(--ink);font-size:13.5px;line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}
+button{font-family:inherit;cursor:pointer}
+input,select,textarea{font-family:inherit;font-size:13.5px}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:#c7cfd6;border-radius:4px}
+
+#app{min-height:100vh;display:flex;flex-direction:column}
+
+.topbar{
+  background:#fff;border-bottom:1px solid var(--line-2);
+  display:flex;align-items:center;gap:14px;padding:0 18px;height:54px;
+  position:sticky;top:0;z-index:50;
+}
+.logo{display:flex;align-items:center;gap:9px;font-weight:700;font-size:15px;white-space:nowrap}
+.logo .mark{
+  width:28px;height:28px;border-radius:7px;
+  background:linear-gradient(135deg,var(--blue),var(--action));
+  display:grid;place-items:center;color:#fff;font-weight:700;font-size:14px;
+}
+.top-spacer{flex:1}
+.role-pill{font-size:12px;color:var(--ink-soft);background:#eef3f7;border-radius:20px;padding:6px 12px;font-weight:600;display:flex;align-items:center;gap:6px}
+.conn-dot{width:8px;height:8px;border-radius:50%;background:var(--ok);display:inline-block}
+.conn-dot.off{background:var(--bad)}
+.btn{
+  border:none;border-radius:9px;padding:8px 14px;font-weight:600;font-size:12.8px;
+  display:inline-flex;align-items:center;gap:6px;transition:.15s;white-space:nowrap;
+}
+.btn-primary{background:var(--action);color:#fff}
+.btn-primary:hover{background:var(--action-d)}
+.btn-ghost{background:#eef3f7;color:var(--ink-soft)}
+.btn-ghost:hover{background:#e2e9ef}
+.btn-danger{background:var(--bad-bg);color:var(--bad)}
+.btn-danger:hover{background:#f6d9d9}
+.btn-sm{padding:5px 10px;font-size:12px;border-radius:7px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+
+.tabs{
+  background:#fff;border-bottom:1px solid var(--line-2);
+  display:flex;gap:2px;padding:0 18px;overflow-x:auto;
+}
+.tab{
+  border:none;background:none;font-size:13px;color:var(--ink-soft);font-weight:600;
+  padding:12px 14px;position:relative;white-space:nowrap;
+}
+.tab.active{color:var(--action)}
+.tab.active::after{content:"";position:absolute;left:10px;right:10px;bottom:0;height:3px;background:var(--blue);border-radius:3px 3px 0 0}
+.tab .cnt{background:#eef3f7;color:var(--ink-mute);border-radius:9px;font-size:10.5px;padding:1px 6px;margin-left:5px;font-weight:700}
+
+main{flex:1;padding:18px;max-width:1400px;width:100%;margin:0 auto}
+.hide{display:none !important}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px}
+.panel-title{font-size:14.5px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap}
+.grid-kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:14px}
+.kpi .num{font-size:22px;font-weight:700}
+.kpi .lbl{font-size:11.5px;color:var(--ink-mute);margin-top:2px}
+.kpi.ok .num{color:var(--ok)}
+.kpi.warn .num{color:var(--warn)}
+.kpi.bad .num{color:var(--bad)}
+
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.toolbar input[type=text],.toolbar input[type=search],.toolbar select{
+  border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:#fff;color:var(--ink);
+}
+.toolbar .fill{flex:1;min-width:140px}
+.field{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
+.field label{font-size:11.5px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.02em}
+.field input,.field select,.field textarea{border:1px solid var(--line-2);border-radius:8px;padding:8px 10px;background:#fff;width:100%}
+.field textarea{resize:vertical;min-height:60px}
+.form-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+
+.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius)}
+table{width:100%;border-collapse:collapse;font-size:12.8px;background:#fff}
+th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+th{background:#f7f9fb;color:var(--ink-soft);font-size:11.3px;text-transform:uppercase;letter-spacing:.02em;position:sticky;top:0}
+tr:hover td{background:#fafcfe}
+td.wrap{white-space:normal;max-width:220px}
+.rowcheck{width:26px}
+
+.badge{display:inline-flex;align-items:center;gap:4px;border-radius:20px;padding:3px 10px;font-size:11.5px;font-weight:700}
+.badge-progress{background:#e5eefb;color:var(--action)}
+.badge-success{background:var(--ok-bg);color:var(--ok)}
+.badge-problem{background:var(--warn-bg);color:var(--warn)}
+.badge-closed{background:#eee;color:var(--ink-mute)}
+.badge-plan{background:var(--plan-bg);color:var(--plan)}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block}
+
+.empty{padding:30px;text-align:center;color:var(--ink-mute);font-size:13px}
+
+.modal-back{position:fixed;inset:0;background:rgba(20,25,30,.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:16px}
+.modal{background:#fff;border-radius:14px;max-width:520px;width:100%;max-height:88vh;overflow:auto;padding:20px;box-shadow:0 20px 50px rgba(0,0,0,.25)}
+.modal h3{font-size:16px;margin-bottom:14px}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
+
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#2c333a;color:#fff;padding:10px 18px;border-radius:9px;font-size:13px;z-index:200;opacity:0;pointer-events:none;transition:.25s;max-width:90vw;text-align:center}
+#toast.show{opacity:1;transform:translate(-50%,-4px)}
+#toast.error{background:var(--bad)}
+
+.login-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:20px}
+.login-card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:32px;max-width:460px;width:100%;text-align:center}
+.login-card .mark{width:52px;height:52px;border-radius:14px;background:linear-gradient(135deg,var(--blue),var(--action));display:grid;place-items:center;color:#fff;font-weight:700;font-size:22px;margin:0 auto 14px}
+.login-card h2{font-size:19px;margin-bottom:6px}
+.login-card p{color:var(--ink-soft);font-size:13px;margin-bottom:20px}
+.role-choice{display:flex;gap:8px;margin-bottom:18px}
+.role-btn{flex:1;border:2px solid var(--line-2);border-radius:12px;padding:14px 6px;background:#fff;font-weight:700;color:var(--ink-soft);transition:.15s;font-size:12.5px}
+.role-btn:hover{border-color:var(--blue)}
+.role-btn.selected{border-color:var(--action);background:#eef6ff;color:var(--action)}
+.login-hint{font-size:11.5px;color:var(--ink-mute);margin-top:10px;text-align:left;background:#f7f9fb;padding:10px 12px;border-radius:8px}
+
+.driver-shell{max-width:480px;margin:0 auto;padding:14px}
+.driver-header{background:linear-gradient(135deg,var(--action),var(--blue));color:#fff;border-radius:14px;padding:16px;margin-bottom:14px}
+.driver-header .name{font-size:16px;font-weight:700}
+.driver-header .sub{font-size:12px;opacity:.9;margin-top:2px}
+.driver-stats{display:flex;gap:8px;margin-top:12px}
+.driver-stats div{background:rgba(255,255,255,.18);border-radius:9px;padding:8px 10px;flex:1;text-align:center}
+.driver-stats .n{font-size:17px;font-weight:700}
+.driver-stats .l{font-size:10.5px;opacity:.9}
+.order-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px;margin-bottom:10px;display:flex;flex-direction:column;gap:6px}
+.order-card .top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.order-card .blogger{font-weight:700;font-size:14px}
+.order-card .addr{color:var(--ink-soft);font-size:12.5px}
+.order-card .actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.icon-btn{background:#eef3f7;color:var(--ink);border:none;border-radius:8px;padding:8px 10px;font-size:12px;font-weight:600;flex:1;text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:5px}
+.icon-btn.call{background:#e8f7ec;color:var(--ok)}
+.icon-btn.map{background:#e5eefb;color:var(--action)}
+.status-btns{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
+.status-btns button{border:none;border-radius:9px;padding:10px;font-weight:700;font-size:12.5px}
+.sb-ok{background:var(--ok-bg);color:var(--ok)}
+.sb-warn{background:var(--warn-bg);color:var(--warn)}
+.photo-preview{width:100%;max-height:160px;object-fit:cover;border-radius:8px;margin-top:8px;border:1px solid var(--line)}
+.reason-grid{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+.reason-grid button{text-align:left;border:1px solid var(--line-2);background:#fff;border-radius:9px;padding:10px 12px;font-weight:600}
+.reason-grid button:hover{border-color:var(--action);color:var(--action)}
+.driver-footer{text-align:center;padding:14px;color:var(--ink-mute);font-size:11.5px}
+
+.pbar{height:6px;background:#eef1f4;border-radius:4px;overflow:hidden;margin-top:6px}
+.pbar span{display:block;height:100%;background:var(--action)}
+
+@media (max-width:720px){
+  main{padding:10px}
+  .grid-kpi{grid-template-columns:repeat(2,1fr)}
+  .tabs{padding:0 8px}
+  .topbar{padding:0 10px}
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+/* =========================================================================
+   1. СПРАВОЧНИКИ (словарь UI — сами данные живут на сервере)
+   ========================================================================= */
+const STATUS_META = {
+  created:    {label:"Создана",               group:"progress"},
+  assigned:   {label:"Назначена водителю",     group:"progress"},
+  accepted:   {label:"Принята водителем",      group:"progress"},
+  in_route:   {label:"В маршруте",             group:"progress"},
+  delivered:  {label:"✅ Доставлено",           group:"success"},
+  no_answer:  {label:"Не дозвонился",          group:"problem"},
+  addr_bad:   {label:"Адрес неактуален",       group:"problem"},
+  absent:     {label:"Получатель отсутствует", group:"problem"},
+  reschedule: {label:"Перенос доставки",       group:"problem"},
+  returned:   {label:"Возврат в офис",         group:"problem"},
+  cancelled:  {label:"Отменена",               group:"closed"},
+};
+const PROBLEM_REASONS = {
+  no_answer:  "Не дозвонился",
+  addr_bad:   "Адрес изменился",
+  absent:     "Нет на месте",
+  reschedule: "Перенести",
+  returned:   "Возврат в офис",
+};
+const CLOSURE_TYPES = { writeoff:"Списание", sale:"Реализация" };
+const CAMPAIGN_STAGES = [
+  "Запланирован","Концепция","Товары выбраны","Упаковка заказана","Упаковка оплачена",
+  "Упаковка на складе","Товары в офисе","Скомплектовано","В доставке","Учёт закрыт","Проект закрыт"
+];
+const RETURN_STATUSES = ["В офисе","Ожидает решения","Оформлен возврат","Принят на складе","Закрыт"];
+const BOX_TYPES = ["Уход премиум","Бьюти-бокс","Гаджет-набор"];
+const PLATFORMS = ["Instagram Reels","Instagram Stories","TikTok","YouTube Shorts","Отзыв / пост"];
+const BLOGGER_TIERS = ["Малый (эффект 1–7 дней)","Крупный (эффект 2–3 недели)"];
+
+/* =========================================================================
+   2. API-КЛИЕНТ — вся запись/чтение идёт на общий сервер, а не в localStorage
+   ========================================================================= */
+async function apiFetch(url, options){
+  let res;
+  try{
+    res = await fetch(url, options);
+  }catch(e){
+    throw new Error("Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.");
+  }
+  let data = null;
+  try{ data = await res.json(); }catch(e){ data = null; }
+  if(!res.ok){
+    throw new Error((data && data.error) || `Ошибка запроса (${res.status})`);
+  }
+  return data;
+}
+const jsonHeaders = {"Content-Type":"application/json"};
+
+const Api = {
+  getState: ()=> apiFetch("/api/state"),
+  health: ()=> apiFetch("/api/health"),
+
+  createDriver: (d)=> apiFetch("/api/drivers", {method:"POST", headers:jsonHeaders, body:JSON.stringify(d)}),
+  updateDriver: (code, changes)=> apiFetch("/api/drivers/"+encodeURIComponent(code), {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
+  deleteDriver: (code)=> apiFetch("/api/drivers/"+encodeURIComponent(code), {method:"DELETE"}),
+
+  createCampaign: (c)=> apiFetch("/api/campaigns", {method:"POST", headers:jsonHeaders, body:JSON.stringify(c)}),
+  updateCampaign: (id, changes)=> apiFetch("/api/campaigns/"+id, {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
+  deleteCampaign: (id)=> apiFetch("/api/campaigns/"+id, {method:"DELETE"}),
+
+  createOrder: (o)=> apiFetch("/api/orders", {method:"POST", headers:jsonHeaders, body:JSON.stringify(o)}),
+  updateOrder: (id, changes)=> apiFetch("/api/orders/"+id, {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
+  deleteOrder: (id)=> apiFetch("/api/orders/"+id, {method:"DELETE"}),
+  deliverOrder: (id, file, comment)=>{
+    const fd = new FormData();
+    fd.append("photo", file);
+    fd.append("comment", comment || "");
+    return apiFetch("/api/orders/"+id+"/deliver", {method:"POST", body: fd});
+  },
+  problemOrder: (id, statusCode, comment)=> apiFetch("/api/orders/"+id+"/problem", {method:"POST", headers:jsonHeaders, body:JSON.stringify({statusCode, comment})}),
+  syncBitrix: (id)=> apiFetch("/api/orders/"+id+"/sync-bitrix", {method:"POST"}),
+  bulkAssign: (ids, driverCode)=> apiFetch("/api/orders/bulk-assign", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids, driverCode})}),
+  bulkDelete: (ids)=> apiFetch("/api/orders/bulk-delete", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids})}),
+  importOrders: (rows)=> apiFetch("/api/orders/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
+
+  createReturn: (r)=> apiFetch("/api/returns", {method:"POST", headers:jsonHeaders, body:JSON.stringify(r)}),
+  updateReturn: (id, changes)=> apiFetch("/api/returns/"+id, {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
+  deleteReturn: (id)=> apiFetch("/api/returns/"+id, {method:"DELETE"}),
+
+  createPublication: (p)=> apiFetch("/api/publications", {method:"POST", headers:jsonHeaders, body:JSON.stringify(p)}),
+  deletePublication: (id)=> apiFetch("/api/publications/"+id, {method:"DELETE"}),
+  addMeasurement: (pubId, m)=> apiFetch("/api/publications/"+pubId+"/measurements", {method:"POST", headers:jsonHeaders, body:JSON.stringify(m)}),
+  importPublications: (rows)=> apiFetch("/api/publications/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
+};
+
+/* =========================================================================
+   3. ЛОКАЛЬНЫЙ КЭШ СОСТОЯНИЯ (обновляется с сервера; все render-функции ниже
+   как и раньше читают DataManager.state синхронно — меняется только то,
+   ОТКУДА берутся данные и КАК они изменяются)
+   ========================================================================= */
+const DataManager = {
+  state: {drivers:[], campaigns:[], orders:[], returns:[], publications:[]},
+  async load(){ this.state = await Api.getState(); return this.state; },
+  async refresh(){ this.state = await Api.getState(); return this.state; },
+  find(collection, id){ return this.state[collection].find(i=> (i.id===id) || (i.code===id)); },
+};
+
+let isOnline = true;
+function setConnStatus(online){
+  isOnline = online;
+  const dot = document.getElementById("conn-dot");
+  if(dot){ dot.classList.toggle("off", !online); dot.title = online ? "Связь с сервером есть" : "Нет связи с сервером"; }
+}
+
+/* =========================================================================
+   4. УТИЛИТЫ
+   ========================================================================= */
+function escapeHtml(s){
+  return String(s==null?"":s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function toast(msg, isError){
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.toggle("error", !!isError);
+  t.classList.add("show");
+  clearTimeout(toast._h);
+  toast._h = setTimeout(()=>t.classList.remove("show"), isError ? 3600 : 2200);
+}
+function statusBadge(status){
+  const meta = STATUS_META[status] || {label:status, group:"closed"};
+  return `<span class="badge badge-${meta.group}"><span class="dot"></span>${escapeHtml(meta.label)}</span>`;
+}
+function driverName(code){
+  if(!code) return "—";
+  const d = DataManager.state.drivers.find(d=>d.code===code);
+  return d ? d.name : code;
+}
+function campaignName(id){
+  const c = DataManager.state.campaigns.find(c=>c.id===id);
+  return c ? c.name : "—";
+}
+function mapsLink(address, city){
+  return "https://maps.google.com/?q=" + encodeURIComponent((city?city+", ":"")+address);
+}
+function telLink(phone){
+  return "tel:" + String(phone).replace(/[^\d+]/g,"");
+}
+function downloadFile(filename, content, mime){
+  const blob = new Blob([content], {type: mime||"text/plain;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+function csvEscape(v){
+  v = String(v==null?"":v);
+  if(/[",\n;]/.test(v)) return '"' + v.replace(/"/g,'""') + '"';
+  return v;
+}
+function parseCsv(text){
+  const lines = text.split(/\r?\n/).filter(l=>l.trim().length);
+  if(!lines.length) return [];
+  const sep = lines[0].includes(";") && !lines[0].includes(",") ? ";" : ",";
+  const headers = lines[0].split(sep).map(h=>h.trim().toLowerCase());
+  return lines.slice(1).map(line=>{
+    const cells = line.split(sep).map(c=>c.trim());
+    const row = {};
+    headers.forEach((h,i)=> row[h] = cells[i]!==undefined ? cells[i] : "");
+    return row;
+  });
+}
+function fmtNum(v){ return (v===null || v===undefined || v==="") ? "—" : Number(v).toLocaleString("ru-RU"); }
+function pubOf(orderId){ return DataManager.state.publications.find(p=>p.orderId===orderId); }
+function latestMeasurement(pub){
+  return (pub && pub.measurements && pub.measurements.length) ? pub.measurements[pub.measurements.length-1] : null;
+}
+function erPercent(m){
+  if(!m || !m.views) return null;
+  return ((m.likes||0)+(m.comments||0)) / m.views * 100;
+}
+function fmtPercent(v){ return v==null ? "—" : v.toFixed(1)+"%"; }
+function marketingSummary(){
+  const {orders, publications} = DataManager.state;
+  const withM = publications.map(p=>({p, m: latestMeasurement(p)})).filter(x=>x.m);
+  const totalReach   = withM.reduce((s,x)=>s+(x.m.views||0),0);
+  const totalSales   = withM.reduce((s,x)=>s+(x.m.salesCount||0),0);
+  const totalRevenue = withM.reduce((s,x)=>s+(x.m.salesRevenue||0),0);
+  const ers = withM.map(x=>erPercent(x.m)).filter(v=>v!=null);
+  const avgEr = ers.length ? ers.reduce((a,b)=>a+b,0)/ers.length : null;
+  const gap = orders.filter(o=>o.status==="delivered" && !pubOf(o.id));
+  return {totalReach, totalSales, totalRevenue, avgEr, gap, pubCount: publications.length};
+}
+async function withBusy(button, fn){
+  // блокирует кнопку на время сетевого запроса, чтобы не наслать двойной клик
+  if(!button) return fn();
+  const original = button.textContent;
+  button.disabled = true;
+  try{ return await fn(); }
+  finally{ button.disabled = false; button.textContent = original; }
+}
+
+/* =========================================================================
+   5. ГЛОБАЛЬНОЕ СОСТОЯНИЕ UI
+   ========================================================================= */
+const SESSION_KEY = "barterBoxApp_session"; // роль/код водителя — только для ЭТОГО браузера
+const UI = {
+  role: null, driverCode: null, tab: "dashboard",
+  filters: {campaign:"", driver:"", city:"", status:"", search:""},
+  topSort: "views",
+  selectedOrderIds: new Set(),
+  openOrderId: null, driverAwaiting: null, driverReasonCode: null,
+};
+function loadSession(){
+  try{
+    const raw = localStorage.getItem(SESSION_KEY);
+    if(raw){ const s = JSON.parse(raw); UI.role = s.role || null; UI.driverCode = s.driverCode || null; }
+  }catch(e){}
+}
+function saveSession(){
+  try{ localStorage.setItem(SESSION_KEY, JSON.stringify({role:UI.role, driverCode:UI.driverCode})); }catch(e){}
+}
+function logout(){ UI.role = null; UI.driverCode = null; UI.tab = "dashboard"; saveSession(); render(); }
+function modalOpen(){ return !!document.getElementById("modal-back"); }
+
+/* =========================================================================
+   6. ЭКРАН ВХОДА
+   ========================================================================= */
+function renderLogin(){
+  const app = document.getElementById("app");
+  app.innerHTML = `
+    <div class="login-wrap">
+      <div class="login-card">
+        <div class="mark">BB</div>
+        <h2>Barter Box</h2>
+        <p>Бартер-рассылки блогерам, доставка боксов и маркетинговая отчётность — в одном месте, на общем сервере</p>
+        <div class="role-choice">
+          <button class="role-btn" id="pick-manager">👤<br>Менеджер /<br>логист</button>
+          <button class="role-btn" id="pick-marketer">📊<br>Маркетолог</button>
+          <button class="role-btn" id="pick-driver">🚗<br>Водитель</button>
+        </div>
+        <div id="login-body"></div>
+      </div>
+    </div>`;
+  document.getElementById("pick-manager").onclick = ()=>{ UI.role="manager"; saveSession(); UI.tab="dashboard"; render(); };
+  document.getElementById("pick-marketer").onclick = ()=>{ UI.role="marketer"; saveSession(); UI.tab="dashboard"; render(); };
+  document.getElementById("pick-driver").onclick = ()=>{
+    const body = document.getElementById("login-body");
+    document.getElementById("pick-driver").classList.add("selected");
+    body.innerHTML = `
+      <div class="field" style="text-align:left">
+        <label>Персональный код водителя</label>
+        <input type="text" id="driver-code-input" placeholder="например IVAN-77" autocomplete="off">
+      </div>
+      <button class="btn btn-primary" id="driver-login-btn" style="width:100%;justify-content:center">Войти</button>
+      <div class="login-hint">Демо-коды: IVAN-77, SERGEY-24, DANIYAR-31, MARAT-08</div>
+    `;
+    document.getElementById("driver-login-btn").onclick = ()=>{
+      const code = document.getElementById("driver-code-input").value.trim().toUpperCase();
+      const drv = DataManager.state.drivers.find(d=>d.code===code);
+      if(!drv){ toast("Код не найден. Проверьте у диспетчера.", true); return; }
+      if(!drv.active){ toast("Этот водитель деактивирован.", true); return; }
+      UI.role = "driver"; UI.driverCode = code; saveSession();
+      render();
+    };
+    document.getElementById("driver-code-input").addEventListener("keydown", e=>{
+      if(e.key==="Enter") document.getElementById("driver-login-btn").click();
+    });
+  };
+}
+
+/* =========================================================================
+   7. ОБОЛОЧКА «РАБОЧЕГО СТОЛА» (менеджер / маркетолог)
+   ========================================================================= */
+const MANAGER_TABS = [
+  {id:"dashboard",   label:"Дашборд"},
+  {id:"campaigns",   label:"Бартер-проекты"},
+  {id:"deliveries",  label:"Отправка блогерам"},
+  {id:"drivers",     label:"Водители"},
+  {id:"returns",     label:"Остатки и возвраты"},
+  {id:"report",      label:"Сводный отчёт"},
+];
+const MARKETER_TABS = [
+  {id:"dashboard",     label:"Дашборд"},
+  {id:"publications",  label:"Публикации и охваты"},
+  {id:"topBloggers",   label:"Топ блогеров"},
+  {id:"report",        label:"Сводный отчёт"},
+];
+function tabsForRole(){ return UI.role==="marketer" ? MARKETER_TABS : MANAGER_TABS; }
+function roleLabel(){ return UI.role==="marketer" ? "📊 Маркетолог" : "👤 Менеджер / логист"; }
+
+function renderDeskShell(){
+  const app = document.getElementById("app");
+  const tabs = tabsForRole();
+  const orders = DataManager.state.orders;
+  const problemCount = orders.filter(o=> (STATUS_META[o.status]||{}).group==="problem").length;
+  const gapCount = marketingSummary().gap.length;
+  app.innerHTML = `
+    <div class="topbar">
+      <div class="logo"><span class="mark">BB</span> Barter Box</div>
+      <div class="top-spacer"></div>
+      <span class="conn-dot" id="conn-dot" title="Связь с сервером"></span>
+      <div class="role-pill">${roleLabel()}</div>
+      <button class="btn btn-ghost" id="logout-btn">Выйти</button>
+    </div>
+    <div class="tabs" id="tabs">
+      ${tabs.map(t=>{
+        let cnt = "";
+        if(t.id==="deliveries" && problemCount) cnt = `<span class="cnt">${problemCount}</span>`;
+        if(t.id==="publications" && gapCount) cnt = `<span class="cnt">${gapCount}</span>`;
+        return `<button class="tab ${UI.tab===t.id?'active':''}" data-tab="${t.id}">${t.label}${cnt}</button>`;
+      }).join("")}
+    </div>
+    <main id="main"></main>
+  `;
+  setConnStatus(isOnline);
+  document.getElementById("logout-btn").onclick = logout;
+  document.querySelectorAll("#tabs .tab").forEach(btn=>{
+    btn.onclick = ()=>{ UI.tab = btn.dataset.tab; render(); };
+  });
+  renderDeskTab();
+}
+
+function renderDeskTab(){
+  const main = document.getElementById("main");
+  if(UI.tab==="dashboard") main.innerHTML = UI.role==="marketer" ? tplMarketerDashboard() : tplDashboard();
+  else if(UI.tab==="campaigns") main.innerHTML = tplCampaigns();
+  else if(UI.tab==="deliveries") main.innerHTML = tplDeliveries();
+  else if(UI.tab==="drivers") main.innerHTML = tplDrivers();
+  else if(UI.tab==="returns") main.innerHTML = tplReturns();
+  else if(UI.tab==="publications") main.innerHTML = tplPublications();
+  else if(UI.tab==="topBloggers") main.innerHTML = tplTopBloggers();
+  else if(UI.tab==="report") main.innerHTML = tplReport();
+  wireDeskTab();
+}
+
+/* ---------- Дашборд менеджера ---------- */
+function tplDashboard(){
+  const {orders, drivers, campaigns} = DataManager.state;
+  const total = orders.length;
+  const delivered = orders.filter(o=>o.status==="delivered").length;
+  const problem = orders.filter(o=>(STATUS_META[o.status]||{}).group==="problem").length;
+  const noPhoto = orders.filter(o=>o.status==="delivered" && !o.photo).length;
+  const notSynced = orders.filter(o=>o.status==="delivered" && !o.bitrixSynced).length;
+  const unassigned = orders.filter(o=>!o.driverCode).length;
+  const ms = marketingSummary();
+
+  const perDriver = drivers.map(d=>{
+    const own = orders.filter(o=>o.driverCode===d.code);
+    return {d, total:own.length, done:own.filter(o=>o.status==="delivered").length,
+      problem:own.filter(o=>(STATUS_META[o.status]||{}).group==="problem").length};
+  });
+
+  return `
+    <div class="grid-kpi">
+      <div class="kpi"><div class="num">${total}</div><div class="lbl">Всего доставок</div></div>
+      <div class="kpi ok"><div class="num">${delivered}</div><div class="lbl">Доставлено</div></div>
+      <div class="kpi warn"><div class="num">${problem}</div><div class="lbl">Требуют реакции</div></div>
+      <div class="kpi"><div class="num">${unassigned}</div><div class="lbl">Не назначены</div></div>
+      <div class="kpi bad"><div class="num">${noPhoto}</div><div class="lbl">Доставлено без фото</div></div>
+      <div class="kpi bad"><div class="num">${notSynced}</div><div class="lbl">Не закрыто в Bitrix</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Маркетинг: охват и продажи
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">детали — вкладка «Сводный отчёт» или роль «Маркетолог»</span>
+      </div>
+      <div class="grid-kpi" style="margin-bottom:0">
+        <div class="kpi ok"><div class="num">${fmtNum(ms.totalReach)}</div><div class="lbl">Суммарный охват</div></div>
+        <div class="kpi"><div class="num">${fmtPercent(ms.avgEr)}</div><div class="lbl">Средний ER</div></div>
+        <div class="kpi ok"><div class="num">${fmtNum(ms.totalRevenue)} ₸</div><div class="lbl">Выручка по промокодам</div></div>
+        <div class="kpi warn"><div class="num">${ms.gap.length}</div><div class="lbl">Ждут публикации</div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Бартер-проекты</div>
+      ${campaigns.map(c=>{
+        const own = orders.filter(o=>o.campaignId===c.id);
+        const pct = own.length ? Math.round(own.filter(o=>o.status==="delivered").length/own.length*100) : 0;
+        return `<div style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;font-size:13px">
+            <b>${escapeHtml(c.name)}</b><span>${escapeHtml(c.stage)} · ${pct}%</span>
+          </div>
+          <div class="pbar"><span style="width:${pct}%"></span></div>
+        </div>`;
+      }).join("") || `<div class="empty">Пока нет ни одного проекта</div>`}
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Загрузка водителей</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Водитель</th><th>Город</th><th>Всего</th><th>Доставлено</th><th>Проблемные</th></tr></thead>
+        <tbody>
+          ${perDriver.map(p=>`<tr>
+            <td>${escapeHtml(p.d.name)}</td><td>${escapeHtml(p.d.city)}</td>
+            <td>${p.total}</td><td>${p.done}</td><td>${p.problem}</td>
+          </tr>`).join("") || `<tr><td class="empty" colspan="5">Нет водителей</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+/* ---------- Дашборд маркетолога ---------- */
+function tplMarketerDashboard(){
+  const {publications} = DataManager.state;
+  const ms = marketingSummary();
+  const ranked = publications.map(p=>({p, o: DataManager.find("orders", p.orderId), m: latestMeasurement(p)}))
+    .filter(x=>x.o && x.m).sort((a,b)=>(b.m.views||0)-(a.m.views||0)).slice(0,3);
+  return `
+    <div class="grid-kpi">
+      <div class="kpi"><div class="num">${ms.pubCount}</div><div class="lbl">Публикаций зафиксировано</div></div>
+      <div class="kpi warn"><div class="num">${ms.gap.length}</div><div class="lbl">Доставлено, но нет публикации</div></div>
+      <div class="kpi ok"><div class="num">${fmtNum(ms.totalReach)}</div><div class="lbl">Суммарный охват</div></div>
+      <div class="kpi"><div class="num">${fmtPercent(ms.avgEr)}</div><div class="lbl">Средний ER</div></div>
+      <div class="kpi"><div class="num">${ms.totalSales}</div><div class="lbl">Продаж по промокодам, шт.</div></div>
+      <div class="kpi ok"><div class="num">${fmtNum(ms.totalRevenue)} ₸</div><div class="lbl">Выручка по промокодам</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Топ-3 блогера по охвату</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>Блогер</th><th>Платформа</th><th>Охват</th><th>ER</th><th>Продажи</th></tr></thead>
+        <tbody>
+          ${ranked.map((x,i)=>`<tr>
+            <td>${i+1}</td><td>${escapeHtml(x.o.blogger)}</td><td>${escapeHtml(x.p.platform)}</td>
+            <td>${fmtNum(x.m.views)}</td><td>${fmtPercent(erPercent(x.m))}</td>
+            <td>${x.m.salesCount||0} шт · ${fmtNum(x.m.salesRevenue)} ₸</td>
+          </tr>`).join("") || `<tr><td class="empty" colspan="6">Пока нет данных — добавьте публикации во вкладке «Публикации и охваты»</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+    ${ms.gap.length ? `
+    <div class="panel">
+      <div class="panel-title">⚠️ Доставлены, но ещё не опубликовали</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Блогер</th><th>Проект</th><th>Доставлено</th></tr></thead>
+        <tbody>${ms.gap.map(o=>`<tr><td>${escapeHtml(o.blogger)}</td><td>${escapeHtml(campaignName(o.campaignId))}</td><td>${escapeHtml(o.deliveredAt||"")}</td></tr>`).join("")}</tbody>
+      </table></div>
+    </div>` : ""}
+  `;
+}
+
+/* ---------- Бартер-проекты ---------- */
+function tplCampaigns(){
+  const {campaigns, orders} = DataManager.state;
+  return `
+    <div class="panel">
+      <div class="panel-title">Бартер-проекты <button class="btn btn-primary btn-sm" id="new-campaign-btn">+ Новый проект</button></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Название</th><th>Город</th><th>Период</th><th>Ответственный</th><th>Тип бокса</th><th>План, шт.</th><th>Этап</th><th>Доставок</th><th></th></tr></thead>
+        <tbody>
+          ${campaigns.map(c=>{
+            const cnt = orders.filter(o=>o.campaignId===c.id).length;
+            return `<tr>
+              <td><b>${escapeHtml(c.name)}</b></td>
+              <td>${escapeHtml(c.city)}</td>
+              <td>${escapeHtml(c.period)}</td>
+              <td>${escapeHtml(c.responsible)}</td>
+              <td>${escapeHtml(c.boxType)}</td>
+              <td>${c.plannedCount}</td>
+              <td><select class="camp-stage" data-id="${c.id}">${CAMPAIGN_STAGES.map(s=>`<option ${s===c.stage?'selected':''}>${s}</option>`).join("")}</select></td>
+              <td>${cnt}</td>
+              <td><button class="btn btn-danger btn-sm del-campaign" data-id="${c.id}">Удалить</button></td>
+            </tr>`;
+          }).join("") || `<tr><td class="empty" colspan="9">Проектов пока нет</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+/* ---------- Отправка блогерам (доставки) ---------- */
+function tplDeliveries(){
+  const {orders, drivers, campaigns} = DataManager.state;
+  const f = UI.filters;
+  const cities = [...new Set(orders.map(o=>o.city))];
+  let rows = orders.filter(o=>{
+    if(f.campaign && String(o.campaignId)!==f.campaign) return false;
+    if(f.driver){ if(f.driver==="__none__" ? o.driverCode : o.driverCode!==f.driver) return false; }
+    if(f.city && o.city!==f.city) return false;
+    if(f.status){
+      if(f.status==="__problem__" && (STATUS_META[o.status]||{}).group!=="problem") return false;
+      else if(f.status!=="__problem__" && o.status!==f.status) return false;
+    }
+    if(f.search){
+      const s = f.search.toLowerCase();
+      if(!(o.blogger.toLowerCase().includes(s) || o.address.toLowerCase().includes(s) || o.phone.includes(s))) return false;
+    }
+    return true;
+  });
+
+  return `
+    <div class="panel">
+      <div class="panel-title">
+        Отправка блогерам
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" id="import-csv-btn">Импорт CSV</button>
+          <input type="file" id="import-csv-input" accept=".csv" class="hide">
+          <button class="btn btn-ghost btn-sm" id="export-csv-btn">Экспорт отчёта</button>
+          <button class="btn btn-primary btn-sm" id="new-delivery-btn">+ Доставка вручную</button>
+        </div>
+      </div>
+      <div class="toolbar">
+        <input type="search" class="fill" id="f-search" placeholder="Поиск: блогер, адрес, телефон" value="${escapeHtml(f.search)}">
+        <select id="f-campaign"><option value="">Все проекты</option>${campaigns.map(c=>`<option value="${c.id}" ${f.campaign==String(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join("")}</select>
+        <select id="f-driver"><option value="">Все водители</option>${drivers.map(d=>`<option value="${d.code}" ${f.driver===d.code?'selected':''}>${escapeHtml(d.name)}</option>`).join("")}<option value="__none__" ${f.driver==='__none__'?'selected':''}>Без водителя</option></select>
+        <select id="f-city"><option value="">Все города</option>${cities.map(c=>`<option ${f.city===c?'selected':''}>${escapeHtml(c)}</option>`).join("")}</select>
+        <select id="f-status">
+          <option value="">Все статусы</option>
+          <option value="__problem__" ${f.status==='__problem__'?'selected':''}>⚠️ Требует реакции</option>
+          ${Object.entries(STATUS_META).map(([k,m])=>`<option value="${k}" ${f.status===k?'selected':''}>${escapeHtml(m.label)}</option>`).join("")}
+        </select>
+        <button class="btn btn-ghost btn-sm" id="clear-filters-btn">Сброс</button>
+      </div>
+
+      <div class="toolbar" id="bulk-bar" style="${UI.selectedOrderIds.size? '':'display:none'}">
+        <span>${UI.selectedOrderIds.size} выбрано</span>
+        <select id="bulk-driver-select"><option value="">Назначить водителя…</option>${drivers.filter(d=>d.active).map(d=>`<option value="${d.code}">${escapeHtml(d.name)}</option>`).join("")}</select>
+        <button class="btn btn-primary btn-sm" id="bulk-assign-btn">Назначить</button>
+        <button class="btn btn-danger btn-sm" id="bulk-delete-btn">Удалить выбранные</button>
+      </div>
+
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th class="rowcheck"><input type="checkbox" id="check-all"></th>
+          <th>№</th><th>Блогер</th><th>Город</th><th>Адрес</th><th>Телефон</th><th>Бокс</th>
+          <th>Водитель</th><th>Статус</th><th>Дата</th><th>Фото</th><th>Закрытие</th><th>Bitrix</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(o=>`
+            <tr>
+              <td class="rowcheck"><input type="checkbox" class="row-check" data-id="${o.id}" ${UI.selectedOrderIds.has(o.id)?'checked':''}></td>
+              <td>#${o.id}</td>
+              <td>${escapeHtml(o.blogger)}</td>
+              <td>${escapeHtml(o.city)}</td>
+              <td class="wrap">${escapeHtml(o.address)}</td>
+              <td>${escapeHtml(o.phone)}</td>
+              <td>${escapeHtml(o.box)}</td>
+              <td>
+                <select class="order-driver-select" data-id="${o.id}">
+                  <option value="">—</option>
+                  ${drivers.map(d=>`<option value="${d.code}" ${o.driverCode===d.code?'selected':''}>${escapeHtml(d.name)}</option>`).join("")}
+                </select>
+              </td>
+              <td>${statusBadge(o.status)}</td>
+              <td>${escapeHtml(o.deliveredAt || o.assignedAt || "—")}</td>
+              <td>${o.photo ? `<button class="btn btn-ghost btn-sm view-photo-btn" data-id="${o.id}">Фото</button>` : (o.status==="delivered" ? '<span style="color:var(--bad)">нет</span>' : "—")}</td>
+              <td>
+                ${o.status==="delivered" ? `
+                <select class="order-closure-select" data-id="${o.id}">
+                  <option value="">Не выбрано</option>
+                  ${Object.entries(CLOSURE_TYPES).map(([k,l])=>`<option value="${k}" ${o.closureType===k?'selected':''}>${l}</option>`).join("")}
+                </select>` : "—"}
+              </td>
+              <td>${o.status==="delivered" ? `<button class="btn btn-sm ${o.bitrixSynced?'btn-ghost':'btn-primary'} sync-bitrix-btn" data-id="${o.id}">${o.bitrixSynced?'✓ синхр.':'Отправить'}</button>` : "—"}</td>
+              <td><button class="btn btn-danger btn-sm del-order-btn" data-id="${o.id}">✕</button></td>
+            </tr>
+          `).join("") || `<tr><td colspan="13" class="empty">Ничего не найдено по фильтрам</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+/* ---------- Водители ---------- */
+function tplDrivers(){
+  const {drivers, orders} = DataManager.state;
+  return `
+    <div class="panel">
+      <div class="panel-title">Справочник водителей <button class="btn btn-primary btn-sm" id="new-driver-btn">+ Добавить водителя</button></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Код</th><th>ФИО</th><th>Телефон</th><th>Город</th><th>Тип</th><th>Активен</th><th>Назначено</th><th>Доставлено</th><th></th></tr></thead>
+        <tbody>
+          ${drivers.map(d=>{
+            const own = orders.filter(o=>o.driverCode===d.code);
+            return `<tr>
+              <td><b>${escapeHtml(d.code)}</b></td>
+              <td>${escapeHtml(d.name)}</td>
+              <td>${escapeHtml(d.phone)}</td>
+              <td>${escapeHtml(d.city)}</td>
+              <td>${escapeHtml(d.type)}</td>
+              <td><input type="checkbox" class="driver-active-check" data-code="${d.code}" ${d.active?'checked':''}></td>
+              <td>${own.length}</td>
+              <td>${own.filter(o=>o.status==='delivered').length}</td>
+              <td><button class="btn btn-danger btn-sm del-driver-btn" data-code="${d.code}">Удалить</button></td>
+            </tr>`;
+          }).join("") || `<tr><td class="empty" colspan="9">Водителей пока нет</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+/* ---------- Остатки и возвраты ---------- */
+function tplReturns(){
+  const {returns, campaigns} = DataManager.state;
+  return `
+    <div class="panel">
+      <div class="panel-title">Остатки и возвраты <button class="btn btn-primary btn-sm" id="new-return-btn">+ Запись</button></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Проект</th><th>Позиция</th><th>Кол-во</th><th>Статус</th><th></th></tr></thead>
+        <tbody>
+          ${returns.map(r=>`<tr>
+            <td>${escapeHtml(campaignName(r.campaignId))}</td>
+            <td>${escapeHtml(r.item)}</td>
+            <td>${r.qty}</td>
+            <td><select class="return-status-select" data-id="${r.id}">${RETURN_STATUSES.map(s=>`<option ${s===r.status?'selected':''}>${s}</option>`).join("")}</select></td>
+            <td><button class="btn btn-danger btn-sm del-return-btn" data-id="${r.id}">✕</button></td>
+          </tr>`).join("") || `<tr><td class="empty" colspan="5">Нет записей об остатках</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+/* ---------- Публикации и охваты ---------- */
+function tplPublications(){
+  const {orders, campaigns} = DataManager.state;
+  const f = UI.filters;
+  let rows = orders.filter(o=>{
+    if(f.campaign && String(o.campaignId)!==f.campaign) return false;
+    if(f.search && !o.blogger.toLowerCase().includes(f.search.toLowerCase())) return false;
+    return true;
+  });
+  return `
+    <div class="panel">
+      <div class="panel-title">Публикации и охваты
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" id="template-pub-csv-btn">Скачать шаблон CSV</button>
+          <button class="btn btn-ghost btn-sm" id="import-pub-csv-btn">Импорт CSV</button>
+          <input type="file" id="import-pub-csv-input" accept=".csv" class="hide">
+          <button class="btn btn-ghost btn-sm" id="export-pub-csv-btn">Экспорт CSV</button>
+        </div>
+      </div>
+      <div class="login-hint" style="margin-bottom:12px">
+        Импорт понимает и новую публикацию, и повторный замер в одной строке: если у блогера ещё нет публикации — она будет создана;
+        если публикация уже есть — просто допишется новый замер охвата.
+      </div>
+      <div class="toolbar">
+        <input type="search" class="fill" id="fp-search" placeholder="Поиск по блогеру" value="${escapeHtml(f.search)}">
+        <select id="fp-campaign"><option value="">Все проекты</option>${campaigns.map(c=>`<option value="${c.id}" ${f.campaign==String(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join("")}</select>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Блогер</th><th>Город</th><th>Статус доставки</th><th>Платформа</th><th>Ссылка</th>
+          <th>Дата публ.</th><th>Охват</th><th>ER</th><th>Продажи</th><th>Выручка</th><th>Категория</th><th>Промокод</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(o=>{
+            const pub = pubOf(o.id);
+            const m = pub ? latestMeasurement(pub) : null;
+            return `<tr>
+              <td>${escapeHtml(o.blogger)}</td>
+              <td>${escapeHtml(o.city)}</td>
+              <td>${statusBadge(o.status)}</td>
+              <td>${pub?escapeHtml(pub.platform):"—"}</td>
+              <td>${pub&&pub.link?`<a href="${escapeHtml(pub.link)}" target="_blank" rel="noopener">ссылка</a>`:"—"}</td>
+              <td>${pub?escapeHtml(pub.publishedAt):"—"}</td>
+              <td>${m?fmtNum(m.views):"—"}</td>
+              <td>${m?fmtPercent(erPercent(m)):"—"}</td>
+              <td>${m?(m.salesCount||0):"—"}</td>
+              <td>${m?fmtNum(m.salesRevenue):"—"}</td>
+              <td>${pub?escapeHtml(pub.tier):"—"}</td>
+              <td>${pub?escapeHtml(pub.promoCode||"—"):"—"}</td>
+              <td>
+                ${pub
+                  ? `<button class="btn btn-ghost btn-sm add-measure-btn" data-order="${o.id}">+ Замер</button>
+                     <button class="btn btn-ghost btn-sm history-btn" data-order="${o.id}">История</button>`
+                  : `<button class="btn btn-primary btn-sm add-pub-btn" data-order="${o.id}">+ Публикация</button>`}
+              </td>
+            </tr>`;
+          }).join("") || `<tr><td class="empty" colspan="13">Ничего не найдено</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+/* ---------- Топ блогеров ---------- */
+function tplTopBloggers(){
+  const {publications} = DataManager.state;
+  const sortBy = UI.topSort || "views";
+  const ranked = publications.map(p=>{
+    const o = DataManager.find("orders", p.orderId);
+    const m = latestMeasurement(p);
+    return {p,o,m};
+  }).filter(x=>x.o && x.m);
+  ranked.sort((a,b)=>{
+    if(sortBy==="sales") return (b.m.salesRevenue||0)-(a.m.salesRevenue||0);
+    if(sortBy==="er") return (erPercent(b.m)||0)-(erPercent(a.m)||0);
+    return (b.m.views||0)-(a.m.views||0);
+  });
+  const medals = ["🥇","🥈","🥉"];
+  return `
+    <div class="panel">
+      <div class="panel-title">Топ блогеров
+        <select id="top-sort-select">
+          <option value="views" ${sortBy==='views'?'selected':''}>По охвату</option>
+          <option value="er" ${sortBy==='er'?'selected':''}>По вовлечённости (ER)</option>
+          <option value="sales" ${sortBy==='sales'?'selected':''}>По выручке</option>
+        </select>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>Блогер</th><th>Проект</th><th>Платформа</th><th>Категория</th><th>Охват</th><th>ER</th><th>Продажи, шт</th><th>Выручка</th></tr></thead>
+        <tbody>
+          ${ranked.map((x,i)=>`<tr>
+            <td>${i<3?medals[i]:i+1}</td>
+            <td>${escapeHtml(x.o.blogger)}</td>
+            <td>${escapeHtml(campaignName(x.o.campaignId))}</td>
+            <td>${escapeHtml(x.p.platform)}</td>
+            <td>${escapeHtml(x.p.tier)}</td>
+            <td>${fmtNum(x.m.views)}</td>
+            <td>${fmtPercent(erPercent(x.m))}</td>
+            <td>${x.m.salesCount||0}</td>
+            <td>${fmtNum(x.m.salesRevenue)} ₸</td>
+          </tr>`).join("") || `<tr><td class="empty" colspan="9">Пока нет опубликованных постов с замерами</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+/* ---------- Сводный отчёт ---------- */
+function tplReport(){
+  const {orders, campaigns} = DataManager.state;
+  const f = UI.filters;
+  let rows = orders.filter(o=>{
+    if(f.campaign && String(o.campaignId)!==f.campaign) return false;
+    if(f.search){
+      const s = f.search.toLowerCase();
+      if(!(o.blogger.toLowerCase().includes(s) || o.address.toLowerCase().includes(s))) return false;
+    }
+    return true;
+  });
+  return `
+    <div class="panel">
+      <div class="panel-title">Сводный отчёт: логистика + доставка + маркетинг
+        <button class="btn btn-ghost btn-sm" id="export-report-csv-btn">Экспорт CSV</button>
+      </div>
+      <div class="toolbar">
+        <input type="search" class="fill" id="fr-search" placeholder="Поиск по блогеру / адресу" value="${escapeHtml(f.search)}">
+        <select id="fr-campaign"><option value="">Все проекты</option>${campaigns.map(c=>`<option value="${c.id}" ${f.campaign==String(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join("")}</select>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>№</th><th>Блогер</th><th>Проект</th><th>Город</th><th>Водитель</th><th>Статус доставки</th><th>Дата доставки</th>
+          <th>Платформа</th><th>Дата публ.</th><th>Охват</th><th>ER</th><th>Продажи</th><th>Выручка</th><th>Bitrix</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(o=>{
+            const pub = pubOf(o.id);
+            const m = pub ? latestMeasurement(pub) : null;
+            return `<tr>
+              <td>#${o.id}</td>
+              <td>${escapeHtml(o.blogger)}</td>
+              <td>${escapeHtml(campaignName(o.campaignId))}</td>
+              <td>${escapeHtml(o.city)}</td>
+              <td>${escapeHtml(driverName(o.driverCode))}</td>
+              <td>${statusBadge(o.status)}</td>
+              <td>${escapeHtml(o.deliveredAt||"—")}</td>
+              <td>${pub?escapeHtml(pub.platform):"—"}</td>
+              <td>${pub?escapeHtml(pub.publishedAt):"—"}</td>
+              <td>${m?fmtNum(m.views):"—"}</td>
+              <td>${m?fmtPercent(erPercent(m)):"—"}</td>
+              <td>${m?(m.salesCount||0):"—"}</td>
+              <td>${m?fmtNum(m.salesRevenue):"—"}</td>
+              <td>${o.status==='delivered' ? (o.bitrixSynced?'✓':'—') : "—"}</td>
+            </tr>`;
+          }).join("") || `<tr><td class="empty" colspan="14">Нет данных</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+/* =========================================================================
+   8. МОДАЛКИ
+   ========================================================================= */
+function openModal(html){
+  const back = document.createElement("div");
+  back.className = "modal-back"; back.id = "modal-back";
+  back.innerHTML = `<div class="modal">${html}</div>`;
+  back.addEventListener("click", e=>{ if(e.target===back) closeModal(); });
+  document.body.appendChild(back);
+}
+function closeModal(){ const el = document.getElementById("modal-back"); if(el) el.remove(); }
+
+function modalNewCampaign(){
+  openModal(`
+    <h3>Новый бартер-проект</h3>
+    <div class="form-row">
+      <div class="field"><label>Название</label><input id="m-name" placeholder="Barter-боксы / Август"></div>
+      <div class="field"><label>Город</label><input id="m-city" placeholder="Алматы"></div>
+      <div class="field"><label>Период</label><input id="m-period" placeholder="Август 2026"></div>
+      <div class="field"><label>Ответственный</label><input id="m-resp" placeholder="Сауле"></div>
+      <div class="field"><label>Тип бокса</label><select id="m-box">${BOX_TYPES.map(b=>`<option>${b}</option>`).join("")}</select></div>
+      <div class="field"><label>План, шт.</label><input id="m-count" type="number" value="100"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="m-cancel">Отмена</button>
+      <button class="btn btn-primary" id="m-save">Создать</button>
+    </div>
+  `);
+  document.getElementById("m-cancel").onclick = closeModal;
+  document.getElementById("m-save").onclick = async ()=>{
+    const btn = document.getElementById("m-save");
+    const name = document.getElementById("m-name").value.trim();
+    if(!name){ toast("Укажите название проекта", true); return; }
+    try{
+      await withBusy(btn, ()=> Api.createCampaign({
+        name, city: document.getElementById("m-city").value.trim() || "—",
+        period: document.getElementById("m-period").value.trim() || "—",
+        responsible: document.getElementById("m-resp").value.trim() || "—",
+        boxType: document.getElementById("m-box").value,
+        plannedCount: parseInt(document.getElementById("m-count").value,10) || 0,
+        stage: CAMPAIGN_STAGES[0], budget:0,
+      }));
+      closeModal(); toast("Проект создан"); await DataManager.refresh(); render();
+    }catch(e){ toast(e.message, true); }
+  };
+}
+
+function modalNewDelivery(){
+  const {campaigns, drivers} = DataManager.state;
+  openModal(`
+    <h3>Новая доставка</h3>
+    <div class="form-row">
+      <div class="field"><label>Проект</label><select id="m-camp">${campaigns.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}</select></div>
+      <div class="field"><label>Блогер</label><input id="m-blogger" placeholder="@username"></div>
+      <div class="field"><label>Телефон</label><input id="m-phone" placeholder="+7 701 ..."></div>
+      <div class="field"><label>Город</label><input id="m-city" placeholder="Алматы"></div>
+      <div class="field"><label>Адрес</label><input id="m-address" placeholder="ул. ..."></div>
+      <div class="field"><label>Бокс</label><select id="m-box">${BOX_TYPES.map(b=>`<option>${b}</option>`).join("")}</select></div>
+      <div class="field"><label>Водитель (можно позже)</label><select id="m-driver"><option value="">—</option>${drivers.map(d=>`<option value="${d.code}">${escapeHtml(d.name)}</option>`).join("")}</select></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="m-cancel">Отмена</button>
+      <button class="btn btn-primary" id="m-save">Добавить</button>
+    </div>
+  `);
+  document.getElementById("m-cancel").onclick = closeModal;
+  document.getElementById("m-save").onclick = async ()=>{
+    const btn = document.getElementById("m-save");
+    const blogger = document.getElementById("m-blogger").value.trim();
+    const address = document.getElementById("m-address").value.trim();
+    const phone = document.getElementById("m-phone").value.trim();
+    if(!blogger || !address || !phone){ toast("Заполните блогера, телефон и адрес", true); return; }
+    try{
+      await withBusy(btn, ()=> Api.createOrder({
+        campaignId: parseInt(document.getElementById("m-camp").value,10),
+        blogger, phone, city: document.getElementById("m-city").value.trim() || "—",
+        address, box: document.getElementById("m-box").value,
+        driverCode: document.getElementById("m-driver").value || null,
+      }));
+      closeModal(); toast("Доставка добавлена"); await DataManager.refresh(); render();
+    }catch(e){ toast(e.message, true); }
+  };
+}
+
+function modalNewDriver(){
+  openModal(`
+    <h3>Новый водитель</h3>
+    <div class="form-row">
+      <div class="field"><label>Код (логин в мобильном интерфейсе)</label><input id="m-code" placeholder="AZAMAT-05"></div>
+      <div class="field"><label>ФИО</label><input id="m-name" placeholder="Азамат ..."></div>
+      <div class="field"><label>Телефон</label><input id="m-phone" placeholder="+7 701 ..."></div>
+      <div class="field"><label>Город</label><input id="m-city" placeholder="Алматы"></div>
+      <div class="field"><label>Тип</label><select id="m-type"><option>внешний</option><option>внутренний</option></select></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="m-cancel">Отмена</button>
+      <button class="btn btn-primary" id="m-save">Добавить</button>
+    </div>
+  `);
+  document.getElementById("m-cancel").onclick = closeModal;
+  document.getElementById("m-save").onclick = async ()=>{
+    const btn = document.getElementById("m-save");
+    const code = document.getElementById("m-code").value.trim().toUpperCase();
+    const name = document.getElementById("m-name").value.trim();
+    if(!code || !name){ toast("Укажите код и ФИО", true); return; }
+    try{
+      await withBusy(btn, ()=> Api.createDriver({
+        code, name, phone: document.getElementById("m-phone").value.trim() || "—",
+        city: document.getElementById("m-city").value.trim() || "—",
+        type: document.getElementById("m-type").value,
+      }));
+      closeModal(); toast("Водитель добавлен"); await DataManager.refresh(); render();
+    }catch(e){ toast(e.message, true); }
+  };
+}
+
+function modalNewReturn(){
+  const {campaigns} = DataManager.state;
+  openModal(`
+    <h3>Новая запись об остатке</h3>
+    <div class="form-row">
+      <div class="field"><label>Проект</label><select id="m-camp">${campaigns.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}</select></div>
+      <div class="field"><label>Позиция</label><input id="m-item" placeholder="Например: упаковка (12 шт.)"></div>
+      <div class="field"><label>Кол-во</label><input id="m-qty" type="number" value="1"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="m-cancel">Отмена</button>
+      <button class="btn btn-primary" id="m-save">Добавить</button>
+    </div>
+  `);
+  document.getElementById("m-cancel").onclick = closeModal;
+  document.getElementById("m-save").onclick = async ()=>{
+    const btn = document.getElementById("m-save");
+    const item = document.getElementById("m-item").value.trim();
+    if(!item){ toast("Укажите позицию", true); return; }
+    try{
+      await withBusy(btn, ()=> Api.createReturn({
+        campaignId: parseInt(document.getElementById("m-camp").value,10),
+        item, qty: parseInt(document.getElementById("m-qty").value,10) || 1,
+      }));
+      closeModal(); toast("Запись добавлена"); await DataManager.refresh(); render();
+    }catch(e){ toast(e.message, true); }
+  };
+}
+
+function modalViewPhoto(order){
+  openModal(`
+    <h3>Подтверждение доставки #${order.id}</h3>
+    <p style="margin-bottom:10px;color:var(--ink-soft)">${escapeHtml(order.blogger)} · ${escapeHtml(order.deliveredAt||"")}</p>
+    ${order.photo ? `<img src="${order.photo}" style="width:100%;border-radius:8px">` : `<div class="empty">Фото отсутствует</div>`}
+    ${order.driverComment ? `<p style="margin-top:10px"><b>Комментарий водителя:</b> ${escapeHtml(order.driverComment)}</p>` : ""}
+    <div class="modal-actions"><button class="btn btn-primary" id="m-close">Закрыть</button></div>
+  `);
+  document.getElementById("m-close").onclick = closeModal;
+}
+
+function modalAddPublication(orderId){
+  const o = DataManager.find("orders", orderId);
+  if(!o) return;
+  openModal(`
+    <h3>Публикация · ${escapeHtml(o.blogger)}</h3>
+    <div class="form-row">
+      <div class="field"><label>Платформа</label><select id="m-platform">${PLATFORMS.map(p=>`<option>${p}</option>`).join("")}</select></div>
+      <div class="field"><label>Ссылка на публикацию</label><input id="m-link" placeholder="https://instagram.com/..."></div>
+      <div class="field"><label>Дата публикации</label><input id="m-date" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="field"><label>Категория блогера</label><select id="m-tier">${BLOGGER_TIERS.map(t=>`<option>${t}</option>`).join("")}</select></div>
+      <div class="field"><label>Промокод</label><input id="m-promo" placeholder="Например NAME15"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="m-cancel">Отмена</button>
+      <button class="btn btn-primary" id="m-save">Сохранить и добавить замер</button>
+    </div>
+  `);
+  document.getElementById("m-cancel").onclick = closeModal;
+  document.getElementById("m-save").onclick = async ()=>{
+    const btn = document.getElementById("m-save");
+    const link = document.getElementById("m-link").value.trim();
+    if(!link){ toast("Укажите ссылку на публикацию", true); return; }
+    try{
+      await withBusy(btn, ()=> Api.createPublication({
+        orderId, platform: document.getElementById("m-platform").value,
+        link, publishedAt: document.getElementById("m-date").value,
+        tier: document.getElementById("m-tier").value,
+        promoCode: document.getElementById("m-promo").value.trim(),
+      }));
+      closeModal(); toast("Публикация добавлена"); await DataManager.refresh();
+      modalAddMeasurement(orderId, true);
+    }catch(e){ toast(e.message, true); }
+  };
+}
+
+function modalAddMeasurement(orderId, isFirst){
+  const pub = pubOf(orderId);
+  const o = DataManager.find("orders", orderId);
+  if(!pub || !o){ toast("Сначала добавьте публикацию", true); return; }
+  openModal(`
+    <h3>Замер охвата · ${escapeHtml(o.blogger)}</h3>
+    <div class="form-row">
+      <div class="field"><label>Дата замера</label><input id="m-mdate" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="field"><label>Просмотры</label><input id="m-views" type="number" value="0"></div>
+      <div class="field"><label>Лайки</label><input id="m-likes" type="number" value="0"></div>
+      <div class="field"><label>Комментарии</label><input id="m-comments" type="number" value="0"></div>
+      <div class="field"><label>Сохранения</label><input id="m-saves" type="number" value="0"></div>
+      <div class="field"><label>Продажи по промокоду, шт</label><input id="m-sales" type="number" value="0"></div>
+      <div class="field"><label>Выручка по промокоду, ₸</label><input id="m-revenue" type="number" value="0"></div>
+    </div>
+    <div class="field"><label>Комментарий (необязательно)</label><textarea id="m-note" placeholder="Например: замер через 5 дней после публикации"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="m-cancel">${isFirst?'Пропустить':'Отмена'}</button>
+      <button class="btn btn-primary" id="m-save">Сохранить замер</button>
+    </div>
+  `);
+  document.getElementById("m-cancel").onclick = ()=>{ closeModal(); render(); };
+  document.getElementById("m-save").onclick = async ()=>{
+    const btn = document.getElementById("m-save");
+    try{
+      await withBusy(btn, ()=> Api.addMeasurement(pub.id, {
+        date: document.getElementById("m-mdate").value,
+        views: parseInt(document.getElementById("m-views").value,10)||0,
+        likes: parseInt(document.getElementById("m-likes").value,10)||0,
+        comments: parseInt(document.getElementById("m-comments").value,10)||0,
+        saves: parseInt(document.getElementById("m-saves").value,10)||0,
+        salesCount: parseInt(document.getElementById("m-sales").value,10)||0,
+        salesRevenue: parseInt(document.getElementById("m-revenue").value,10)||0,
+        note: document.getElementById("m-note").value.trim(),
+      }));
+      closeModal(); toast("Замер сохранён"); await DataManager.refresh(); render();
+    }catch(e){ toast(e.message, true); }
+  };
+}
+
+function modalPublicationHistory(orderId){
+  const pub = pubOf(orderId);
+  const o = DataManager.find("orders", orderId);
+  if(!pub || !o) return;
+  openModal(`
+    <h3>История замеров · ${escapeHtml(o.blogger)}</h3>
+    <p style="color:var(--ink-soft);margin-bottom:8px">${escapeHtml(pub.platform)} · <a href="${escapeHtml(pub.link)}" target="_blank" rel="noopener">ссылка</a> · публикация ${escapeHtml(pub.publishedAt)}</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Дата замера</th><th>Просмотры</th><th>Лайки</th><th>Коммент.</th><th>Продажи</th><th>Выручка</th><th>Комментарий</th></tr></thead>
+      <tbody>
+        ${pub.measurements.slice().reverse().map(m=>`<tr>
+          <td>${escapeHtml(m.date)}</td><td>${fmtNum(m.views)}</td><td>${fmtNum(m.likes)}</td><td>${fmtNum(m.comments)}</td>
+          <td>${m.salesCount||0}</td><td>${fmtNum(m.salesRevenue)}</td><td>${escapeHtml(m.note||"")}</td>
+        </tr>`).join("") || `<tr><td class="empty" colspan="7">Замеров пока нет</td></tr>`}
+      </tbody>
+    </table></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="m-close">Закрыть</button>
+      <button class="btn btn-primary" id="m-add">+ Новый замер</button>
+    </div>
+  `);
+  document.getElementById("m-close").onclick = closeModal;
+  document.getElementById("m-add").onclick = ()=>{ closeModal(); modalAddMeasurement(orderId,false); };
+}
+
+/* =========================================================================
+   9. ОБРАБОТЧИКИ ВКЛАДОК
+   ========================================================================= */
+function wireDeskTab(){
+  if(UI.tab==="campaigns"){
+    document.getElementById("new-campaign-btn").onclick = modalNewCampaign;
+    document.querySelectorAll(".camp-stage").forEach(sel=>{
+      sel.onchange = async ()=>{
+        try{ await Api.updateCampaign(parseInt(sel.dataset.id,10), {stage: sel.value}); await DataManager.refresh(); }
+        catch(e){ toast(e.message, true); render(); }
+      };
+    });
+    document.querySelectorAll(".del-campaign").forEach(btn=>{
+      btn.onclick = async ()=>{
+        const id = parseInt(btn.dataset.id,10);
+        if(DataManager.state.orders.some(o=>o.campaignId===id)){
+          if(!confirm("У проекта есть связанные доставки. Удалить проект всё равно?")) return;
+        }
+        try{ await Api.deleteCampaign(id); toast("Проект удалён"); await DataManager.refresh(); render(); }
+        catch(e){ toast(e.message, true); }
+      };
+    });
+  }
+
+  else if(UI.tab==="deliveries"){
+    document.getElementById("new-delivery-btn").onclick = modalNewDelivery;
+    const fSearch = document.getElementById("f-search");
+    fSearch.oninput = debounce(()=>{ UI.filters.search = fSearch.value; renderDeskTab(); }, 250);
+    document.getElementById("f-campaign").onchange = e=>{ UI.filters.campaign = e.target.value; renderDeskTab(); };
+    document.getElementById("f-driver").onchange = e=>{ UI.filters.driver = e.target.value; renderDeskTab(); };
+    document.getElementById("f-city").onchange = e=>{ UI.filters.city = e.target.value; renderDeskTab(); };
+    document.getElementById("f-status").onchange = e=>{ UI.filters.status = e.target.value; renderDeskTab(); };
+    document.getElementById("clear-filters-btn").onclick = ()=>{
+      UI.filters = {campaign:"", driver:"", city:"", status:"", search:""};
+      renderDeskTab();
+    };
+
+    document.getElementById("check-all").onchange = e=>{
+      document.querySelectorAll(".row-check").forEach(cb=>{
+        cb.checked = e.target.checked;
+        const id = parseInt(cb.dataset.id,10);
+        if(e.target.checked) UI.selectedOrderIds.add(id); else UI.selectedOrderIds.delete(id);
+      });
+      renderDeskTab();
+    };
+    document.querySelectorAll(".row-check").forEach(cb=>{
+      cb.onchange = ()=>{
+        const id = parseInt(cb.dataset.id,10);
+        if(cb.checked) UI.selectedOrderIds.add(id); else UI.selectedOrderIds.delete(id);
+        renderDeskTab();
+      };
+    });
+
+    const bulkAssign = document.getElementById("bulk-assign-btn");
+    if(bulkAssign) bulkAssign.onclick = async ()=>{
+      const code = document.getElementById("bulk-driver-select").value;
+      if(!code){ toast("Выберите водителя", true); return; }
+      try{
+        const res = await Api.bulkAssign([...UI.selectedOrderIds], code);
+        toast(`Назначено ${res.count} доставок`);
+        UI.selectedOrderIds.clear();
+        await DataManager.refresh(); render();
+      }catch(e){ toast(e.message, true); }
+    };
+    const bulkDelete = document.getElementById("bulk-delete-btn");
+    if(bulkDelete) bulkDelete.onclick = async ()=>{
+      if(!confirm(`Удалить ${UI.selectedOrderIds.size} доставок?`)) return;
+      try{
+        await Api.bulkDelete([...UI.selectedOrderIds]);
+        UI.selectedOrderIds.clear();
+        await DataManager.refresh(); render();
+      }catch(e){ toast(e.message, true); }
+    };
+
+    document.querySelectorAll(".order-driver-select").forEach(sel=>{
+      sel.onchange = async ()=>{
+        const id = parseInt(sel.dataset.id,10);
+        const code = sel.value || null;
+        const order = DataManager.find("orders", id);
+        const wasUnassigned = !order.driverCode;
+        try{
+          await Api.updateOrder(id, {
+            driverCode: code,
+            status: code ? (wasUnassigned ? "assigned" : order.status) : "created",
+            assignedAt: code ? new Date().toLocaleString("ru-RU") : order.assignedAt,
+          });
+          await DataManager.refresh(); render();
+        }catch(e){ toast(e.message, true); }
+      };
+    });
+    document.querySelectorAll(".order-closure-select").forEach(sel=>{
+      sel.onchange = async ()=>{
+        try{ await Api.updateOrder(parseInt(sel.dataset.id,10), {closureType: sel.value || null}); await DataManager.refresh(); }
+        catch(e){ toast(e.message, true); render(); }
+      };
+    });
+    document.querySelectorAll(".sync-bitrix-btn").forEach(btn=>{
+      btn.onclick = async ()=>{
+        try{
+          await Api.syncBitrix(parseInt(btn.dataset.id,10));
+          toast("Отправлено в Bitrix (симуляция вебхука)");
+          await DataManager.refresh(); render();
+        }catch(e){ toast(e.message, true); }
+      };
+    });
+    document.querySelectorAll(".view-photo-btn").forEach(btn=>{
+      btn.onclick = ()=> modalViewPhoto(DataManager.find("orders", parseInt(btn.dataset.id,10)));
+    });
+    document.querySelectorAll(".del-order-btn").forEach(btn=>{
+      btn.onclick = async ()=>{
+        try{ await Api.deleteOrder(parseInt(btn.dataset.id,10)); await DataManager.refresh(); render(); }
+        catch(e){ toast(e.message, true); }
+      };
+    });
+
+    document.getElementById("export-csv-btn").onclick = ()=>{
+      const header = ["ID","Блогер","Город","Адрес","Телефон","Бокс","Водитель","Статус","Дата","Закрытие","Bitrix","Комментарий водителя"];
+      const lines = [header.map(csvEscape).join(",")];
+      DataManager.state.orders.forEach(o=>{
+        lines.push([
+          o.id, o.blogger, o.city, o.address, o.phone, o.box, driverName(o.driverCode),
+          (STATUS_META[o.status]||{}).label || o.status, o.deliveredAt || o.assignedAt || "",
+          o.closureType ? CLOSURE_TYPES[o.closureType] : "", o.bitrixSynced ? "да" : "нет", o.driverComment || ""
+        ].map(csvEscape).join(","));
+      });
+      downloadFile("barter-box-deliveries.csv", "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
+      toast("Отчёт выгружен");
+    };
+
+    document.getElementById("import-csv-btn").onclick = ()=> document.getElementById("import-csv-input").click();
+    document.getElementById("import-csv-input").onchange = (e)=>{
+      const file = e.target.files[0];
+      if(!file) return;
+      const reader = new FileReader();
+      reader.onload = async ()=>{
+        const rows = parseCsv(String(reader.result));
+        try{
+          const res = await Api.importOrders(rows);
+          toast(`Импортировано доставок: ${res.added}`);
+        }catch(e){ toast(e.message, true); }
+        e.target.value = "";
+        await DataManager.refresh(); render();
+      };
+      reader.readAsText(file, "UTF-8");
+    };
+  }
+
+  else if(UI.tab==="drivers"){
+    document.getElementById("new-driver-btn").onclick = modalNewDriver;
+    document.querySelectorAll(".driver-active-check").forEach(cb=>{
+      cb.onchange = async ()=>{
+        try{ await Api.updateDriver(cb.dataset.code, {active: cb.checked}); await DataManager.refresh(); }
+        catch(e){ toast(e.message, true); render(); }
+      };
+    });
+    document.querySelectorAll(".del-driver-btn").forEach(btn=>{
+      btn.onclick = async ()=>{
+        const code = btn.dataset.code;
+        const hasOrders = DataManager.state.orders.some(o=>o.driverCode===code);
+        if(hasOrders && !confirm("У водителя есть назначенные доставки. Всё равно удалить?")) return;
+        try{ await Api.deleteDriver(code); await DataManager.refresh(); render(); }
+        catch(e){ toast(e.message, true); }
+      };
+    });
+  }
+
+  else if(UI.tab==="returns"){
+    document.getElementById("new-return-btn").onclick = modalNewReturn;
+    document.querySelectorAll(".return-status-select").forEach(sel=>{
+      sel.onchange = async ()=>{
+        try{ await Api.updateReturn(parseInt(sel.dataset.id,10), {status: sel.value}); await DataManager.refresh(); }
+        catch(e){ toast(e.message, true); render(); }
+      };
+    });
+    document.querySelectorAll(".del-return-btn").forEach(btn=>{
+      btn.onclick = async ()=>{
+        try{ await Api.deleteReturn(parseInt(btn.dataset.id,10)); await DataManager.refresh(); render(); }
+        catch(e){ toast(e.message, true); }
+      };
+    });
+  }
+
+  else if(UI.tab==="publications"){
+    const fpSearch = document.getElementById("fp-search");
+    fpSearch.oninput = debounce(()=>{ UI.filters.search = fpSearch.value; renderDeskTab(); }, 250);
+    document.getElementById("fp-campaign").onchange = e=>{ UI.filters.campaign = e.target.value; renderDeskTab(); };
+
+    document.querySelectorAll(".add-pub-btn").forEach(btn=>{
+      btn.onclick = ()=> modalAddPublication(parseInt(btn.dataset.order,10));
+    });
+    document.querySelectorAll(".add-measure-btn").forEach(btn=>{
+      btn.onclick = ()=> modalAddMeasurement(parseInt(btn.dataset.order,10), false);
+    });
+    document.querySelectorAll(".history-btn").forEach(btn=>{
+      btn.onclick = ()=> modalPublicationHistory(parseInt(btn.dataset.order,10));
+    });
+
+    document.getElementById("template-pub-csv-btn").onclick = ()=>{
+      const header = ["блогер","платформа","ссылка","дата_публикации","категория","промокод","дата_замера","просмотры","лайки","комментарии","сохранения","продажи","выручка","комментарий"];
+      const example1 = ["@aizhan_beauty","Instagram Reels","https://instagram.com/reel/xxx","2026-07-10","Малый (эффект 1–7 дней)","AIZHAN15","2026-07-15","15400","780","71","120","14","126000","Через 5 дней после публикации"];
+      const example2 = ["@moldir_mua","TikTok","https://tiktok.com/@moldir/video/xxx","2026-07-12","Малый (эффект 1–7 дней)","MOLDIR10","","","","","","","",""];
+      const csv = [header, example1, example2].map(row=>row.map(csvEscape).join(",")).join("\n");
+      downloadFile("barter-box-publications-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
+      toast("Шаблон скачан — заполните и загрузите через «Импорт CSV»");
+    };
+
+    document.getElementById("import-pub-csv-btn").onclick = ()=> document.getElementById("import-pub-csv-input").click();
+    document.getElementById("import-pub-csv-input").onchange = (e)=>{
+      const file = e.target.files[0];
+      if(!file) return;
+      const reader = new FileReader();
+      reader.onload = async ()=>{
+        const rows = parseCsv(String(reader.result));
+        try{
+          const res = await Api.importPublications(rows);
+          let msg = `Импорт готов: новых публикаций — ${res.created}, замеров добавлено — ${res.measured}`;
+          if(res.skipped) msg += `, пропущено (блогер не найден) — ${res.skipped}`;
+          toast(msg);
+        }catch(e){ toast(e.message, true); }
+        e.target.value = "";
+        await DataManager.refresh(); render();
+      };
+      reader.readAsText(file, "UTF-8");
+    };
+
+    document.getElementById("export-pub-csv-btn").onclick = ()=>{
+      const header = ["Блогер","Город","Статус доставки","Платформа","Ссылка","Дата публикации","Охват","Лайки","Комментарии","ER%","Продажи шт","Выручка","Категория","Промокод"];
+      const lines = [header.map(csvEscape).join(",")];
+      DataManager.state.orders.forEach(o=>{
+        const pub = pubOf(o.id); const m = pub ? latestMeasurement(pub) : null;
+        const er = m ? erPercent(m) : null;
+        lines.push([
+          o.blogger, o.city, (STATUS_META[o.status]||{}).label || o.status,
+          pub ? pub.platform : "", pub ? pub.link : "", pub ? pub.publishedAt : "",
+          m ? m.views : "", m ? m.likes : "", m ? m.comments : "", er!=null ? er.toFixed(1) : "",
+          m ? (m.salesCount||0) : "", m ? (m.salesRevenue||0) : "",
+          pub ? pub.tier : "", pub ? (pub.promoCode||"") : ""
+        ].map(csvEscape).join(","));
+      });
+      downloadFile("barter-box-publications.csv", "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
+      toast("Отчёт по публикациям выгружен");
+    };
+  }
+
+  else if(UI.tab==="topBloggers"){
+    document.getElementById("top-sort-select").onchange = e=>{ UI.topSort = e.target.value; renderDeskTab(); };
+  }
+
+  else if(UI.tab==="report"){
+    const frSearch = document.getElementById("fr-search");
+    frSearch.oninput = debounce(()=>{ UI.filters.search = frSearch.value; renderDeskTab(); }, 250);
+    document.getElementById("fr-campaign").onchange = e=>{ UI.filters.campaign = e.target.value; renderDeskTab(); };
+
+    document.getElementById("export-report-csv-btn").onclick = ()=>{
+      const header = ["ID","Блогер","Проект","Город","Водитель","Статус доставки","Дата доставки","Платформа","Дата публикации","Охват","ER%","Продажи шт","Выручка","Bitrix"];
+      const lines = [header.map(csvEscape).join(",")];
+      DataManager.state.orders.forEach(o=>{
+        const pub = pubOf(o.id); const m = pub ? latestMeasurement(pub) : null;
+        const er = m ? erPercent(m) : null;
+        lines.push([
+          o.id, o.blogger, campaignName(o.campaignId), o.city, driverName(o.driverCode),
+          (STATUS_META[o.status]||{}).label || o.status, o.deliveredAt || "",
+          pub ? pub.platform : "", pub ? pub.publishedAt : "",
+          m ? m.views : "", er!=null ? er.toFixed(1) : "",
+          m ? (m.salesCount||0) : "", m ? (m.salesRevenue||0) : "",
+          o.status==="delivered" ? (o.bitrixSynced ? "да" : "нет") : ""
+        ].map(csvEscape).join(","));
+      });
+      downloadFile("barter-box-svodny-otchet.csv", "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
+      toast("Сводный отчёт выгружен");
+    };
+  }
+}
+
+function debounce(fn, ms){
+  let t;
+  return (...args)=>{ clearTimeout(t); t = setTimeout(()=>fn(...args), ms); };
+}
+
+/* =========================================================================
+   10. ВОДИТЕЛЬСКИЙ (мобильный) ИНТЕРФЕЙС
+   ========================================================================= */
+function driverOrders(){
+  return DataManager.state.orders.filter(o=>o.driverCode===UI.driverCode);
+}
+
+function renderDriverShell(){
+  const app = document.getElementById("app");
+  const drv = DataManager.state.drivers.find(d=>d.code===UI.driverCode);
+  if(!drv){ logout(); return; }
+  const own = driverOrders();
+  const done = own.filter(o=>o.status==="delivered").length;
+  const problem = own.filter(o=>(STATUS_META[o.status]||{}).group==="problem").length;
+
+  app.innerHTML = `
+    <div class="topbar">
+      <div class="logo"><span class="mark">BB</span> Barter Box</div>
+      <div class="top-spacer"></div>
+      <span class="conn-dot" id="conn-dot"></span>
+      <button class="btn btn-ghost" id="logout-btn">Выйти</button>
+    </div>
+    <main>
+      <div class="driver-shell">
+        <div class="driver-header">
+          <div class="name">🚗 ${escapeHtml(drv.name)}</div>
+          <div class="sub">${escapeHtml(drv.city)} · код ${escapeHtml(drv.code)}</div>
+          <div class="driver-stats">
+            <div><div class="n">${own.length}</div><div class="l">всего</div></div>
+            <div><div class="n">${done}</div><div class="l">доставлено</div></div>
+            <div><div class="n">${own.length-done}</div><div class="l">осталось</div></div>
+            <div><div class="n">${problem}</div><div class="l">проблемные</div></div>
+          </div>
+        </div>
+        <div id="driver-list"></div>
+        <div class="driver-footer">Barter Box · модуль водителя</div>
+      </div>
+    </main>
+  `;
+  setConnStatus(isOnline);
+  document.getElementById("logout-btn").onclick = logout;
+  renderDriverList();
+}
+
+function renderDriverList(){
+  const list = document.getElementById("driver-list");
+  const own = driverOrders().slice().sort((a,b)=>{
+    const rank = s => s==="delivered" ? 2 : ((STATUS_META[s]||{}).group==="problem" ? 1 : 0);
+    return rank(a.status)-rank(b.status);
+  });
+  list.innerHTML = own.map(o=>`
+    <div class="order-card">
+      <div class="top">
+        <div>
+          <div class="blogger">${escapeHtml(o.blogger)}</div>
+          <div class="addr">${escapeHtml(o.city)}, ${escapeHtml(o.address)}</div>
+        </div>
+        ${statusBadge(o.status)}
+      </div>
+      <div class="actions">
+        <a class="icon-btn call" href="${telLink(o.phone)}">📞 Позвонить</a>
+        <a class="icon-btn map" href="${mapsLink(o.address,o.city)}" target="_blank" rel="noopener">🗺️ Карта</a>
+        <button class="icon-btn open-order-btn" data-id="${o.id}">Открыть</button>
+      </div>
+    </div>
+  `).join("") || `<div class="empty">Вам пока не назначено ни одной доставки</div>`;
+
+  document.querySelectorAll(".open-order-btn").forEach(btn=>{
+    btn.onclick = ()=>{ UI.openOrderId = parseInt(btn.dataset.id,10); UI.driverAwaiting=null; UI.driverReasonCode=null; renderDriverOrderModal(); };
+  });
+}
+
+function renderDriverOrderModal(){
+  const o = DataManager.find("orders", UI.openOrderId);
+  if(!o) return;
+  const isDelivered = o.status==="delivered";
+
+  if(UI.driverAwaiting==="photo"){
+    openModal(`
+      <h3>Доставка #${o.id}</h3>
+      <p style="color:var(--ink-soft);margin-bottom:8px">Без фото доставка не закрывается.</p>
+      <div class="field"><label>Фото подтверждения</label>
+        <input type="file" id="photo-input" accept="image/*" capture="environment">
+      </div>
+      <img id="photo-preview" class="photo-preview hide">
+      <div class="field"><label>Комментарий (необязательно)</label><textarea id="d-comment" placeholder="Получил лично / оставил на ресепшене…"></textarea></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="m-back">Назад</button>
+        <button class="btn btn-primary" id="m-confirm-photo" disabled>Подтвердить доставку</button>
+      </div>
+    `);
+    let photoFile = null;
+    document.getElementById("photo-input").onchange = (e)=>{
+      const file = e.target.files[0];
+      if(!file) return;
+      photoFile = file;
+      const reader = new FileReader();
+      reader.onload = ()=>{
+        const img = document.getElementById("photo-preview");
+        img.src = String(reader.result); img.classList.remove("hide");
+        document.getElementById("m-confirm-photo").disabled = false;
+      };
+      reader.readAsDataURL(file);
+    };
+    document.getElementById("m-back").onclick = ()=>{ UI.driverAwaiting=null; closeModal(); renderDriverOrderModal(); };
+    document.getElementById("m-confirm-photo").onclick = async ()=>{
+      if(!photoFile){ toast("Прикрепите фото", true); return; }
+      const btn = document.getElementById("m-confirm-photo");
+      try{
+        await withBusy(btn, ()=> Api.deliverOrder(o.id, photoFile, document.getElementById("d-comment").value.trim()));
+        UI.driverAwaiting=null; UI.openOrderId=null;
+        closeModal(); toast("Доставка закрыта: Доставлено ✅");
+        await DataManager.refresh(); renderDriverShell();
+      }catch(e){ toast(e.message, true); }
+    };
+    return;
+  }
+
+  if(UI.driverAwaiting==="reason"){
+    if(!UI.driverReasonCode){
+      openModal(`
+        <h3>Доставка #${o.id} · проблема</h3>
+        <p style="color:var(--ink-soft);margin-bottom:8px">Выберите причину:</p>
+        <div class="reason-grid">
+          ${Object.entries(PROBLEM_REASONS).map(([code,label])=>`<button data-code="${code}">${escapeHtml(label)}</button>`).join("")}
+        </div>
+        <div class="modal-actions"><button class="btn btn-ghost" id="m-back">Назад</button></div>
+      `);
+      document.querySelectorAll(".reason-grid button").forEach(btn=>{
+        btn.onclick = ()=>{ UI.driverReasonCode = btn.dataset.code; closeModal(); renderDriverOrderModal(); };
+      });
+      document.getElementById("m-back").onclick = ()=>{ UI.driverAwaiting=null; closeModal(); renderDriverOrderModal(); };
+      return;
+    }
+    const label = PROBLEM_REASONS[UI.driverReasonCode];
+    openModal(`
+      <h3>Доставка #${o.id} · «${escapeHtml(label)}»</h3>
+      <div class="field"><label>Комментарий (что произошло${UI.driverReasonCode==='addr_bad' ? ' / новый адрес' : ''})</label>
+        <textarea id="d-reason-comment" placeholder="Коротко опишите ситуацию…"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="m-back">Назад</button>
+        <button class="btn btn-primary" id="m-confirm-reason">Зафиксировать</button>
+      </div>
+    `);
+    document.getElementById("m-back").onclick = ()=>{ UI.driverReasonCode=null; closeModal(); renderDriverOrderModal(); };
+    document.getElementById("m-confirm-reason").onclick = async ()=>{
+      const comment = document.getElementById("d-reason-comment").value.trim();
+      if(!comment){ toast("Добавьте короткий комментарий", true); return; }
+      const btn = document.getElementById("m-confirm-reason");
+      try{
+        await withBusy(btn, ()=> Api.problemOrder(o.id, UI.driverReasonCode, comment));
+        UI.driverAwaiting=null; UI.driverReasonCode=null; UI.openOrderId=null;
+        closeModal(); toast(`Зафиксировано: ${label}`);
+        await DataManager.refresh(); renderDriverShell();
+      }catch(e){ toast(e.message, true); }
+    };
+    return;
+  }
+
+  openModal(`
+    <h3>Доставка #${o.id}</h3>
+    <p><b>${escapeHtml(o.blogger)}</b></p>
+    <p class="addr" style="margin:4px 0">${escapeHtml(o.city)}, ${escapeHtml(o.address)}</p>
+    <p style="margin-bottom:6px">📞 ${escapeHtml(o.phone)} · 📦 ${escapeHtml(o.box)}</p>
+    <div style="margin:10px 0">${statusBadge(o.status)}</div>
+    ${o.photo ? `<img src="${o.photo}" class="photo-preview">` : ""}
+    ${o.driverComment ? `<p style="margin-top:8px;color:var(--ink-soft)"><i>${escapeHtml(o.driverComment)}</i></p>` : ""}
+    <div class="actions" style="margin-top:10px">
+      <a class="icon-btn call" href="${telLink(o.phone)}">📞 Позвонить</a>
+      <a class="icon-btn map" href="${mapsLink(o.address,o.city)}" target="_blank" rel="noopener">🗺️ Карта</a>
+    </div>
+    ${!isDelivered ? `
+    <div class="status-btns">
+      <button class="sb-ok" id="btn-delivered">✅ Доставлено</button>
+      <button class="sb-warn" id="btn-problem">⚠️ Проблема</button>
+    </div>` : ""}
+    <div class="modal-actions"><button class="btn btn-ghost" id="m-close">К списку</button></div>
+  `);
+  document.getElementById("m-close").onclick = ()=>{ UI.openOrderId=null; closeModal(); };
+  const bd = document.getElementById("btn-delivered");
+  if(bd) bd.onclick = ()=>{ UI.driverAwaiting="photo"; closeModal(); renderDriverOrderModal(); };
+  const bp = document.getElementById("btn-problem");
+  if(bp) bp.onclick = ()=>{ UI.driverAwaiting="reason"; closeModal(); renderDriverOrderModal(); };
+}
+
+/* =========================================================================
+   11. ГЛАВНЫЙ РЕНДЕР
+   ========================================================================= */
+function render(){
+  if(!UI.role){ renderLogin(); return; }
+  if(UI.role==="manager" || UI.role==="marketer"){ renderDeskShell(); return; }
+  if(UI.role==="driver"){ renderDriverShell(); return; }
+  renderLogin();
+}
+
+/* =========================================================================
+   12. ФОНОВОЕ ОБНОВЛЕНИЕ — чтобы 20 человек видели правки друг друга
+   ========================================================================= */
+function startPolling(){
+  setInterval(async ()=>{
+    if(modalOpen()) return; // не мешаем открытой форме
+    try{
+      await DataManager.refresh();
+      setConnStatus(true);
+      if(UI.role) render();
+    }catch(e){
+      setConnStatus(false);
+    }
+  }, 12000);
+}
+
+/* =========================================================================
+   13. ВСТРОЕННЫЕ ТЕСТЫ — только чистые функции, без записи в общую базу
+   (мутирующие CRUD-тесты вынесены на сервер: scripts/load-test.js создаёт
+   и удаляет тестовые записи в изолированном тестовом запуске, а не в
+   продакшн-базе, которую видят реальные пользователи)
+   ========================================================================= */
+const TestSuite = {
+  tests: [],
+  test(name, fn){
+    try{ fn(); console.log(`✅ ${name}`); this.tests.push({name, passed:true}); }
+    catch(e){ console.error(`❌ ${name}: ${e.message}`); this.tests.push({name, passed:false, error:e.message}); }
+  },
+  run(){
+    console.log("🧪 Barter Box (клиент) — запускаю самотест...");
+    const passed = this.tests.filter(t=>t.passed).length;
+    console.log(`📊 Результат: ${passed}/${this.tests.length} пройдено`);
+    return passed === this.tests.length;
+  }
+};
+
+async function runSelfTests(){
+  TestSuite.test("statusBadge возвращает разметку для всех статусов", ()=>{
+    Object.keys(STATUS_META).forEach(k=>{
+      if(!statusBadge(k).includes(STATUS_META[k].label)) throw new Error("badge label mismatch for "+k);
+    });
+  });
+  TestSuite.test("csvEscape оборачивает поля с запятой в кавычки", ()=>{
+    if(csvEscape("a,b") !== '"a,b"') throw new Error("csv escape failed");
+  });
+  TestSuite.test("parseCsv корректно разбирает строки с запятой-разделителем", ()=>{
+    const rows = parseCsv("блогер,телефон,город,адрес\n@test,+7700,Алматы,ул. Тест 1");
+    if(rows.length!==1 || rows[0]["блогер"]!=="@test" || rows[0]["адрес"]!=="ул. Тест 1") throw new Error("csv parse mismatch");
+  });
+  TestSuite.test("erPercent считает вовлечённость (лайки+комменты / просмотры)", ()=>{
+    const v = erPercent({views:1000, likes:50, comments:10});
+    if(Math.abs(v-6)>0.001) throw new Error("ER calc wrong: "+v);
+    if(erPercent({views:0, likes:5, comments:1})!==null) throw new Error("ER should be null when views=0");
+  });
+  TestSuite.test("latestMeasurement возвращает последний по порядку замер", ()=>{
+    const pub = {measurements:[{views:1},{views:2},{views:3}]};
+    if(latestMeasurement(pub).views!==3) throw new Error("latest measurement wrong");
+    if(latestMeasurement({measurements:[]})!==null) throw new Error("empty measurements should return null");
+  });
+  TestSuite.test("Водитель видит только свои доставки (фильтр по коду)", ()=>{
+    const before = UI.driverCode;
+    UI.driverCode = DataManager.state.drivers[0] ? DataManager.state.drivers[0].code : "IVAN-77";
+    const own = driverOrders();
+    if(own.some(o=>o.driverCode!==UI.driverCode)) throw new Error("leak of foreign orders");
+    UI.driverCode = before;
+  });
+  TestSuite.test("marketingSummary агрегирует суммарный охват по всем публикациям", ()=>{
+    const ms = marketingSummary();
+    const manualTotal = DataManager.state.publications.reduce((s,p)=>{
+      const m = latestMeasurement(p);
+      return s + (m ? (m.views||0) : 0);
+    }, 0);
+    if(ms.totalReach !== manualTotal) throw new Error("marketingSummary reach mismatch");
+  });
+
+  // единственная сетевая проверка — health-check, только чтение, ничего не создаёт в базе
+  try{
+    const h = await Api.health();
+    TestSuite.test("сервер отвечает на /api/health", ()=>{ if(h.ok!==true) throw new Error("health not ok"); });
+    setConnStatus(true);
+  }catch(e){
+    TestSuite.test("сервер отвечает на /api/health", ()=>{ throw e; });
+    setConnStatus(false);
+  }
+
+  TestSuite.run();
+}
+
+/* =========================================================================
+   14. СТАРТ ПРИЛОЖЕНИЯ
+   ========================================================================= */
+document.addEventListener("DOMContentLoaded", async ()=>{
+  loadSession();
+  try{
+    await DataManager.load();
+    setConnStatus(true);
+  }catch(e){
+    setConnStatus(false);
+    console.error("Не удалось загрузить данные с сервера:", e.message);
+  }
+  await runSelfTests();
+  render();
+  startPolling();
+});
+</script>
+</body>
+</html>
