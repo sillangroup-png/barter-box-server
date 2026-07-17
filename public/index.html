@@ -417,35 +417,40 @@ function decayWeight(daysSincePost){
   if(daysSincePost===2) return 0.2;
   return 0;
 }
+// Ключ сопоставления интеграции/продажи: если у обеих сторон указан ШК товара — сверяем по ШК
+// (надёжно, не зависит от того, как называется товар в 1С/Каспи или в карточке интеграции).
+// Если ШК не указан — сверяем по текстовому названию продукта, как раньше (для старых записей).
+function dealMatchKey(d){ return (d.barcode||"").trim() || d.product; }
+function saleMatchKey(s){ return (s.barcode||"").trim() || s.product; }
 function computeInfluencerRomi(){
   const {influencerDeals, salesByDay} = DataManager.state;
   const byProduct = {};
-  salesByDay.forEach(s=>{ (byProduct[s.product] = byProduct[s.product] || []).push(s); });
+  salesByDay.forEach(s=>{ const key = saleMatchKey(s); (byProduct[key] = byProduct[key] || []).push(s); });
 
-  function isCleanDay(product, dateStr){
+  function isCleanDay(matchKey, dateStr){
     return !influencerDeals.some(d=>{
-      if(d.product!==product || !d.publishedDate) return false;
+      if(dealMatchKey(d)!==matchKey || !d.publishedDate) return false;
       const diff = daysBetween(dateStr, d.publishedDate);
       return diff>=0 && diff<=2;
     });
   }
   const baselineByProduct = {};
-  Object.keys(byProduct).forEach(product=>{
-    const clean = byProduct[product].filter(s=>isCleanDay(product, s.date));
-    baselineByProduct[product] = clean.length ? clean.reduce((a,s)=>a+s.revenue,0)/clean.length : null;
+  Object.keys(byProduct).forEach(matchKey=>{
+    const clean = byProduct[matchKey].filter(s=>isCleanDay(matchKey, s.date));
+    baselineByProduct[matchKey] = clean.length ? clean.reduce((a,s)=>a+s.revenue,0)/clean.length : null;
   });
 
   const contribution = {};
   influencerDeals.forEach(d=> contribution[d.id]=0);
 
-  Object.keys(byProduct).forEach(product=>{
-    const base = baselineByProduct[product];
+  Object.keys(byProduct).forEach(matchKey=>{
+    const base = baselineByProduct[matchKey];
     if(base==null) return;
-    byProduct[product].forEach(s=>{
+    byProduct[matchKey].forEach(s=>{
       const uplift = Math.max(0, s.revenue - base);
       if(uplift<=0) return;
       const active = influencerDeals
-        .filter(d=>d.product===product && d.publishedDate)
+        .filter(d=>dealMatchKey(d)===matchKey && d.publishedDate)
         .map(d=>({d, diff: daysBetween(s.date, d.publishedDate)}))
         .filter(x=>x.diff>=0 && x.diff<=2)
         .map(x=>({d:x.d, w: decayWeight(x.diff)}));
@@ -456,8 +461,9 @@ function computeInfluencerRomi(){
   });
 
   return influencerDeals.map(d=>{
+    const matchKey = dealMatchKey(d);
     const netContribution = Math.round(contribution[d.id]||0);
-    const hasBaseline = baselineByProduct[d.product]!=null;
+    const hasBaseline = baselineByProduct[matchKey]!=null;
     const romi = (hasBaseline && d.cost>0) ? (netContribution / d.cost) : null;
     return {deal:d, netContribution, romi, hasBaseline};
   });
@@ -1183,7 +1189,7 @@ function tplInfluencerDeals(){
             return `<tr>
               <td><b>${escapeHtml(d.blogerLogin)}</b>${d.lastUpdatedFrom==="telegram"?' <span class="badge badge-progress" title="Обновлено через Telegram-бота">TG</span>':''}</td>
               <td>${escapeHtml(d.platform)}</td>
-              <td>${escapeHtml(d.product)}</td>
+              <td>${escapeHtml(d.product)}${d.barcode?`<br><span style="color:var(--ink-mute);font-size:11px">ШК ${escapeHtml(d.barcode)}</span>`:""}</td>
               <td>${escapeHtml(d.plannedDate||"—")}</td>
               <td>${escapeHtml(d.publishedDate||"—")}</td>
               <td>${fmtNum(d.plannedReach)} / ${fmtNum(d.plannedClicks)}</td>
@@ -1222,7 +1228,7 @@ function tplInfluencerDeals(){
         <thead><tr><th>Дата</th><th>Продукт</th><th>Выручка</th><th></th></tr></thead>
         <tbody>
           ${salesSorted.map(row=>`<tr>
-            <td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.product)}</td><td>${fmtNum(row.revenue)} ₸</td>
+            <td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.product)}${row.barcode?`<br><span style="color:var(--ink-mute);font-size:11px">ШК ${escapeHtml(row.barcode)}</span>`:""}</td><td>${fmtNum(row.revenue)} ₸</td>
             <td><button class="btn btn-danger btn-sm del-sale-btn" data-id="${row.id}">✕</button></td>
           </tr>`).join("") || `<tr><td class="empty" colspan="4">Продаж пока не загружено</td></tr>`}
         </tbody>
@@ -1551,9 +1557,15 @@ function modalPublicationHistory(orderId){
   document.getElementById("m-add").onclick = ()=>{ closeModal(); modalAddMeasurement(orderId,false); };
 }
 
+// Подсказки для поля "Продукт": типы боксов + все уже встречавшиеся названия товаров
+// (из интеграций и из загруженных продаж) — чтобы не приходилось печатать точное название заново.
+function knownProductNames(){
+  const {influencerDeals, salesByDay} = DataManager.state;
+  return [...new Set([...BOX_TYPES, ...influencerDeals.map(d=>d.product), ...salesByDay.map(s=>s.product)])].filter(Boolean);
+}
 function modalDeal(existing){
   const isEdit = !!existing;
-  const d = existing || {blogerLogin:"", platform:PLATFORMS[0], product:BOX_TYPES[0], plannedDate:"", publishedDate:"", plannedReach:0, plannedClicks:0, reach:0, clicks:0, likes:0, comments:0, saves:0, cost:0, plannedCost:0, notes:""};
+  const d = existing || {blogerLogin:"", platform:PLATFORMS[0], product:"", barcode:"", plannedDate:"", publishedDate:"", plannedReach:0, plannedClicks:0, reach:0, clicks:0, likes:0, comments:0, saves:0, cost:0, plannedCost:0, notes:""};
   const botHint = d.lastUpdatedFrom==="telegram"
     ? `<div class="login-hint">Последнее обновление — из Telegram-бота (${escapeHtml((d.lastUpdatedAt||"").replace("T"," ").slice(0,16))}). Лайки/комментарии/сохранения ниже — из распознанного скриншота.</div>`
     : "";
@@ -1562,7 +1574,8 @@ function modalDeal(existing){
     <div class="form-row">
       <div class="field"><label>Логин блогера (Instagram)</label><input id="m-login" placeholder="@username" value="${escapeHtml(d.blogerLogin)}"></div>
       <div class="field"><label>Платформа</label><select id="m-platform">${PLATFORMS.map(p=>`<option ${p===d.platform?'selected':''}>${p}</option>`).join("")}</select></div>
-      <div class="field"><label>Продукт</label><select id="m-product">${BOX_TYPES.map(b=>`<option ${b===d.product?'selected':''}>${b}</option>`).join("")}</select></div>
+      <div class="field"><label>Продукт</label><input id="m-product" list="product-suggestions" placeholder="Название товара как в 1С" value="${escapeHtml(d.product||'')}"></div>
+      <div class="field"><label>Штрихкод (ШК) товара</label><input id="m-barcode" placeholder="необязательно, но надёжнее" value="${escapeHtml(d.barcode||'')}"></div>
       <div class="field"><label>Дата план</label><input id="m-planned-date" type="date" value="${d.plannedDate||''}"></div>
       <div class="field"><label>Дата факт (публикации)</label><input id="m-published-date" type="date" value="${d.publishedDate||''}"></div>
       <div class="field"><label>План охват</label><input id="m-planned-reach" type="number" value="${d.plannedReach||0}"></div>
@@ -1575,7 +1588,9 @@ function modalDeal(existing){
       <div class="field"><label>План расход, ₸</label><input id="m-planned-cost" type="number" value="${d.plannedCost||0}"></div>
       <div class="field"><label>Факт расход, ₸</label><input id="m-cost" type="number" value="${d.cost||0}"></div>
     </div>
+    <datalist id="product-suggestions">${knownProductNames().map(p=>`<option value="${escapeHtml(p)}">`).join("")}</datalist>
     ${botHint}
+    <div class="login-hint">Если укажешь ШК — вклад в продажи и ROMI будут считаться по нему (надёжнее, чем по названию товара из разных источников).</div>
     <div class="field"><label>Комментарий</label><textarea id="m-notes">${escapeHtml(d.notes||"")}</textarea></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="m-cancel">Отмена</button>
@@ -1588,7 +1603,8 @@ function modalDeal(existing){
     const blogerLogin = document.getElementById("m-login").value.trim();
     if(!blogerLogin){ toast("Укажите логин блогера", true); return; }
     const payload = {
-      blogerLogin, platform: document.getElementById("m-platform").value, product: document.getElementById("m-product").value,
+      blogerLogin, platform: document.getElementById("m-platform").value, product: document.getElementById("m-product").value.trim(),
+      barcode: document.getElementById("m-barcode").value.trim(),
       plannedDate: document.getElementById("m-planned-date").value, publishedDate: document.getElementById("m-published-date").value,
       plannedReach: parseInt(document.getElementById("m-planned-reach").value,10)||0,
       plannedClicks: parseInt(document.getElementById("m-planned-clicks").value,10)||0,
@@ -1614,10 +1630,12 @@ function modalSale(){
     <h3>Продажи за день (из 1С)</h3>
     <div class="form-row">
       <div class="field"><label>Дата</label><input id="m-sdate" type="date" value="${today}"></div>
-      <div class="field"><label>Продукт</label><select id="m-sproduct">${BOX_TYPES.map(b=>`<option>${b}</option>`).join("")}</select></div>
+      <div class="field"><label>Продукт</label><input id="m-sproduct" list="product-suggestions" placeholder="Название товара как в 1С"></div>
+      <div class="field"><label>Штрихкод (ШК)</label><input id="m-sbarcode" placeholder="необязательно, но надёжнее"></div>
       <div class="field"><label>Выручка, ₸</label><input id="m-srevenue" type="number" value="0"></div>
     </div>
-    <div class="login-hint">Если для этой пары дата+продукт запись уже есть — значение перезапишется.</div>
+    <datalist id="product-suggestions">${knownProductNames().map(p=>`<option value="${escapeHtml(p)}">`).join("")}</datalist>
+    <div class="login-hint">Если для этой пары дата+ШК (или дата+продукт, если ШК не указан) запись уже есть — значение перезапишется.</div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="m-cancel">Отмена</button>
       <button class="btn btn-primary" id="m-save">Сохранить</button>
@@ -1629,7 +1647,8 @@ function modalSale(){
     try{
       await withBusy(btn, ()=> Api.saveSale({
         date: document.getElementById("m-sdate").value,
-        product: document.getElementById("m-sproduct").value,
+        product: document.getElementById("m-sproduct").value.trim(),
+        barcode: document.getElementById("m-sbarcode").value.trim(),
         revenue: parseInt(document.getElementById("m-srevenue").value,10)||0,
       }));
       closeModal(); toast("Продажи сохранены"); await DataManager.refresh(); render();
@@ -1920,8 +1939,8 @@ function wireDeskTab(){
     });
 
     document.getElementById("template-deal-csv-btn").onclick = ()=>{
-      const header = ["блогер","платформа","продукт","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","статус","комментарий"];
-      const example = ["@big_blogger","Instagram Reels","Уход премиум","2026-07-20","2026-07-20","200000","4000","","","400000","400000","Запланирована",""];
+      const header = ["блогер","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","статус","комментарий"];
+      const example = ["@big_blogger","Instagram Reels","Уход премиум","4650358455500","2026-07-20","2026-07-20","200000","4000","","","400000","400000","Запланирована",""];
       const csv = [header, example].map(row=>row.map(csvEscape).join(",")).join("\n");
       downloadFile("barter-box-influencer-deals-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
       toast("Шаблон скачан");
@@ -1942,8 +1961,8 @@ function wireDeskTab(){
     };
 
     document.getElementById("template-sale-csv-btn").onclick = ()=>{
-      const header = ["дата","продукт","выручка"];
-      const example = ["2026-07-01","Уход премиум","145000"];
+      const header = ["дата","продукт","шк","выручка"];
+      const example = ["2026-07-01","Уход премиум","4650358455500","145000"];
       const csv = [header, example].map(row=>row.map(csvEscape).join(",")).join("\n");
       downloadFile("barter-box-sales-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
       toast("Шаблон скачан — удобно для загрузки истории 1С задним числом");
