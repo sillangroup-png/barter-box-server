@@ -410,6 +410,46 @@ function marketingSummary(){
    Если по товару вообще нет ни одного «чистого» дня в загруженной истории продаж —
    считать не из чего, ROMI для таких интеграций помечается как «недостаточно данных»
    (пока не догрузят историю задним числом — так и решили с заказчиком). */
+// Дата интеграции для фильтров/сравнения периодов: факт-дата публикации, а если её ещё нет — план-дата.
+function inflDealDate(d){ return d.publishedDate || d.plannedDate || ""; }
+function inflAvailableMonths(){
+  const {influencerDeals} = DataManager.state;
+  const set = new Set();
+  influencerDeals.forEach(d=>{ const dt = inflDealDate(d); if(dt) set.add(dt.slice(0,7)); });
+  return [...set].sort();
+}
+function monthLabel(ym){
+  const names = ["","Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"];
+  const [y,m] = ym.split("-");
+  return `${names[parseInt(m,10)]||ym} ${y}`;
+}
+function monthEnd(ym){
+  const [y,m] = ym.split("-").map(Number);
+  const last = new Date(y, m, 0).getDate();
+  return `${ym}-${String(last).padStart(2,"0")}`;
+}
+// Метрики за произвольный период для дашборда сравнения: считаем по уже готовым строкам ROMI
+// (r.netContribution/r.romi не пересчитываются заново — они не зависят от выбранного периода
+// сравнения, т.к. движок ROMI считает decay-окно от абсолютной даты публикации).
+function periodStats(rows, from, to){
+  const inPeriod = rows.filter(r => inDateRange(inflDealDate(r.deal), from, to));
+  const postsCount = inPeriod.length;
+  const reach = inPeriod.reduce((s,r)=>s+(r.deal.reach||0),0);
+  const clicks = inPeriod.reduce((s,r)=>s+(r.deal.clicks||0),0);
+  const cost = inPeriod.reduce((s,r)=>s+(r.deal.cost||0),0);
+  const contribution = inPeriod.reduce((s,r)=>s+(r.netContribution||0),0);
+  const withRomi = inPeriod.filter(r=>r.romi!=null);
+  const avgRomi = withRomi.length ? withRomi.reduce((a,r)=>a+r.romi,0)/withRomi.length : null;
+  return {postsCount, reach, clicks, cost, contribution, avgRomi};
+}
+function deltaCell(av, bv){
+  if(av==null || bv==null) return `<span style="color:var(--ink-mute)">—</span>`;
+  if(av===0) return bv===0 ? `<span style="color:var(--ink-mute)">—</span>` : `<span style="color:var(--ok)">+∞</span>`;
+  const pct = (bv-av)/Math.abs(av)*100;
+  const sign = pct>=0 ? "+" : "";
+  const color = pct>=0 ? "var(--ok)" : "var(--bad)";
+  return `<span style="color:${color}">${sign}${pct.toFixed(0)}%</span>`;
+}
 function daysBetween(a,b){ return Math.round((new Date(a).getTime()-new Date(b).getTime())/86400000); }
 function decayWeight(daysSincePost){
   if(daysSincePost===0) return 1;
@@ -520,7 +560,8 @@ const UI = {
   role: null, driverCode: null, tab: "dashboard",
   filters: {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""},
   topSort: "views",
-  inflFilter: {search:"", sort:"default"},
+  inflFilter: {search:"", sort:"default", month:""},
+  inflCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
   selectedOrderIds: new Set(),
   openOrderId: null, driverAwaiting: null, driverReasonCode: null,
 };
@@ -1158,16 +1199,67 @@ function tplInfluencerTopBloggers(rows){
   `;
 }
 
+/* ---------- Дашборд сравнения периодов (по инфлюенс-интеграциям) ---------- */
+function tplInfluencerCompare(rows){
+  const months = inflAvailableMonths();
+  if(!months.length) return "";
+  const cmp = UI.inflCompare;
+  // По умолчанию (пока пользователь ничего не выбрал) сравниваем первый и последний месяц с данными.
+  if(!cmp.aFrom && !cmp.aTo && !cmp.bFrom && !cmp.bTo){
+    const first = months[0], last = months[months.length-1];
+    cmp.aFrom = first+"-01"; cmp.aTo = monthEnd(first);
+    cmp.bFrom = last+"-01"; cmp.bTo = monthEnd(last);
+  }
+  const a = periodStats(rows, cmp.aFrom, cmp.aTo);
+  const b = periodStats(rows, cmp.bFrom, cmp.bTo);
+  const metricRow = (label, av, bv, fmt) => `<tr>
+    <td>${label}</td>
+    <td>${fmt(av)}</td>
+    <td>${fmt(bv)}</td>
+    <td>${deltaCell(av, bv)}</td>
+  </tr>`;
+  return `
+    <div class="panel">
+      <div class="panel-title">Сравнение периодов</div>
+      <div class="toolbar" style="margin-bottom:12px;flex-wrap:wrap">
+        <span style="align-self:center;color:var(--ink-mute);font-size:12px">Период A</span>
+        <input type="date" id="cmp-a-from" value="${cmp.aFrom}">
+        <span style="align-self:center;color:var(--ink-mute);font-size:12px">—</span>
+        <input type="date" id="cmp-a-to" value="${cmp.aTo}">
+        <span style="align-self:center;color:var(--ink-mute);font-size:12px;margin-left:12px">Период B</span>
+        <input type="date" id="cmp-b-from" value="${cmp.bFrom}">
+        <span style="align-self:center;color:var(--ink-mute);font-size:12px">—</span>
+        <input type="date" id="cmp-b-to" value="${cmp.bTo}">
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Метрика</th><th>Период A</th><th>Период B</th><th>Δ (B к A)</th></tr></thead>
+        <tbody>
+          ${metricRow("Постов", a.postsCount, b.postsCount, v=>fmtNum(v))}
+          ${metricRow("Охват, факт", a.reach, b.reach, v=>fmtNum(v))}
+          ${metricRow("Клики, факт", a.clicks, b.clicks, v=>fmtNum(v))}
+          ${metricRow("Расход", a.cost, b.cost, v=>fmtNum(v)+" ₸")}
+          ${metricRow("Вклад в продажи", Math.round(a.contribution), Math.round(b.contribution), v=>fmtNum(v)+" ₸")}
+          ${metricRow("Средний ROMI", a.avgRomi, b.avgRomi, v=>v==null?"—":v.toFixed(2))}
+        </tbody>
+      </table></div>
+    </div>
+  `;
+}
+
 function tplInfluencerDeals(){
   const s = influencerSummary();
   const {salesByDay} = DataManager.state;
   const salesSorted = salesByDay.slice().sort((a,b)=> a.date<b.date?1:-1).slice(0,30);
 
   const fi = UI.inflFilter;
+  const months = inflAvailableMonths();
   let rows = s.rows;
   if(fi.search){
     const q = fi.search.toLowerCase();
     rows = rows.filter(r=> (r.deal.blogerLogin||"").toLowerCase().includes(q));
+  }
+  if(fi.month){
+    rows = rows.filter(r=> inflDealDate(r.deal).slice(0,7)===fi.month);
   }
   const sorters = {
     sales_desc: (a,b)=> (b.netContribution||0)-(a.netContribution||0),
@@ -1184,6 +1276,8 @@ function tplInfluencerDeals(){
   if(sorters[fi.sort]) rows = rows.slice().sort(sorters[fi.sort]);
 
   return `
+    ${tplInfluencerCompare(s.rows)}
+
     <div class="panel">
       <div class="panel-title">
         Инфлюенс интеграции крупные
@@ -1202,6 +1296,10 @@ function tplInfluencerDeals(){
       </div>
       <div class="toolbar" style="margin-bottom:12px">
         <input type="search" class="fill" id="infl-search" placeholder="Поиск по логину блогера" value="${escapeHtml(fi.search)}">
+        <select id="infl-month">
+          <option value="">Все месяцы</option>
+          ${months.map(m=>`<option value="${m}" ${fi.month===m?'selected':''}>${monthLabel(m)}</option>`).join("")}
+        </select>
         <select id="infl-sort">
           <option value="default" ${fi.sort==='default'?'selected':''}>Без сортировки</option>
           <option value="sales_desc" ${fi.sort==='sales_desc'?'selected':''}>Продажи: сначала больше</option>
@@ -1953,6 +2051,17 @@ function wireDeskTab(){
     const inflSearch = document.getElementById("infl-search");
     inflSearch.oninput = debounce(()=>{ UI.inflFilter.search = inflSearch.value; renderDeskTab(); }, 250);
     document.getElementById("infl-sort").onchange = e=>{ UI.inflFilter.sort = e.target.value; renderDeskTab(); };
+    document.getElementById("infl-month").onchange = e=>{ UI.inflFilter.month = e.target.value; renderDeskTab(); };
+
+    ["cmp-a-from","cmp-a-to","cmp-b-from","cmp-b-to"].forEach(id=>{
+      const el = document.getElementById(id);
+      if(!el) return;
+      el.onchange = e=>{
+        const key = id==="cmp-a-from"?"aFrom": id==="cmp-a-to"?"aTo": id==="cmp-b-from"?"bFrom":"bTo";
+        UI.inflCompare[key] = e.target.value;
+        renderDeskTab();
+      };
+    });
 
     document.querySelectorAll(".edit-deal-btn").forEach(btn=>{
       btn.onclick = ()=>{
