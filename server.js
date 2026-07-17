@@ -502,6 +502,7 @@ app.post("/api/influencer-deals", (req,res)=>{
     product: b.product || "", plannedDate: b.plannedDate || "", publishedDate: b.publishedDate || "",
     plannedReach: b.plannedReach || 0, plannedClicks: b.plannedClicks || 0,
     reach: b.reach || 0, clicks: b.clicks || 0, cost: b.cost || 0, plannedCost: b.plannedCost || 0,
+    barcode: (b.barcode || "").trim(),
     likes: b.likes || 0, comments: b.comments || 0, saves: b.saves || 0,
     lastUpdatedFrom: "", lastUpdatedAt: "",
     status: b.status || DEAL_STATUSES[0], notes: b.notes || "",
@@ -542,6 +543,7 @@ app.post("/api/influencer-deals/import", (req,res)=>{
       clicks: parseInt(r["клики"] || r["clicks"] || 0, 10) || 0,
       plannedCost: parseInt(r["план_расход"] || r["planned_cost"] || 0, 10) || 0,
       cost: parseInt(r["расход"] || r["cost"] || 0, 10) || 0,
+      barcode: (r["шк"] || r["штрихкод"] || r["barcode"] || "").toString().trim(),
       likes:0, comments:0, saves:0, lastUpdatedFrom:"", lastUpdatedAt:"",
       status: r["статус"] || r["status"] || DEAL_STATUSES[0],
       notes: r["комментарий"] || r["notes"] || "",
@@ -553,13 +555,25 @@ app.post("/api/influencer-deals/import", (req,res)=>{
 });
 
 // ---------- продажи по дням (вручную из 1С) — нужны для расчёта ROMI блогеров ----------
+// Ищем уже существующую запись за день: если у обеих строк (новой и в базе) заполнен ШК —
+// сверяем по ШК (это надёжный ключ, в отличие от текстового названия товара из 1С/Каспи).
+// Если ШК нет хотя бы у одной из сторон — сверяем по паре дата+название, как раньше.
+function findSalesRow(list, date, product, barcode){
+  const bc = (barcode || "").trim();
+  if(bc){
+    const byBarcode = list.find(s => s.date===date && (s.barcode||"").trim()===bc);
+    if(byBarcode) return byBarcode;
+  }
+  return list.find(s => s.date===date && s.product===product && !((s.barcode||"").trim()));
+}
 app.post("/api/sales", (req,res)=>{
   const b = req.body || {};
   if(!b.date || !b.product) return res.status(400).json({error:"date и product обязательны"});
-  let row = state.salesByDay.find(s=>s.date===b.date && s.product===b.product);
-  if(row){ row.revenue = b.revenue || 0; }
+  const barcode = (b.barcode || "").trim();
+  let row = findSalesRow(state.salesByDay, b.date, b.product, barcode);
+  if(row){ row.revenue = b.revenue || 0; row.product = b.product; if(barcode) row.barcode = barcode; }
   else{
-    row = {id: nextId("salesByDay"), date: b.date, product: b.product, revenue: b.revenue || 0};
+    row = {id: nextId("salesByDay"), date: b.date, product: b.product, barcode, revenue: b.revenue || 0};
     state.salesByDay.push(row);
   }
   persist();
@@ -579,10 +593,11 @@ app.post("/api/sales/import", (req,res)=>{
     const date = (r["дата"] || r["date"] || "").trim();
     const product = (r["продукт"] || r["product"] || "").trim();
     if(!date || !product) return;
+    const barcode = (r["шк"] || r["штрихкод"] || r["barcode"] || "").toString().trim();
     const revenue = parseInt(r["выручка"] || r["revenue"] || 0, 10) || 0;
-    let row = state.salesByDay.find(s=>s.date===date && s.product===product);
-    if(row){ row.revenue = revenue; updated++; }
-    else{ state.salesByDay.push({id: nextId("salesByDay"), date, product, revenue}); added++; }
+    let row = findSalesRow(state.salesByDay, date, product, barcode);
+    if(row){ row.revenue = revenue; row.product = product; if(barcode) row.barcode = barcode; updated++; }
+    else{ state.salesByDay.push({id: nextId("salesByDay"), date, product, barcode, revenue}); added++; }
   });
   persist();
   res.json({added, updated});
