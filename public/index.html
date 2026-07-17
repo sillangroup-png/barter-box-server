@@ -399,14 +399,33 @@ function erPercent(m){
   return ((m.likes||0)+(m.comments||0)) / m.views * 100;
 }
 function fmtPercent(v){ return v==null ? "—" : v.toFixed(1)+"%"; }
+// Охват: если есть реальный замер просмотров — берём его. Если нет (блогер не поделился
+// статистикой в сторис), но заказ уже "доставлено" и публикация уже есть (т.е. блогер
+// точно выложил) — считаем оценку как 10% от подписчиков (наша активная аудитория).
+// До этого момента (не доставлено или ещё не опубликовано) оценка не считается вообще.
+const ACTIVE_AUDIENCE_RATE = 0.1;
+function reachInfo(o, pub, m){
+  if(m && m.views) return {value:m.views, estimated:false};
+  if(o && pub && o.status==="delivered" && pub.publishedAt && o.followers){
+    return {value: Math.round(o.followers * ACTIVE_AUDIENCE_RATE), estimated:true};
+  }
+  return {value:0, estimated:false};
+}
+function reachBadge(r){
+  return r.estimated ? ` <span class="badge badge-plan" title="Оценка: 10% от подписчиков блогера — реальных просмотров нет">оценка</span>` : "";
+}
 function marketingSummary(){
   const {orders, publications} = DataManager.state;
   const withM = publications.map(p=>({p, m: latestMeasurement(p)})).filter(x=>x.m);
-  const totalReach   = withM.reduce((s,x)=>s+(x.m.views||0),0);
   const totalSales   = withM.reduce((s,x)=>s+(x.m.salesCount||0),0);
   const totalRevenue = withM.reduce((s,x)=>s+(x.m.salesRevenue||0),0);
   const ers = withM.map(x=>erPercent(x.m)).filter(v=>v!=null);
   const avgEr = ers.length ? ers.reduce((a,b)=>a+b,0)/ers.length : null;
+  const totalReach = publications.reduce((s,p)=>{
+    const o = DataManager.find("orders", p.orderId);
+    const m = latestMeasurement(p);
+    return s + reachInfo(o, p, m).value;
+  }, 0);
   const gap = orders.filter(o=>o.status==="delivered" && !pubOf(o.id));
   // "На доставке" — запланированные рассылки, которые ещё не доставлены и не отменены
   // (созданы/назначены/приняты/в маршруте, включая проблемные статусы — они всё ещё в процессе).
@@ -836,8 +855,12 @@ function tplDashboard(){
 function tplMarketerDashboard(){
   const {publications} = DataManager.state;
   const ms = marketingSummary();
-  const ranked = publications.map(p=>({p, o: DataManager.find("orders", p.orderId), m: latestMeasurement(p)}))
-    .filter(x=>x.o && x.m).sort((a,b)=>(b.m.views||0)-(a.m.views||0)).slice(0,3);
+  const ranked = publications.map(p=>{
+    const o = DataManager.find("orders", p.orderId);
+    const m = latestMeasurement(p);
+    const r = o ? reachInfo(o, p, m) : {value:0, estimated:false};
+    return {p, o, m, r};
+  }).filter(x=>x.o && (x.m || x.r.value>0)).sort((a,b)=>b.r.value-a.r.value).slice(0,3);
   return `
     <div class="panel-title">Бартерные рассылки</div>
     <div class="grid-kpi">
@@ -859,8 +882,8 @@ function tplMarketerDashboard(){
         <tbody>
           ${ranked.map((x,i)=>`<tr>
             <td>${i+1}</td><td>${escapeHtml(x.o.blogger)}</td><td>${escapeHtml(x.p.platform)}</td>
-            <td>${fmtNum(x.m.views)}</td><td>${fmtPercent(erPercent(x.m))}</td>
-            <td>${x.m.salesCount||0} шт · ${fmtNum(x.m.salesRevenue)} ₸</td>
+            <td>${x.r.value?fmtNum(x.r.value)+reachBadge(x.r):"—"}</td><td>${x.m?fmtPercent(erPercent(x.m)):"—"}</td>
+            <td>${x.m?(x.m.salesCount||0)+" шт · "+fmtNum(x.m.salesRevenue)+" ₸":"—"}</td>
           </tr>`).join("") || `<tr><td class="empty" colspan="6">Пока нет данных — добавьте публикации во вкладке «Публикации и охваты»</td></tr>`}
         </tbody>
       </table></div>
@@ -1113,21 +1136,23 @@ function tplPublications(){
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
-          <th>Блогер</th><th>Город</th><th>Статус доставки</th><th>Платформа</th><th>Ссылка</th>
+          <th>Блогер</th><th>Город</th><th>Подписчики</th><th>Статус доставки</th><th>Платформа</th><th>Ссылка</th>
           <th>Дата публ.</th><th>Охват</th><th>ER</th><th>Продажи</th><th>Выручка</th><th>Категория</th><th>Промокод</th><th></th>
         </tr></thead>
         <tbody>
           ${rows.map(o=>{
             const pub = pubOf(o.id);
             const m = pub ? latestMeasurement(pub) : null;
+            const r = reachInfo(o, pub, m);
             return `<tr>
               <td>${escapeHtml(o.blogger)}</td>
               <td>${escapeHtml(o.city)}</td>
+              <td>${fmtNum(o.followers)}</td>
               <td>${statusBadge(o.status)}</td>
               <td>${pub?escapeHtml(pub.platform):"—"}</td>
               <td>${pub&&pub.link?`<a href="${escapeHtml(pub.link)}" target="_blank" rel="noopener">ссылка</a>`:"—"}</td>
               <td>${pub?escapeHtml(pub.publishedAt):"—"}</td>
-              <td>${m?fmtNum(m.views):"—"}</td>
+              <td>${r.value?fmtNum(r.value)+reachBadge(r):"—"}</td>
               <td>${m?fmtPercent(erPercent(m)):"—"}</td>
               <td>${m?(m.salesCount||0):"—"}</td>
               <td>${m?fmtNum(m.salesRevenue):"—"}</td>
@@ -1140,7 +1165,7 @@ function tplPublications(){
                   : `<button class="btn btn-primary btn-sm add-pub-btn" data-order="${o.id}">+ Публикация</button>`}
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="13">Ничего не найдено</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="14">Ничего не найдено</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -1154,12 +1179,13 @@ function tplTopBloggers(){
   const ranked = publications.map(p=>{
     const o = DataManager.find("orders", p.orderId);
     const m = latestMeasurement(p);
-    return {p,o,m};
-  }).filter(x=>x.o && x.m);
+    const r = o ? reachInfo(o, p, m) : {value:0, estimated:false};
+    return {p,o,m,r};
+  }).filter(x=>x.o && (x.m || x.r.value>0));
   ranked.sort((a,b)=>{
-    if(sortBy==="sales") return (b.m.salesRevenue||0)-(a.m.salesRevenue||0);
+    if(sortBy==="sales") return ((b.m&&b.m.salesRevenue)||0)-((a.m&&a.m.salesRevenue)||0);
     if(sortBy==="er") return (erPercent(b.m)||0)-(erPercent(a.m)||0);
-    return (b.m.views||0)-(a.m.views||0);
+    return b.r.value-a.r.value;
   });
   const medals = ["🥇","🥈","🥉"];
   return `
@@ -1180,10 +1206,10 @@ function tplTopBloggers(){
             <td>${escapeHtml(campaignName(x.o.campaignId))}</td>
             <td>${escapeHtml(x.p.platform)}</td>
             <td>${escapeHtml(x.p.tier)}</td>
-            <td>${fmtNum(x.m.views)}</td>
-            <td>${fmtPercent(erPercent(x.m))}</td>
-            <td>${x.m.salesCount||0}</td>
-            <td>${fmtNum(x.m.salesRevenue)} ₸</td>
+            <td>${x.r.value?fmtNum(x.r.value)+reachBadge(x.r):"—"}</td>
+            <td>${x.m?fmtPercent(erPercent(x.m)):"—"}</td>
+            <td>${x.m?(x.m.salesCount||0):"—"}</td>
+            <td>${x.m?fmtNum(x.m.salesRevenue)+" ₸":"—"}</td>
           </tr>`).join("") || `<tr><td class="empty" colspan="9">Пока нет опубликованных постов с замерами</td></tr>`}
         </tbody>
       </table></div>
@@ -1479,6 +1505,7 @@ function tplReport(){
           ${rows.map(o=>{
             const pub = pubOf(o.id);
             const m = pub ? latestMeasurement(pub) : null;
+            const r = reachInfo(o, pub, m);
             return `<tr>
               <td>#${o.id}</td>
               <td>${escapeHtml(o.blogger)}</td>
@@ -1489,7 +1516,7 @@ function tplReport(){
               <td>${escapeHtml(o.deliveredAt||"—")}</td>
               <td>${pub?escapeHtml(pub.platform):"—"}</td>
               <td>${pub?escapeHtml(pub.publishedAt):"—"}</td>
-              <td>${m?fmtNum(m.views):"—"}</td>
+              <td>${r.value?fmtNum(r.value)+reachBadge(r):"—"}</td>
               <td>${m?fmtPercent(erPercent(m)):"—"}</td>
               <td>${m?(m.salesCount||0):"—"}</td>
               <td>${m?fmtNum(m.salesRevenue):"—"}</td>
@@ -1557,6 +1584,7 @@ function modalNewDelivery(){
       <div class="field"><label>Проект</label><select id="m-camp">${campaigns.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}</select></div>
       <div class="field"><label>Блогер</label><input id="m-blogger" placeholder="@username"></div>
       <div class="field"><label>Телефон</label><input id="m-phone" placeholder="+7 701 ..."></div>
+      <div class="field"><label>Подписчики блогера</label><input id="m-followers" type="number" placeholder="Например 15000"></div>
       <div class="field"><label>Город</label><input id="m-city" placeholder="Алматы"></div>
       <div class="field"><label>Адрес</label><input id="m-address" placeholder="ул. ..."></div>
       <div class="field"><label>Бокс</label><select id="m-box">${BOX_TYPES.map(b=>`<option>${b}</option>`).join("")}</select></div>
@@ -1579,6 +1607,7 @@ function modalNewDelivery(){
         campaignId: parseInt(document.getElementById("m-camp").value,10),
         blogger, phone, city: document.getElementById("m-city").value.trim() || "—",
         address, box: document.getElementById("m-box").value,
+        followers: parseInt(document.getElementById("m-followers").value,10)||0,
         driverCode: document.getElementById("m-driver").value || null,
       }));
       closeModal(); toast("Доставка добавлена"); await DataManager.refresh(); render();
@@ -1669,6 +1698,10 @@ function modalAddPublication(orderId){
       <div class="field"><label>Дата публикации</label><input id="m-date" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
       <div class="field"><label>Категория блогера</label><select id="m-tier">${BLOGGER_TIERS.map(t=>`<option>${t}</option>`).join("")}</select></div>
       <div class="field"><label>Промокод</label><input id="m-promo" placeholder="Например NAME15"></div>
+      <div class="field"><label>Подписчики блогера</label><input id="m-followers" type="number" value="${o.followers||0}"></div>
+    </div>
+    <div class="login-hint" style="margin-top:6px">
+      Если блогер не поделится просмотрами сторис, охват после публикации оценим как 10% от подписчиков.
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="m-cancel">Отмена</button>
@@ -1680,13 +1713,17 @@ function modalAddPublication(orderId){
     const btn = document.getElementById("m-save");
     const link = document.getElementById("m-link").value.trim();
     if(!link){ toast("Укажите ссылку на публикацию", true); return; }
+    const followers = parseInt(document.getElementById("m-followers").value,10)||0;
     try{
-      await withBusy(btn, ()=> Api.createPublication({
-        orderId, platform: document.getElementById("m-platform").value,
-        link, publishedAt: document.getElementById("m-date").value,
-        tier: document.getElementById("m-tier").value,
-        promoCode: document.getElementById("m-promo").value.trim(),
-      }));
+      await withBusy(btn, async ()=>{
+        await Api.createPublication({
+          orderId, platform: document.getElementById("m-platform").value,
+          link, publishedAt: document.getElementById("m-date").value,
+          tier: document.getElementById("m-tier").value,
+          promoCode: document.getElementById("m-promo").value.trim(),
+        });
+        if(followers !== (o.followers||0)) await Api.updateOrder(orderId, {followers});
+      });
       closeModal(); toast("Публикация добавлена"); await DataManager.refresh();
       modalAddMeasurement(orderId, true);
     }catch(e){ toast(e.message, true); }
@@ -2528,13 +2565,24 @@ async function runSelfTests(){
       DataManager.state.salesByDay = savedSales;
     }
   });
-  TestSuite.test("marketingSummary агрегирует суммарный охват по всем публикациям", ()=>{
+  TestSuite.test("marketingSummary агрегирует суммарный охват по всем публикациям (факт + оценка 10%)", ()=>{
     const ms = marketingSummary();
     const manualTotal = DataManager.state.publications.reduce((s,p)=>{
+      const o = DataManager.find("orders", p.orderId);
       const m = latestMeasurement(p);
-      return s + (m ? (m.views||0) : 0);
+      return s + reachInfo(o, p, m).value;
     }, 0);
     if(ms.totalReach !== manualTotal) throw new Error("marketingSummary reach mismatch");
+  });
+  TestSuite.test("reachInfo: оценка 10% только когда доставлено и опубликовано", ()=>{
+    const realView = reachInfo({status:"delivered", followers:20000}, {publishedAt:"2026-01-01"}, {views:5000});
+    if(realView.value!==5000 || realView.estimated!==false) throw new Error("реальный охват не должен подменяться оценкой");
+    const est = reachInfo({status:"delivered", followers:20000}, {publishedAt:"2026-01-01"}, null);
+    if(est.value!==2000 || est.estimated!==true) throw new Error("оценка 10% рассчитана неверно: "+JSON.stringify(est));
+    const notDelivered = reachInfo({status:"in_route", followers:20000}, {publishedAt:"2026-01-01"}, null);
+    if(notDelivered.value!==0) throw new Error("оценка не должна считаться до статуса «доставлено»");
+    const notPublished = reachInfo({status:"delivered", followers:20000}, null, null);
+    if(notPublished.value!==0) throw new Error("оценка не должна считаться без публикации");
   });
 
   // единственная сетевая проверка — health-check, только чтение, ничего не создаёт в базе
