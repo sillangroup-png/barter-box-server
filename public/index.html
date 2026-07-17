@@ -223,7 +223,14 @@ const DEAL_STATUSES = ["Запланирована","Опубликована","
 /* =========================================================================
    2. API-КЛИЕНТ — вся запись/чтение идёт на общий сервер, а не в localStorage
    ========================================================================= */
+// Сервер теперь проверяет сессию на каждом чувствительном маршруте (см. server.js),
+// а не только фронтенд по localStorage — поэтому здесь на каждый запрос
+// подставляется Bearer-токен, полученный при входе (UI.authToken).
 async function apiFetch(url, options){
+  options = options || {};
+  const headers = Object.assign({}, options.headers || {});
+  if(typeof UI !== "undefined" && UI.authToken) headers["Authorization"] = "Bearer " + UI.authToken;
+  options = Object.assign({}, options, {headers});
   let res;
   try{
     res = await fetch(url, options);
@@ -232,6 +239,12 @@ async function apiFetch(url, options){
   }
   let data = null;
   try{ data = await res.json(); }catch(e){ data = null; }
+  if(res.status === 401 && typeof UI !== "undefined" && UI.role){
+    // Токен стал недействителен (например, сервер перезапускался и потерял сессии
+    // в памяти) — а мы до этого считали себя залогиненными. Разлогиниваем сразу,
+    // не оставляя человека сидеть с нерабочим токеном.
+    forceLogout("Сессия истекла — войдите заново");
+  }
   if(!res.ok){
     throw new Error((data && data.error) || `Ошибка запроса (${res.status})`);
   }
@@ -276,6 +289,8 @@ const Api = {
   importPublications: (rows)=> apiFetch("/api/publications/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
 
   login: (role, login, password)=> apiFetch("/api/auth/login", {method:"POST", headers:jsonHeaders, body:JSON.stringify({role, login, password})}),
+  driverLogin: (phone)=> apiFetch("/api/auth/driver-login", {method:"POST", headers:jsonHeaders, body:JSON.stringify({phone})}),
+  logout: ()=> apiFetch("/api/auth/logout", {method:"POST"}),
 
   createDeal: (d)=> apiFetch("/api/influencer-deals", {method:"POST", headers:jsonHeaders, body:JSON.stringify(d)}),
   updateDeal: (id, changes)=> apiFetch("/api/influencer-deals/"+id, {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
@@ -557,7 +572,7 @@ async function withBusy(button, fn){
    ========================================================================= */
 const SESSION_KEY = "barterBoxApp_session"; // роль/код водителя — только для ЭТОГО браузера
 const UI = {
-  role: null, driverCode: null, tab: "dashboard",
+  role: null, driverCode: null, authToken: null, tab: "dashboard",
   filters: {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""},
   topSort: "views",
   inflFilter: {search:"", sort:"default", month:""},
@@ -569,13 +584,30 @@ const UI = {
 function loadSession(){
   try{
     const raw = localStorage.getItem(SESSION_KEY);
-    if(raw){ const s = JSON.parse(raw); UI.role = s.role || null; UI.driverCode = s.driverCode || null; }
+    if(raw){
+      const s = JSON.parse(raw);
+      UI.role = s.role || null; UI.driverCode = s.driverCode || null; UI.authToken = s.authToken || null;
+    }
   }catch(e){}
 }
 function saveSession(){
-  try{ localStorage.setItem(SESSION_KEY, JSON.stringify({role:UI.role, driverCode:UI.driverCode})); }catch(e){}
+  try{ localStorage.setItem(SESSION_KEY, JSON.stringify({role:UI.role, driverCode:UI.driverCode, authToken:UI.authToken})); }catch(e){}
 }
-function logout(){ UI.role = null; UI.driverCode = null; UI.tab = "dashboard"; saveSession(); render(); }
+function logout(){
+  // сообщаем серверу, что токен больше не нужен (сессия реально живёт на сервере,
+  // а не только в localStorage) — но даже если запрос не пройдёт, разлогиниваемся
+  // локально в любом случае.
+  if(UI.authToken) Api.logout().catch(()=>{});
+  UI.role = null; UI.driverCode = null; UI.authToken = null; UI.tab = "dashboard"; saveSession(); render();
+}
+// Используется, когда сервер сам сообщил, что сессия недействительна (401 на
+// запросе, где мы считали себя залогиненными) — например, после рестарта сервера.
+function forceLogout(reason){
+  UI.role = null; UI.driverCode = null; UI.authToken = null; UI.tab = "dashboard";
+  saveSession();
+  render();
+  if(reason) toast(reason, true);
+}
 function modalOpen(){ return !!document.getElementById("modal-back"); }
 
 /* =========================================================================
@@ -621,8 +653,10 @@ function renderLogin(){
       if(!login || !password){ toast("Введите логин и пароль", true); return; }
       const btn = document.getElementById("staff-login-btn");
       try{
-        await withBusy(btn, ()=> Api.login(role, login, password));
-        UI.role = role; saveSession(); UI.tab = "dashboard"; render();
+        const data = await withBusy(btn, ()=> Api.login(role, login, password));
+        UI.role = role; UI.authToken = data.token; saveSession(); UI.tab = "dashboard";
+        await DataManager.load(); // токена не было до этого момента — предыдущая попытка загрузки данных 401'ится
+        render();
       }catch(e){ toast(e.message, true); }
     };
     document.getElementById("staff-login-btn").onclick = submit;
@@ -643,22 +677,19 @@ function renderLogin(){
       <button class="btn btn-primary" id="driver-login-btn" style="width:100%;justify-content:center">Войти</button>
       <div class="login-hint">Вход по номеру телефона, на который водителя добавили в систему. Демо: +7 701 200 10 10 (Иван), +7 701 200 10 20 (Сергей)</div>
     `;
-    document.getElementById("driver-login-btn").onclick = ()=>{
+    document.getElementById("driver-login-btn").onclick = async ()=>{
       const input = document.getElementById("driver-code-input").value.trim();
       if(!input){ toast("Введите номер телефона", true); return; }
-      // Ищем по телефону (сравниваем только цифры, последние 10 — чтобы не зависеть
-      // от +7/8/пробелов/скобок), а код водителя оставляем как запасной вариант входа
-      // на случай, если диспетчер по привычке вводит старый персональный код.
-      const inputDigits = input.replace(/\D/g,"").slice(-10);
-      const inputCode = input.toUpperCase();
-      const drv = DataManager.state.drivers.find(d=>{
-        const phoneDigits = String(d.phone||"").replace(/\D/g,"").slice(-10);
-        return (inputDigits && phoneDigits && inputDigits===phoneDigits) || d.code===inputCode;
-      });
-      if(!drv){ toast("Телефон не найден. Проверьте у диспетчера.", true); return; }
-      if(!drv.active){ toast("Этот водитель деактивирован.", true); return; }
-      UI.role = "driver"; UI.driverCode = drv.code; saveSession();
-      render();
+      const btn = document.getElementById("driver-login-btn");
+      try{
+        // Сверка телефона/кода теперь идёт на сервере (Api.driverLogin), а не в
+        // браузере по уже загруженному списку водителей — этот список в принципе
+        // недоступен до логина, раз /api/state теперь требует токен.
+        const data = await withBusy(btn, ()=> Api.driverLogin(input));
+        UI.role = "driver"; UI.driverCode = data.driverCode; UI.authToken = data.token; saveSession();
+        await DataManager.load();
+        render();
+      }catch(e){ toast(e.message, true); }
     };
     document.getElementById("driver-code-input").addEventListener("keydown", e=>{
       if(e.key==="Enter") document.getElementById("driver-login-btn").click();
@@ -2409,6 +2440,7 @@ function render(){
    ========================================================================= */
 function startPolling(){
   setInterval(async ()=>{
+    if(!UI.role) return; // не залогинены — /api/state всё равно ответит 401
     if(modalOpen()) return; // не мешаем открытой форме
     try{
       await DataManager.refresh();
