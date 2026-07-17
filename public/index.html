@@ -637,18 +637,27 @@ function renderLogin(){
     selectRoleBtn("pick-driver");
     body.innerHTML = `
       <div class="field" style="text-align:left">
-        <label>Персональный код водителя</label>
-        <input type="text" id="driver-code-input" placeholder="например IVAN-77" autocomplete="off">
+        <label>Номер телефона</label>
+        <input type="tel" id="driver-code-input" placeholder="+7 701 200 10 10" autocomplete="tel">
       </div>
       <button class="btn btn-primary" id="driver-login-btn" style="width:100%;justify-content:center">Войти</button>
-      <div class="login-hint">Демо-коды: IVAN-77, SERGEY-24, DANIYAR-31, MARAT-08</div>
+      <div class="login-hint">Вход по номеру телефона, на который водителя добавили в систему. Демо: +7 701 200 10 10 (Иван), +7 701 200 10 20 (Сергей)</div>
     `;
     document.getElementById("driver-login-btn").onclick = ()=>{
-      const code = document.getElementById("driver-code-input").value.trim().toUpperCase();
-      const drv = DataManager.state.drivers.find(d=>d.code===code);
-      if(!drv){ toast("Код не найден. Проверьте у диспетчера.", true); return; }
+      const input = document.getElementById("driver-code-input").value.trim();
+      if(!input){ toast("Введите номер телефона", true); return; }
+      // Ищем по телефону (сравниваем только цифры, последние 10 — чтобы не зависеть
+      // от +7/8/пробелов/скобок), а код водителя оставляем как запасной вариант входа
+      // на случай, если диспетчер по привычке вводит старый персональный код.
+      const inputDigits = input.replace(/\D/g,"").slice(-10);
+      const inputCode = input.toUpperCase();
+      const drv = DataManager.state.drivers.find(d=>{
+        const phoneDigits = String(d.phone||"").replace(/\D/g,"").slice(-10);
+        return (inputDigits && phoneDigits && inputDigits===phoneDigits) || d.code===inputCode;
+      });
+      if(!drv){ toast("Телефон не найден. Проверьте у диспетчера.", true); return; }
       if(!drv.active){ toast("Этот водитель деактивирован.", true); return; }
-      UI.role = "driver"; UI.driverCode = code; saveSession();
+      UI.role = "driver"; UI.driverCode = drv.code; saveSession();
       render();
     };
     document.getElementById("driver-code-input").addEventListener("keydown", e=>{
