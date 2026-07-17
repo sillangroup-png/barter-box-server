@@ -12,6 +12,7 @@
 
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 const express = require("express");
 const multer = require("multer");
 
@@ -43,7 +44,36 @@ const AUTH = {
   manager:  {login: process.env.MANAGER_LOGIN  || null, password: process.env.MANAGER_PASSWORD  || null},
   marketer: {login: process.env.MARKETER_LOGIN || null, password: process.env.MARKETER_PASSWORD || null},
 };
-const authTokens = new Map(); // token -> role
+const authTokens = new Map(); // token -> {role, driverCode?}
+
+// ---------- проверка сессии на сервере (никогда не доверяем localStorage/фронтенду) ----------
+// До этого места токен из /api/auth/login выдавался, но ни один маршрут его не
+// проверял — значит, /api/state и все POST/PUT/DELETE были фактически публичными:
+// кто угодно со ссылкой мог читать и менять всю базу напрямую через fetch, минуя
+// экран логина (это чисто фронтенд-проверка, которую легко обойти). Ниже —
+// обязательная серверная проверка Bearer-токена на каждом чувствительном маршруте.
+function getToken(req){
+  const header = req.headers.authorization || "";
+  const m = header.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1] : null;
+}
+function requireAuth(req, res, next){
+  const token = getToken(req);
+  const session = token ? authTokens.get(token) : null;
+  if(!session) return res.status(401).json({error:"Требуется авторизация"});
+  req.session = session;
+  next();
+}
+// Сверка телефона водителя: сравниваем только цифры (последние 10 — не зависим
+// от +7/8/пробелов/скобок); код водителя оставлен как запасной вариант входа.
+function findDriverByPhoneOrCode(input){
+  const inputDigits = String(input || "").replace(/\D/g,"").slice(-10);
+  const inputCode = String(input || "").trim().toUpperCase();
+  return state.drivers.find(d=>{
+    const phoneDigits = String(d.phone||"").replace(/\D/g,"").slice(-10);
+    return (inputDigits && phoneDigits && inputDigits===phoneDigits) || d.code===inputCode;
+  });
+}
 
 /* =========================================================================
    1. ХРАНИЛИЩЕ: всё состояние — один объект в памяти, зеркалится в JSON-файл
@@ -214,7 +244,11 @@ const upload = multer({
 });
 
 // ---------- state & health ----------
-app.get("/api/state", (req,res)=> res.json(state));
+// /api/state отдаёт ВСЮ базу (заказы, телефоны, адреса, выручку, ROMI) — без
+// requireAuth это было бы публично доступно кому угодно по прямой ссылке.
+app.get("/api/state", requireAuth, (req,res)=> res.json(state));
+// health-check нарочно без авторизации — по нему Render проверяет, что сервис жив,
+// и данных внутри него нет (только счётчик заказов и время).
 app.get("/api/health", (req,res)=> res.json({ok:true, orders: state.orders.length, time:new Date().toISOString()}));
 
 // ---------- авторизация (менеджер/логист, маркетолог) ----------
@@ -228,13 +262,34 @@ app.post("/api/auth/login", (req,res)=>{
   if(login !== cfg.login || password !== cfg.password){
     return res.status(401).json({error:"Неверный логин или пароль"});
   }
-  const token = require("crypto").randomBytes(24).toString("hex");
-  authTokens.set(token, role);
+  const token = crypto.randomBytes(24).toString("hex");
+  authTokens.set(token, {role});
   res.json({ok:true, token});
 });
 
+// ---------- авторизация водителя (по номеру телефона, на который его добавили) ----------
+// Раньше вход водителя проверялся только в браузере (сравнение с уже загруженным
+// списком водителей) — сервер вообще не знал, кто на самом деле логинится. Теперь
+// сверка телефона/кода идёт на сервере, и только после этого выдаётся токен.
+app.post("/api/auth/driver-login", (req,res)=>{
+  const input = String((req.body && req.body.phone) || "").trim();
+  if(!input) return res.status(400).json({error:"Введите номер телефона"});
+  const drv = findDriverByPhoneOrCode(input);
+  if(!drv) return res.status(404).json({error:"Телефон не найден. Проверьте у диспетчера."});
+  if(!drv.active) return res.status(403).json({error:"Этот водитель деактивирован."});
+  const token = crypto.randomBytes(24).toString("hex");
+  authTokens.set(token, {role:"driver", driverCode: drv.code});
+  res.json({ok:true, token, driverCode: drv.code, name: drv.name});
+});
+
+app.post("/api/auth/logout", (req,res)=>{
+  const token = getToken(req);
+  if(token) authTokens.delete(token);
+  res.json({ok:true});
+});
+
 // ---------- drivers ----------
-app.post("/api/drivers", (req,res)=>{
+app.post("/api/drivers", requireAuth, (req,res)=>{
   const {code, name, phone, city, type} = req.body || {};
   if(!code || !name) return res.status(400).json({error:"code и name обязательны"});
   const upCode = String(code).trim().toUpperCase();
@@ -244,21 +299,21 @@ app.post("/api/drivers", (req,res)=>{
   persist();
   res.json(driver);
 });
-app.patch("/api/drivers/:code", (req,res)=>{
+app.patch("/api/drivers/:code", requireAuth, (req,res)=>{
   const d = state.drivers.find(d=>d.code===req.params.code);
   if(!d) return res.status(404).json({error:"not found"});
   Object.assign(d, req.body || {});
   persist();
   res.json(d);
 });
-app.delete("/api/drivers/:code", (req,res)=>{
+app.delete("/api/drivers/:code", requireAuth, (req,res)=>{
   state.drivers = state.drivers.filter(d=>d.code!==req.params.code);
   persist();
   res.json({ok:true});
 });
 
 // ---------- campaigns ----------
-app.post("/api/campaigns", (req,res)=>{
+app.post("/api/campaigns", requireAuth, (req,res)=>{
   const b = req.body || {};
   const campaign = {
     id: nextId("campaigns"), name: b.name||"Без названия", city: b.city||"—", period: b.period||"—",
@@ -269,14 +324,14 @@ app.post("/api/campaigns", (req,res)=>{
   persist();
   res.json(campaign);
 });
-app.patch("/api/campaigns/:id", (req,res)=>{
+app.patch("/api/campaigns/:id", requireAuth, (req,res)=>{
   const c = state.campaigns.find(c=>c.id===+req.params.id);
   if(!c) return res.status(404).json({error:"not found"});
   Object.assign(c, req.body || {});
   persist();
   res.json(c);
 });
-app.delete("/api/campaigns/:id", (req,res)=>{
+app.delete("/api/campaigns/:id", requireAuth, (req,res)=>{
   const id = +req.params.id;
   state.campaigns = state.campaigns.filter(c=>c.id!==id);
   persist();
@@ -284,7 +339,7 @@ app.delete("/api/campaigns/:id", (req,res)=>{
 });
 
 // ---------- orders ----------
-app.post("/api/orders", (req,res)=>{
+app.post("/api/orders", requireAuth, (req,res)=>{
   const b = req.body || {};
   const order = {
     id: nextId("orders"), campaignId: b.campaignId||null, driverCode: b.driverCode||null,
@@ -298,21 +353,21 @@ app.post("/api/orders", (req,res)=>{
   persist();
   res.json(order);
 });
-app.patch("/api/orders/:id", (req,res)=>{
+app.patch("/api/orders/:id", requireAuth, (req,res)=>{
   const o = state.orders.find(o=>o.id===+req.params.id);
   if(!o) return res.status(404).json({error:"not found"});
   Object.assign(o, req.body || {});
   persist();
   res.json(o);
 });
-app.delete("/api/orders/:id", (req,res)=>{
+app.delete("/api/orders/:id", requireAuth, (req,res)=>{
   const id = +req.params.id;
   state.orders = state.orders.filter(o=>o.id!==id);
   persist();
   res.json({ok:true});
 });
 
-app.post("/api/orders/:id/deliver", upload.single("photo"), (req,res)=>{
+app.post("/api/orders/:id/deliver", requireAuth, upload.single("photo"), (req,res)=>{
   const o = state.orders.find(o=>o.id===+req.params.id);
   if(!o) return res.status(404).json({error:"not found"});
   if(!req.file) return res.status(400).json({error:"Фото обязательно для статуса «Доставлено»"});
@@ -325,7 +380,7 @@ app.post("/api/orders/:id/deliver", upload.single("photo"), (req,res)=>{
   res.json(o);
 });
 
-app.post("/api/orders/:id/problem", (req,res)=>{
+app.post("/api/orders/:id/problem", requireAuth, (req,res)=>{
   const o = state.orders.find(o=>o.id===+req.params.id);
   if(!o) return res.status(404).json({error:"not found"});
   const {statusCode, comment} = req.body || {};
@@ -337,7 +392,7 @@ app.post("/api/orders/:id/problem", (req,res)=>{
   res.json(o);
 });
 
-app.post("/api/orders/:id/sync-bitrix", (req,res)=>{
+app.post("/api/orders/:id/sync-bitrix", requireAuth, (req,res)=>{
   const o = state.orders.find(o=>o.id===+req.params.id);
   if(!o) return res.status(404).json({error:"not found"});
   o.bitrixSynced = true;
@@ -345,7 +400,7 @@ app.post("/api/orders/:id/sync-bitrix", (req,res)=>{
   res.json(o);
 });
 
-app.post("/api/orders/bulk-assign", (req,res)=>{
+app.post("/api/orders/bulk-assign", requireAuth, (req,res)=>{
   const {ids, driverCode} = req.body || {};
   if(!Array.isArray(ids) || !driverCode) return res.status(400).json({error:"ids[] и driverCode обязательны"});
   const now = new Date().toLocaleString("ru-RU");
@@ -357,7 +412,7 @@ app.post("/api/orders/bulk-assign", (req,res)=>{
   persist();
   res.json({ok:true, count});
 });
-app.post("/api/orders/bulk-delete", (req,res)=>{
+app.post("/api/orders/bulk-delete", requireAuth, (req,res)=>{
   const {ids} = req.body || {};
   if(!Array.isArray(ids)) return res.status(400).json({error:"ids[] обязателен"});
   const idSet = new Set(ids.map(Number));
@@ -367,7 +422,7 @@ app.post("/api/orders/bulk-delete", (req,res)=>{
   res.json({ok:true, count: before - state.orders.length});
 });
 
-app.post("/api/orders/import", (req,res)=>{
+app.post("/api/orders/import", requireAuth, (req,res)=>{
   const {rows} = req.body || {};
   if(!Array.isArray(rows)) return res.status(400).json({error:"rows[] обязателен"});
   const defaultCampaign = state.campaigns[0];
@@ -394,21 +449,21 @@ app.post("/api/orders/import", (req,res)=>{
 });
 
 // ---------- returns ----------
-app.post("/api/returns", (req,res)=>{
+app.post("/api/returns", requireAuth, (req,res)=>{
   const b = req.body || {};
   const r = {id: nextId("returns"), campaignId: b.campaignId||null, item: b.item||"", qty: b.qty||1, status: b.status||RETURN_STATUSES[0]};
   state.returns.push(r);
   persist();
   res.json(r);
 });
-app.patch("/api/returns/:id", (req,res)=>{
+app.patch("/api/returns/:id", requireAuth, (req,res)=>{
   const r = state.returns.find(r=>r.id===+req.params.id);
   if(!r) return res.status(404).json({error:"not found"});
   Object.assign(r, req.body || {});
   persist();
   res.json(r);
 });
-app.delete("/api/returns/:id", (req,res)=>{
+app.delete("/api/returns/:id", requireAuth, (req,res)=>{
   const id = +req.params.id;
   state.returns = state.returns.filter(r=>r.id!==id);
   persist();
@@ -416,7 +471,7 @@ app.delete("/api/returns/:id", (req,res)=>{
 });
 
 // ---------- publications & measurements ----------
-app.post("/api/publications", (req,res)=>{
+app.post("/api/publications", requireAuth, (req,res)=>{
   const b = req.body || {};
   if(state.publications.some(p=>p.orderId===b.orderId)) return res.status(409).json({error:"У этой доставки уже есть публикация"});
   const pub = {
@@ -428,13 +483,13 @@ app.post("/api/publications", (req,res)=>{
   persist();
   res.json(pub);
 });
-app.delete("/api/publications/:id", (req,res)=>{
+app.delete("/api/publications/:id", requireAuth, (req,res)=>{
   const id = +req.params.id;
   state.publications = state.publications.filter(p=>p.id!==id);
   persist();
   res.json({ok:true});
 });
-app.post("/api/publications/:id/measurements", (req,res)=>{
+app.post("/api/publications/:id/measurements", requireAuth, (req,res)=>{
   const pub = state.publications.find(p=>p.id===+req.params.id);
   if(!pub) return res.status(404).json({error:"publication not found"});
   const b = req.body || {};
@@ -448,7 +503,7 @@ app.post("/api/publications/:id/measurements", (req,res)=>{
   res.json(pub);
 });
 
-app.post("/api/publications/import", (req,res)=>{
+app.post("/api/publications/import", requireAuth, (req,res)=>{
   const {rows} = req.body || {};
   if(!Array.isArray(rows)) return res.status(400).json({error:"rows[] обязателен"});
   let created = 0, measured = 0, skipped = 0;
@@ -494,7 +549,7 @@ app.post("/api/publications/import", (req,res)=>{
 });
 
 // ---------- инфлюенс-интеграции (крупные) ----------
-app.post("/api/influencer-deals", (req,res)=>{
+app.post("/api/influencer-deals", requireAuth, (req,res)=>{
   const b = req.body || {};
   if(!b.blogerLogin) return res.status(400).json({error:"blogerLogin обязателен"});
   const deal = {
@@ -511,20 +566,20 @@ app.post("/api/influencer-deals", (req,res)=>{
   persist();
   res.json(deal);
 });
-app.patch("/api/influencer-deals/:id", (req,res)=>{
+app.patch("/api/influencer-deals/:id", requireAuth, (req,res)=>{
   const d = state.influencerDeals.find(d=>d.id===+req.params.id);
   if(!d) return res.status(404).json({error:"not found"});
   Object.assign(d, req.body || {});
   persist();
   res.json(d);
 });
-app.delete("/api/influencer-deals/:id", (req,res)=>{
+app.delete("/api/influencer-deals/:id", requireAuth, (req,res)=>{
   const id = +req.params.id;
   state.influencerDeals = state.influencerDeals.filter(d=>d.id!==id);
   persist();
   res.json({ok:true});
 });
-app.post("/api/influencer-deals/import", (req,res)=>{
+app.post("/api/influencer-deals/import", requireAuth, (req,res)=>{
   const {rows} = req.body || {};
   if(!Array.isArray(rows)) return res.status(400).json({error:"rows[] обязателен"});
   let added = 0;
@@ -566,7 +621,7 @@ function findSalesRow(list, date, product, barcode){
   }
   return list.find(s => s.date===date && s.product===product && !((s.barcode||"").trim()));
 }
-app.post("/api/sales", (req,res)=>{
+app.post("/api/sales", requireAuth, (req,res)=>{
   const b = req.body || {};
   if(!b.date || !b.product) return res.status(400).json({error:"date и product обязательны"});
   const barcode = (b.barcode || "").trim();
@@ -579,13 +634,13 @@ app.post("/api/sales", (req,res)=>{
   persist();
   res.json(row);
 });
-app.delete("/api/sales/:id", (req,res)=>{
+app.delete("/api/sales/:id", requireAuth, (req,res)=>{
   const id = +req.params.id;
   state.salesByDay = state.salesByDay.filter(s=>s.id!==id);
   persist();
   res.json({ok:true});
 });
-app.post("/api/sales/import", (req,res)=>{
+app.post("/api/sales/import", requireAuth, (req,res)=>{
   const {rows} = req.body || {};
   if(!Array.isArray(rows)) return res.status(400).json({error:"rows[] обязателен"});
   let added = 0, updated = 0;
