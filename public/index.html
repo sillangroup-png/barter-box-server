@@ -976,11 +976,16 @@ function tplDeliveries(){
       <div class="panel-title">
         Отправка блогерам
         <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" id="template-orders-csv-btn">Скачать шаблон CSV</button>
           <button class="btn btn-ghost btn-sm" id="import-csv-btn">Импорт CSV</button>
           <input type="file" id="import-csv-input" accept=".csv" class="hide">
           <button class="btn btn-ghost btn-sm" id="export-csv-btn">Экспорт отчёта</button>
           <button class="btn btn-primary btn-sm" id="new-delivery-btn">+ Доставка вручную</button>
         </div>
+      </div>
+      <div class="login-hint" style="margin-bottom:12px">
+        В шаблоне есть колонка «подписчики» — заполните её при загрузке базы блогеров, тогда после доставки и публикации
+        охват можно будет оценить (10% от подписчиков), даже если блогер не поделится просмотрами сторис.
       </div>
       <div class="toolbar">
         <input type="search" class="fill" id="f-search" placeholder="Поиск: блогер, адрес, телефон" value="${escapeHtml(f.search)}">
@@ -2012,17 +2017,26 @@ function wireDeskTab(){
     });
 
     document.getElementById("export-csv-btn").onclick = ()=>{
-      const header = ["ID","Блогер","Город","Адрес","Телефон","Бокс","Водитель","Статус","Дата","Закрытие","Bitrix","Комментарий водителя"];
+      const header = ["ID","Блогер","Подписчики","Город","Адрес","Телефон","Бокс","Водитель","Статус","Дата","Закрытие","Bitrix","Комментарий водителя"];
       const lines = [header.map(csvEscape).join(",")];
       DataManager.state.orders.forEach(o=>{
         lines.push([
-          o.id, o.blogger, o.city, o.address, o.phone, o.box, driverName(o.driverCode),
+          o.id, o.blogger, o.followers||0, o.city, o.address, o.phone, o.box, driverName(o.driverCode),
           (STATUS_META[o.status]||{}).label || o.status, o.deliveredAt || o.assignedAt || "",
           o.closureType ? CLOSURE_TYPES[o.closureType] : "", o.bitrixSynced ? "да" : "нет", o.driverComment || ""
         ].map(csvEscape).join(","));
       });
       downloadFile("barter-box-deliveries.csv", "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
       toast("Отчёт выгружен");
+    };
+
+    document.getElementById("template-orders-csv-btn").onclick = ()=>{
+      const header = ["блогер","подписчики","телефон","город","адрес","бокс","водитель"];
+      const example1 = ["@aizhan_beauty","20000","+7 701 555 01 01","Алматы","ул. Абая 150, кв. 12","Уход премиум",""];
+      const example2 = ["@moldir_mua","45000","+7 701 555 02 02","Астана","ул. Достык 5","Бьюти-бокс",""];
+      const csv = [header, example1, example2].map(row=>row.map(csvEscape).join(",")).join("\n");
+      downloadFile("barter-box-deliveries-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
+      toast("Шаблон скачан — заполните и загрузите через «Импорт CSV»");
     };
 
     document.getElementById("import-csv-btn").onclick = ()=> document.getElementById("import-csv-input").click();
