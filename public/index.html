@@ -562,6 +562,7 @@ const UI = {
   topSort: "views",
   inflFilter: {search:"", sort:"default", month:""},
   inflCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
+  inflTopFilter: {from:"", to:""},
   selectedOrderIds: new Set(),
   openOrderId: null, driverAwaiting: null, driverReasonCode: null,
 };
@@ -1152,10 +1153,33 @@ function tplTopBloggers(){
 
 /* ---------- Инфлюенс интеграции крупные (план/факт, расход, ROMI) ---------- */
 /* ---------- Топ блогеров среди платных инфлюенс-интеграций (только influencerDeals) ---------- */
-function tplInfluencerTopBloggers(rows){
+function tplInfluencerTopBloggers(allRows){
+  const tf = UI.inflTopFilter;
+  const rows = (tf.from || tf.to)
+    ? allRows.filter(r => inDateRange(inflDealDate(r.deal), tf.from, tf.to))
+    : allRows;
   const agg = influencerBloggerAgg(rows);
-  if(!agg.length) return "";
   const medals = ["🥇","🥈","🥉"];
+  const periodPicker = `
+    <div class="toolbar" style="gap:8px">
+      <span style="align-self:center;color:var(--ink-mute);font-size:12px">Период</span>
+      <input type="date" id="infl-top-from" value="${tf.from}">
+      <span style="align-self:center;color:var(--ink-mute);font-size:12px">—</span>
+      <input type="date" id="infl-top-to" value="${tf.to}">
+      ${(tf.from || tf.to) ? `<button class="btn btn-ghost btn-sm" id="infl-top-clear">Сбросить</button>` : ""}
+    </div>`;
+  if(!agg.length){
+    return `
+      <div class="panel">
+        <div class="panel-title">
+          Топ блогеров (платный инфлюенс)
+          <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">только база «Инфлюенс интеграции крупные», бартерные рассылки не учитываются</span>
+        </div>
+        ${periodPicker}
+        <div class="login-hint">Нет интеграций за выбранный период</div>
+      </div>
+    `;
+  }
 
   const bySales = agg.filter(a=>a.contribution>0).slice().sort((a,b)=>b.contribution-a.contribution);
   const byConversion = agg.filter(a=>a.reach>0)
@@ -1181,7 +1205,8 @@ function tplInfluencerTopBloggers(rows){
         Топ блогеров (платный инфлюенс)
         <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">только база «Инфлюенс интеграции крупные», бартерные рассылки не учитываются</span>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">
+      ${periodPicker}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-top:12px">
         <div>
           <div style="font-weight:600;font-size:13px;margin-bottom:8px">По продажам (вклад)</div>
           <div class="table-wrap">${miniTable(bySales, "Вклад, ₸", a=>fmtNum(Math.round(a.contribution)), "Нет данных — не хватает базы для ROMI")}</div>
@@ -2062,6 +2087,13 @@ function wireDeskTab(){
         renderDeskTab();
       };
     });
+
+    const inflTopFrom = document.getElementById("infl-top-from");
+    if(inflTopFrom) inflTopFrom.onchange = e=>{ UI.inflTopFilter.from = e.target.value; renderDeskTab(); };
+    const inflTopTo = document.getElementById("infl-top-to");
+    if(inflTopTo) inflTopTo.onchange = e=>{ UI.inflTopFilter.to = e.target.value; renderDeskTab(); };
+    const inflTopClear = document.getElementById("infl-top-clear");
+    if(inflTopClear) inflTopClear.onclick = ()=>{ UI.inflTopFilter.from=""; UI.inflTopFilter.to=""; renderDeskTab(); };
 
     document.querySelectorAll(".edit-deal-btn").forEach(btn=>{
       btn.onclick = ()=>{
