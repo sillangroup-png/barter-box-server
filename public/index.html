@@ -520,6 +520,7 @@ const UI = {
   role: null, driverCode: null, tab: "dashboard",
   filters: {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""},
   topSort: "views",
+  inflFilter: {search:"", sort:"default"},
   selectedOrderIds: new Set(),
   openOrderId: null, driverAwaiting: null, driverReasonCode: null,
 };
@@ -1161,6 +1162,27 @@ function tplInfluencerDeals(){
   const s = influencerSummary();
   const {salesByDay} = DataManager.state;
   const salesSorted = salesByDay.slice().sort((a,b)=> a.date<b.date?1:-1).slice(0,30);
+
+  const fi = UI.inflFilter;
+  let rows = s.rows;
+  if(fi.search){
+    const q = fi.search.toLowerCase();
+    rows = rows.filter(r=> (r.deal.blogerLogin||"").toLowerCase().includes(q));
+  }
+  const sorters = {
+    sales_desc: (a,b)=> (b.netContribution||0)-(a.netContribution||0),
+    sales_asc: (a,b)=> (a.netContribution||0)-(b.netContribution||0),
+    reach_desc: (a,b)=> (b.deal.reach||0)-(a.deal.reach||0),
+    reach_asc: (a,b)=> (a.deal.reach||0)-(b.deal.reach||0),
+    clicks_desc: (a,b)=> (b.deal.clicks||0)-(a.deal.clicks||0),
+    clicks_asc: (a,b)=> (a.deal.clicks||0)-(b.deal.clicks||0),
+    cost_desc: (a,b)=> (b.deal.cost||0)-(a.deal.cost||0),
+    cost_asc: (a,b)=> (a.deal.cost||0)-(b.deal.cost||0),
+    romi_desc: (a,b)=> (b.romi==null?-Infinity:b.romi)-(a.romi==null?-Infinity:a.romi),
+    romi_asc: (a,b)=> (a.romi==null?Infinity:a.romi)-(b.romi==null?Infinity:b.romi),
+  };
+  if(sorters[fi.sort]) rows = rows.slice().sort(sorters[fi.sort]);
+
   return `
     <div class="panel">
       <div class="panel-title">
@@ -1178,13 +1200,29 @@ function tplInfluencerDeals(){
         в этот день одновременно. Если по товару ещё нет ни одного «чистого» дня — ROMI покажет «нет данных»:
         догрузите историю продаж за 2–4 недели до первой интеграции по этому товару.
       </div>
+      <div class="toolbar" style="margin-bottom:12px">
+        <input type="search" class="fill" id="infl-search" placeholder="Поиск по логину блогера" value="${escapeHtml(fi.search)}">
+        <select id="infl-sort">
+          <option value="default" ${fi.sort==='default'?'selected':''}>Без сортировки</option>
+          <option value="sales_desc" ${fi.sort==='sales_desc'?'selected':''}>Продажи: сначала больше</option>
+          <option value="sales_asc" ${fi.sort==='sales_asc'?'selected':''}>Продажи: сначала меньше</option>
+          <option value="reach_desc" ${fi.sort==='reach_desc'?'selected':''}>Охват: сначала больше</option>
+          <option value="reach_asc" ${fi.sort==='reach_asc'?'selected':''}>Охват: сначала меньше</option>
+          <option value="clicks_desc" ${fi.sort==='clicks_desc'?'selected':''}>Клики: сначала больше</option>
+          <option value="clicks_asc" ${fi.sort==='clicks_asc'?'selected':''}>Клики: сначала меньше</option>
+          <option value="cost_desc" ${fi.sort==='cost_desc'?'selected':''}>Расход: сначала больше</option>
+          <option value="cost_asc" ${fi.sort==='cost_asc'?'selected':''}>Расход: сначала меньше</option>
+          <option value="romi_desc" ${fi.sort==='romi_desc'?'selected':''}>ROMI: сначала больше</option>
+          <option value="romi_asc" ${fi.sort==='romi_asc'?'selected':''}>ROMI: сначала меньше</option>
+        </select>
+      </div>
       <div class="table-wrap"><table>
         <thead><tr>
           <th>Блогер</th><th>Платформа</th><th>Продукт</th><th>Дата план</th><th>Дата факт</th>
           <th>План охват/клики</th><th>Факт охват/клики</th><th>План/факт расход</th><th>Вклад в продажи</th><th>ROMI</th><th>Статус</th><th></th>
         </tr></thead>
         <tbody>
-          ${s.rows.map(r=>{
+          ${rows.map(r=>{
             const d = r.deal;
             return `<tr>
               <td><b>${escapeHtml(d.blogerLogin)}</b>${d.lastUpdatedFrom==="telegram"?' <span class="badge badge-progress" title="Обновлено через Telegram-бота">TG</span>':''}</td>
@@ -1203,7 +1241,7 @@ function tplInfluencerDeals(){
                 <button class="btn btn-danger btn-sm del-deal-btn" data-id="${d.id}">✕</button>
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="12">Интеграций пока нет</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="12">${s.rows.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -1911,6 +1949,10 @@ function wireDeskTab(){
   else if(UI.tab==="influencerDeals"){
     document.getElementById("new-deal-btn").onclick = ()=> modalDeal(null);
     document.getElementById("new-sale-btn").onclick = ()=> modalSale();
+
+    const inflSearch = document.getElementById("infl-search");
+    inflSearch.oninput = debounce(()=>{ UI.inflFilter.search = inflSearch.value; renderDeskTab(); }, 250);
+    document.getElementById("infl-sort").onchange = e=>{ UI.inflFilter.sort = e.target.value; renderDeskTab(); };
 
     document.querySelectorAll(".edit-deal-btn").forEach(btn=>{
       btn.onclick = ()=>{
