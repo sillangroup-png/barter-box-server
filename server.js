@@ -434,10 +434,12 @@ app.post("/api/orders/import", requireAuth, (req,res)=>{
     if(!blogger || !address) return;
     const driverCodeRaw = (r["водитель"] || r["driver_code"] || "").toUpperCase();
     const validDriver = driverCodes.has(driverCodeRaw) ? driverCodeRaw : null;
+    const followers = parseInt(r["подписчики"] || r["followers"], 10) || 0;
     state.orders.push({
       id: nextId("orders"), campaignId: defaultCampaign ? defaultCampaign.id : null,
       driverCode: validDriver, blogger, phone: r["телефон"] || r["phone"] || "",
       city: r["город"] || r["city"] || "—", address, box: r["бокс"] || r["box"] || "",
+      followers,
       comment: "", status: validDriver ? "assigned" : "created", closureType: null, photo: null,
       driverComment: "", assignedAt: validDriver ? new Date().toLocaleString("ru-RU") : null,
       deliveredAt: null, bitrixSynced: false,
