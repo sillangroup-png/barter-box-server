@@ -344,7 +344,7 @@ app.post("/api/orders", requireAuth, (req,res)=>{
   const order = {
     id: nextId("orders"), campaignId: b.campaignId||null, driverCode: b.driverCode||null,
     blogger: b.blogger||"", phone: b.phone||"", city: b.city||"—", address: b.address||"",
-    box: b.box||"", comment: b.comment||"",
+    box: b.box||"", comment: b.comment||"", followers: parseInt(b.followers,10)||0,
     status: b.driverCode ? "assigned" : "created", closureType: null, photo: null, driverComment: "",
     assignedAt: b.driverCode ? new Date().toLocaleString("ru-RU") : null,
     deliveredAt: null, bitrixSynced: false,
