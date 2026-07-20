@@ -218,6 +218,10 @@ const CAMPAIGN_STAGES = [
 ];
 const RETURN_STATUSES = ["В офисе","Ожидает решения","Оформлен возврат","Принят на складе","Закрыт"];
 const BOX_TYPES = ["Уход премиум","Бьюти-бокс","Гаджет-набор"];
+// Стоимость логистики за одну доставку — пока фиксированная для всех, проставляется
+// автоматически при создании заказа (вручную или через импорт CSV). Если по конкретной
+// доставке расходы отличаются — можно поправить прямо в таблице "Отправка блогерам".
+const LOGISTICS_COST_DEFAULT = 1500;
 const PLATFORMS = ["Instagram Reels","Instagram Stories","TikTok","YouTube Shorts","Отзыв / пост"];
 const BLOGGER_TIERS = ["Малый (эффект 1–7 дней)","Крупный (эффект 2–3 недели)"];
 const DEAL_STATUSES = ["Запланирована","Опубликована","Оплачена","Закрыта"];
@@ -394,6 +398,15 @@ function googleMapsRouteUrl(points){
 function campaignName(id){
   const c = DataManager.state.campaigns.find(c=>c.id===id);
   return c ? c.name : "—";
+}
+// Расход по проекту: себестоимость боксов (себес × кол-во загруженных контактов = кол-во
+// боксов) + логистика (сумма по всем доставкам проекта — у каждой свой editable "logisticsCost",
+// по умолчанию LOGISTICS_COST_DEFAULT, но мог быть изменён вручную по конкретной доставке).
+function campaignExpense(c){
+  const orders = DataManager.state.orders.filter(o=>o.campaignId===c.id);
+  const boxesCost = (c.costPerBox||0) * orders.length;
+  const logisticsCost = orders.reduce((s,o)=>s+(o.logisticsCost||0), 0);
+  return { count: orders.length, boxesCost, logisticsCost, total: boxesCost + logisticsCost };
 }
 function mapsLink(address, city){
   return "https://maps.google.com/?q=" + encodeURIComponent((city?city+", ":"")+address);
@@ -1040,10 +1053,10 @@ function tplCampaigns(){
     <div class="panel">
       <div class="panel-title">Бартер-проекты <button class="btn btn-primary btn-sm" id="new-campaign-btn">+ Новый проект</button></div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Название</th><th>Город</th><th>Период</th><th>Ответственный</th><th>Тип бокса</th><th>План, шт.</th><th>Этап</th><th>Доставок</th><th></th></tr></thead>
+        <thead><tr><th>Название</th><th>Город</th><th>Период</th><th>Ответственный</th><th>Тип бокса</th><th>План, шт.</th><th>Себес/бокс</th><th>Расход</th><th>Этап</th><th>Доставок</th><th></th></tr></thead>
         <tbody>
           ${campaigns.map(c=>{
-            const cnt = orders.filter(o=>o.campaignId===c.id).length;
+            const exp = campaignExpense(c);
             return `<tr>
               <td><button class="link-btn camp-name-link" data-id="${c.id}" title="Открыть сводный отчёт по этому проекту"><b>${escapeHtml(c.name)}</b></button></td>
               <td>${escapeHtml(c.city)}</td>
@@ -1051,11 +1064,13 @@ function tplCampaigns(){
               <td>${escapeHtml(c.responsible)}</td>
               <td>${escapeHtml(c.boxType)}</td>
               <td>${c.plannedCount}</td>
+              <td><input type="number" class="camp-costbox" data-id="${c.id}" value="${c.costPerBox||0}" style="width:90px" title="Себестоимость одного бокса, ₸"></td>
+              <td title="Боксы: ${fmtNum(exp.boxesCost)} ₸ (${fmtNum(c.costPerBox||0)} × ${exp.count} шт.) + Логистика: ${fmtNum(exp.logisticsCost)} ₸">${fmtNum(exp.total)} ₸</td>
               <td><select class="camp-stage" data-id="${c.id}">${CAMPAIGN_STAGES.map(s=>`<option ${s===c.stage?'selected':''}>${s}</option>`).join("")}</select></td>
-              <td>${cnt}</td>
+              <td>${exp.count}</td>
               <td><button class="btn btn-danger btn-sm del-campaign" data-id="${c.id}">Удалить</button></td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="9">Проектов пока нет</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="11">Проектов пока нет</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -1132,7 +1147,7 @@ function tplDeliveries(){
       <div class="table-wrap"><table>
         <thead><tr>
           <th class="rowcheck"><input type="checkbox" id="check-all"></th>
-          <th>№</th><th>№ марш.</th><th>Блогер</th><th>Город</th><th>Район</th><th>Адрес</th><th>Телефон</th><th>Бокс</th>
+          <th>№</th><th>№ марш.</th><th>Блогер</th><th>Город</th><th>Район</th><th>Адрес</th><th>Телефон</th><th>Бокс</th><th>Логистика</th>
           <th>Водитель</th><th>Статус</th><th>Дата</th><th>Фото</th><th>Закрытие</th><th>Bitrix</th><th></th>
         </tr></thead>
         <tbody>
@@ -1147,6 +1162,7 @@ function tplDeliveries(){
               <td class="wrap">${escapeHtml(o.address)}</td>
               <td>${escapeHtml(o.phone)}</td>
               <td>${escapeHtml(o.box)}</td>
+              <td><input type="number" class="order-logistics-input" data-id="${o.id}" value="${o.logisticsCost ?? LOGISTICS_COST_DEFAULT}" style="width:80px" title="Стоимость логистики этой доставки, ₸"></td>
               <td>
                 <select class="order-driver-select" data-id="${o.id}">
                   <option value="">—</option>
@@ -1292,7 +1308,7 @@ function tplPublications(){
                   : `<button class="btn btn-primary btn-sm add-pub-btn" data-order="${o.id}">Отметить выложено</button>`}
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="16">Ничего не найдено</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="17">Ничего не найдено</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -1728,6 +1744,11 @@ function modalNewCampaign(){
       <div class="field"><label>Ответственный</label><input id="m-resp" placeholder="Сауле"></div>
       <div class="field"><label>Тип бокса</label><select id="m-box">${BOX_TYPES.map(b=>`<option>${b}</option>`).join("")}</select></div>
       <div class="field"><label>План, шт.</label><input id="m-count" type="number" value="100"></div>
+      <div class="field"><label>Себестоимость 1 бокса, ₸</label><input id="m-costbox" type="number" value="0" placeholder="1000"></div>
+    </div>
+    <div class="login-hint" style="margin-top:6px">
+      Общий расход по проекту посчитается сам: себестоимость × количество загруженных контактов (боксов),
+      плюс логистика по каждой доставке (по умолчанию ${fmtNum(LOGISTICS_COST_DEFAULT)} ₸, можно поправить вручную).
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="m-cancel">Отмена</button>
@@ -1746,6 +1767,7 @@ function modalNewCampaign(){
         responsible: document.getElementById("m-resp").value.trim() || "—",
         boxType: document.getElementById("m-box").value,
         plannedCount: parseInt(document.getElementById("m-count").value,10) || 0,
+        costPerBox: parseInt(document.getElementById("m-costbox").value,10) || 0,
         stage: CAMPAIGN_STAGES[0], budget:0,
       }));
       closeModal(); toast("Проект создан"); await DataManager.refresh(); render();
@@ -2225,6 +2247,13 @@ function wireDeskTab(){
         catch(e){ toast(e.message, true); render(); }
       };
     });
+    document.querySelectorAll(".camp-costbox").forEach(inp=>{
+      inp.onchange = async ()=>{
+        const costPerBox = parseInt(inp.value,10) || 0;
+        try{ await Api.updateCampaign(parseInt(inp.dataset.id,10), {costPerBox}); await DataManager.refresh(); render(); }
+        catch(e){ toast(e.message, true); render(); }
+      };
+    });
     document.querySelectorAll(".del-campaign").forEach(btn=>{
       btn.onclick = async ()=>{
         const id = parseInt(btn.dataset.id,10);
@@ -2291,6 +2320,13 @@ function wireDeskTab(){
       }catch(e){ toast(e.message, true); }
     };
 
+    document.querySelectorAll(".order-logistics-input").forEach(inp=>{
+      inp.onchange = async ()=>{
+        const logisticsCost = parseInt(inp.value,10) || 0;
+        try{ await Api.updateOrder(parseInt(inp.dataset.id,10), {logisticsCost}); await DataManager.refresh(); }
+        catch(e){ toast(e.message, true); render(); }
+      };
+    });
     document.querySelectorAll(".order-driver-select").forEach(sel=>{
       sel.onchange = async ()=>{
         const id = parseInt(sel.dataset.id,10);
@@ -2940,6 +2976,27 @@ async function runSelfTests(){
       return s + reachInfo(o, p, m).value;
     }, 0);
     if(ms.totalReach !== manualTotal) throw new Error("marketingSummary reach mismatch");
+  });
+  TestSuite.test("campaignExpense считает себестоимость боксов + логистику по доставкам проекта", ()=>{
+    const savedCampaigns = DataManager.state.campaigns;
+    const savedOrders = DataManager.state.orders;
+    try{
+      const c = {id:9901, costPerBox:1000};
+      DataManager.state.campaigns = [c];
+      DataManager.state.orders = [
+        {id:9801, campaignId:9901, logisticsCost:1500},
+        {id:9802, campaignId:9901, logisticsCost:1500},
+        {id:9803, campaignId:9902, logisticsCost:1500}, // чужой проект — не должен учитываться
+      ];
+      const exp = campaignExpense(c);
+      if(exp.count!==2) throw new Error("не тот count: "+exp.count);
+      if(exp.boxesCost!==2000) throw new Error("боксы посчитаны неверно: "+exp.boxesCost);
+      if(exp.logisticsCost!==3000) throw new Error("логистика посчитана неверно: "+exp.logisticsCost);
+      if(exp.total!==5000) throw new Error("итог посчитан неверно: "+exp.total);
+    } finally {
+      DataManager.state.campaigns = savedCampaigns;
+      DataManager.state.orders = savedOrders;
+    }
   });
   TestSuite.test("reachInfo: оценка 15% только когда доставлено и опубликовано", ()=>{
     const realView = reachInfo({status:"delivered", followers:20000}, {publishedAt:"2026-01-01"}, {views:5000});
