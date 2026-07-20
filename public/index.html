@@ -425,6 +425,14 @@ function reachInfo(o, pub, m){
 function reachBadge(r){
   return r.estimated ? ` <span class="badge badge-plan" title="Оценка: 10% от подписчиков блогера — реальных просмотров нет">оценка</span>` : "";
 }
+// Ячейка охвата/ER/кликов/продаж/выручки в таблицах: если публикация уже есть — значение
+// кликабельно и открывает то же окно ввода замера (с уже заполненными текущими значениями),
+// чтобы не искать отдельную кнопку "+ Данные" в конце строки. Без публикации редактировать
+// нечего — там просто "—" без клика.
+function editableMeasureCell(pub, orderId, content){
+  if(!pub) return content;
+  return `<button class="link-btn rep-add-measure-btn" data-order="${orderId}" title="Изменить охват/ER/клики/продажи">${content}</button>`;
+}
 function marketingSummary(){
   const {orders, publications} = DataManager.state;
   const withM = publications.map(p=>({p, m: latestMeasurement(p)})).filter(x=>x.m);
@@ -883,8 +891,6 @@ function tplDashboard(){
         <div class="kpi warn"><div class="num">${ms.gap.length}</div><div class="lbl">Ждут публикации</div></div>
       </div>
     </div>
-
-    ${tplInfluencerDashboardBlock()}
 
     <div class="panel">
       <div class="panel-title">Бартер-проекты</div>
@@ -1618,11 +1624,11 @@ function tplReport(){
               <td>${escapeHtml(o.deliveredAt||"—")}</td>
               <td>${pub?escapeHtml(pub.platform):"—"}</td>
               <td>${pub?escapeHtml(pub.publishedAt):"—"}</td>
-              <td>${r.value?fmtNum(r.value)+reachBadge(r):"—"}</td>
-              <td>${m?fmtPercent(erPercent(m)):"—"}</td>
-              <td>${m&&m.clicks?fmtNum(m.clicks):"—"}</td>
-              <td>${m?(m.salesCount||0):"—"}</td>
-              <td>${m?fmtNum(m.salesRevenue):"—"}</td>
+              <td>${editableMeasureCell(pub, o.id, r.value?fmtNum(r.value)+reachBadge(r):"—")}</td>
+              <td>${editableMeasureCell(pub, o.id, m?fmtPercent(erPercent(m)):"—")}</td>
+              <td>${editableMeasureCell(pub, o.id, m&&m.clicks?fmtNum(m.clicks):"—")}</td>
+              <td>${editableMeasureCell(pub, o.id, m?(m.salesCount||0):"—")}</td>
+              <td>${editableMeasureCell(pub, o.id, m?fmtNum(m.salesRevenue):"—")}</td>
               <td>${o.status==='delivered' ? (o.bitrixSynced?'✓':'—') : "—"}</td>
               <td>
                 ${pub
