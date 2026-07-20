@@ -339,6 +339,15 @@ function statusBadge(status){
   const meta = STATUS_META[status] || {label:status, group:"closed"};
   return `<span class="badge badge-${meta.group}"><span class="dot"></span>${escapeHtml(meta.label)}</span>`;
 }
+// Статус публикации (выкладка блогером) — отдельно от статуса доставки.
+// Пока не доставлено — вопрос не актуален. Доставлено, но маркетолог ещё не подтвердил
+// выкладку (часто сторис, которую нужно руками уточнить у блогера) — "Ждёт публикации".
+// Маркетолог подтвердил (создал публикацию, даже без ссылки) — "Выложено".
+function pubStatusBadge(o, pub){
+  if(pub) return `<span class="badge badge-success">✅ Выложено</span>`;
+  if(o.status==="delivered") return `<span class="badge badge-problem">⏳ Ждёт публикации</span>`;
+  return "—";
+}
 function driverName(code){
   if(!code) return "—";
   const d = DataManager.state.drivers.find(d=>d.code===code);
@@ -1141,7 +1150,7 @@ function tplPublications(){
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
-          <th>Блогер</th><th>Город</th><th>Подписчики</th><th>Статус доставки</th><th>Платформа</th><th>Ссылка</th>
+          <th>Блогер</th><th>Город</th><th>Подписчики</th><th>Статус доставки</th><th>Статус публикации</th><th>Платформа</th><th>Ссылка</th>
           <th>Дата публ.</th><th>Охват</th><th>ER</th><th>Клики</th><th>Продажи</th><th>Выручка</th><th>Категория</th><th>Промокод</th><th></th>
         </tr></thead>
         <tbody>
@@ -1154,6 +1163,7 @@ function tplPublications(){
               <td>${escapeHtml(o.city)}</td>
               <td>${fmtNum(o.followers)}</td>
               <td>${statusBadge(o.status)}</td>
+              <td>${pubStatusBadge(o, pub)}</td>
               <td>${pub?escapeHtml(pub.platform):"—"}</td>
               <td>${pub&&pub.link?`<a href="${escapeHtml(pub.link)}" target="_blank" rel="noopener">ссылка</a>`:"—"}</td>
               <td>${pub?escapeHtml(pub.publishedAt):"—"}</td>
@@ -1168,10 +1178,10 @@ function tplPublications(){
                 ${pub
                   ? `<button class="btn btn-ghost btn-sm add-measure-btn" data-order="${o.id}">+ Замер</button>
                      <button class="btn btn-ghost btn-sm history-btn" data-order="${o.id}">История</button>`
-                  : `<button class="btn btn-primary btn-sm add-pub-btn" data-order="${o.id}">+ Публикация</button>`}
+                  : `<button class="btn btn-primary btn-sm add-pub-btn" data-order="${o.id}">Отметить выложено</button>`}
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="15">Ничего не найдено</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="16">Ничего не найдено</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -1504,7 +1514,7 @@ function tplReport(){
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
-          <th>№</th><th>Блогер</th><th>Проект</th><th>Город</th><th>Водитель</th><th>Статус доставки</th><th>Дата доставки</th>
+          <th>№</th><th>Блогер</th><th>Проект</th><th>Город</th><th>Водитель</th><th>Статус доставки</th><th>Статус публикации</th><th>Дата доставки</th>
           <th>Платформа</th><th>Дата публ.</th><th>Охват</th><th>ER</th><th>Клики</th><th>Продажи</th><th>Выручка</th><th>Bitrix</th><th></th>
         </tr></thead>
         <tbody>
@@ -1519,6 +1529,7 @@ function tplReport(){
               <td>${escapeHtml(o.city)}</td>
               <td>${escapeHtml(driverName(o.driverCode))}</td>
               <td>${statusBadge(o.status)}</td>
+              <td>${pubStatusBadge(o, pub)}</td>
               <td>${escapeHtml(o.deliveredAt||"—")}</td>
               <td>${pub?escapeHtml(pub.platform):"—"}</td>
               <td>${pub?escapeHtml(pub.publishedAt):"—"}</td>
@@ -1532,10 +1543,10 @@ function tplReport(){
                 ${pub
                   ? `<button class="btn btn-ghost btn-sm rep-add-measure-btn" data-order="${o.id}">+ Данные</button>
                      <button class="btn btn-ghost btn-sm rep-history-btn" data-order="${o.id}">История</button>`
-                  : `<button class="btn btn-primary btn-sm rep-add-pub-btn" data-order="${o.id}">+ Публикация</button>`}
+                  : `<button class="btn btn-primary btn-sm rep-add-pub-btn" data-order="${o.id}">Отметить выложено</button>`}
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="16">Нет данных</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="17">Нет данных</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -1704,28 +1715,28 @@ function modalAddPublication(orderId){
   const o = DataManager.find("orders", orderId);
   if(!o) return;
   openModal(`
-    <h3>Публикация · ${escapeHtml(o.blogger)}</h3>
+    <h3>Отметить как выложено · ${escapeHtml(o.blogger)}</h3>
     <div class="form-row">
       <div class="field"><label>Платформа</label><select id="m-platform">${PLATFORMS.map(p=>`<option>${p}</option>`).join("")}</select></div>
-      <div class="field"><label>Ссылка на публикацию</label><input id="m-link" placeholder="https://instagram.com/..."></div>
+      <div class="field"><label>Ссылка (необязательно для сторис)</label><input id="m-link" placeholder="https://instagram.com/..."></div>
       <div class="field"><label>Дата публикации</label><input id="m-date" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
       <div class="field"><label>Категория блогера</label><select id="m-tier">${BLOGGER_TIERS.map(t=>`<option>${t}</option>`).join("")}</select></div>
       <div class="field"><label>Промокод</label><input id="m-promo" placeholder="Например NAME15"></div>
       <div class="field"><label>Подписчики блогера</label><input id="m-followers" type="number" value="${o.followers||0}"></div>
     </div>
     <div class="login-hint" style="margin-top:6px">
-      Если блогер не поделится просмотрами сторис, охват после публикации оценим как 10% от подписчиков.
+      Сторис часто не имеют ссылки (исчезают за 24 часа) — можно оставить поле пустым и просто отметить, что блогер выложил.
+      Если блогер не поделится просмотрами, охват оценим как 10% от подписчиков.
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="m-cancel">Отмена</button>
-      <button class="btn btn-primary" id="m-save">Сохранить и добавить замер</button>
+      <button class="btn btn-primary" id="m-save">Отметить выложено</button>
     </div>
   `);
   document.getElementById("m-cancel").onclick = closeModal;
   document.getElementById("m-save").onclick = async ()=>{
     const btn = document.getElementById("m-save");
     const link = document.getElementById("m-link").value.trim();
-    if(!link){ toast("Укажите ссылку на публикацию", true); return; }
     const followers = parseInt(document.getElementById("m-followers").value,10)||0;
     try{
       await withBusy(btn, async ()=>{
@@ -1737,7 +1748,7 @@ function modalAddPublication(orderId){
         });
         if(followers !== (o.followers||0)) await Api.updateOrder(orderId, {followers});
       });
-      closeModal(); toast("Публикация добавлена"); await DataManager.refresh();
+      closeModal(); toast("Отмечено как выложено"); await DataManager.refresh();
       modalAddMeasurement(orderId, true);
     }catch(e){ toast(e.message, true); }
   };
@@ -1791,7 +1802,7 @@ function modalPublicationHistory(orderId){
   if(!pub || !o) return;
   openModal(`
     <h3>История замеров · ${escapeHtml(o.blogger)}</h3>
-    <p style="color:var(--ink-soft);margin-bottom:8px">${escapeHtml(pub.platform)} · <a href="${escapeHtml(pub.link)}" target="_blank" rel="noopener">ссылка</a> · публикация ${escapeHtml(pub.publishedAt)}</p>
+    <p style="color:var(--ink-soft);margin-bottom:8px">${escapeHtml(pub.platform)}${pub.link?` · <a href="${escapeHtml(pub.link)}" target="_blank" rel="noopener">ссылка</a>`:" · без ссылки (сторис)"} · публикация ${escapeHtml(pub.publishedAt)}</p>
     <div class="table-wrap"><table>
       <thead><tr><th>Дата замера</th><th>Просмотры</th><th>Лайки</th><th>Коммент.</th><th>Клики</th><th>Продажи</th><th>Выручка</th><th>Комментарий</th></tr></thead>
       <tbody>
