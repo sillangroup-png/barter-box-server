@@ -1142,7 +1142,7 @@ function tplPublications(){
       <div class="table-wrap"><table>
         <thead><tr>
           <th>Блогер</th><th>Город</th><th>Подписчики</th><th>Статус доставки</th><th>Платформа</th><th>Ссылка</th>
-          <th>Дата публ.</th><th>Охват</th><th>ER</th><th>Продажи</th><th>Выручка</th><th>Категория</th><th>Промокод</th><th></th>
+          <th>Дата публ.</th><th>Охват</th><th>ER</th><th>Клики</th><th>Продажи</th><th>Выручка</th><th>Категория</th><th>Промокод</th><th></th>
         </tr></thead>
         <tbody>
           ${rows.map(o=>{
@@ -1159,6 +1159,7 @@ function tplPublications(){
               <td>${pub?escapeHtml(pub.publishedAt):"—"}</td>
               <td>${r.value?fmtNum(r.value)+reachBadge(r):"—"}</td>
               <td>${m?fmtPercent(erPercent(m)):"—"}</td>
+              <td>${m&&m.clicks?fmtNum(m.clicks):"—"}</td>
               <td>${m?(m.salesCount||0):"—"}</td>
               <td>${m?fmtNum(m.salesRevenue):"—"}</td>
               <td>${pub?escapeHtml(pub.tier):"—"}</td>
@@ -1170,7 +1171,7 @@ function tplPublications(){
                   : `<button class="btn btn-primary btn-sm add-pub-btn" data-order="${o.id}">+ Публикация</button>`}
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="14">Ничего не найдено</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="15">Ничего не найдено</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -1504,7 +1505,7 @@ function tplReport(){
       <div class="table-wrap"><table>
         <thead><tr>
           <th>№</th><th>Блогер</th><th>Проект</th><th>Город</th><th>Водитель</th><th>Статус доставки</th><th>Дата доставки</th>
-          <th>Платформа</th><th>Дата публ.</th><th>Охват</th><th>ER</th><th>Продажи</th><th>Выручка</th><th>Bitrix</th>
+          <th>Платформа</th><th>Дата публ.</th><th>Охват</th><th>ER</th><th>Клики</th><th>Продажи</th><th>Выручка</th><th>Bitrix</th><th></th>
         </tr></thead>
         <tbody>
           ${rows.map(o=>{
@@ -1523,11 +1524,18 @@ function tplReport(){
               <td>${pub?escapeHtml(pub.publishedAt):"—"}</td>
               <td>${r.value?fmtNum(r.value)+reachBadge(r):"—"}</td>
               <td>${m?fmtPercent(erPercent(m)):"—"}</td>
+              <td>${m&&m.clicks?fmtNum(m.clicks):"—"}</td>
               <td>${m?(m.salesCount||0):"—"}</td>
               <td>${m?fmtNum(m.salesRevenue):"—"}</td>
               <td>${o.status==='delivered' ? (o.bitrixSynced?'✓':'—') : "—"}</td>
+              <td>
+                ${pub
+                  ? `<button class="btn btn-ghost btn-sm rep-add-measure-btn" data-order="${o.id}">+ Данные</button>
+                     <button class="btn btn-ghost btn-sm rep-history-btn" data-order="${o.id}">История</button>`
+                  : `<button class="btn btn-primary btn-sm rep-add-pub-btn" data-order="${o.id}">+ Публикация</button>`}
+              </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="14">Нет данных</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="16">Нет данных</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -1747,6 +1755,7 @@ function modalAddMeasurement(orderId, isFirst){
       <div class="field"><label>Лайки</label><input id="m-likes" type="number" value="0"></div>
       <div class="field"><label>Комментарии</label><input id="m-comments" type="number" value="0"></div>
       <div class="field"><label>Сохранения</label><input id="m-saves" type="number" value="0"></div>
+      <div class="field"><label>Клики по промокоду/ссылке (если есть)</label><input id="m-clicks" type="number" value="0"></div>
       <div class="field"><label>Продажи по промокоду, шт</label><input id="m-sales" type="number" value="0"></div>
       <div class="field"><label>Выручка по промокоду, ₸</label><input id="m-revenue" type="number" value="0"></div>
     </div>
@@ -1766,6 +1775,7 @@ function modalAddMeasurement(orderId, isFirst){
         likes: parseInt(document.getElementById("m-likes").value,10)||0,
         comments: parseInt(document.getElementById("m-comments").value,10)||0,
         saves: parseInt(document.getElementById("m-saves").value,10)||0,
+        clicks: parseInt(document.getElementById("m-clicks").value,10)||0,
         salesCount: parseInt(document.getElementById("m-sales").value,10)||0,
         salesRevenue: parseInt(document.getElementById("m-revenue").value,10)||0,
         note: document.getElementById("m-note").value.trim(),
@@ -1783,12 +1793,12 @@ function modalPublicationHistory(orderId){
     <h3>История замеров · ${escapeHtml(o.blogger)}</h3>
     <p style="color:var(--ink-soft);margin-bottom:8px">${escapeHtml(pub.platform)} · <a href="${escapeHtml(pub.link)}" target="_blank" rel="noopener">ссылка</a> · публикация ${escapeHtml(pub.publishedAt)}</p>
     <div class="table-wrap"><table>
-      <thead><tr><th>Дата замера</th><th>Просмотры</th><th>Лайки</th><th>Коммент.</th><th>Продажи</th><th>Выручка</th><th>Комментарий</th></tr></thead>
+      <thead><tr><th>Дата замера</th><th>Просмотры</th><th>Лайки</th><th>Коммент.</th><th>Клики</th><th>Продажи</th><th>Выручка</th><th>Комментарий</th></tr></thead>
       <tbody>
         ${pub.measurements.slice().reverse().map(m=>`<tr>
           <td>${escapeHtml(m.date)}</td><td>${fmtNum(m.views)}</td><td>${fmtNum(m.likes)}</td><td>${fmtNum(m.comments)}</td>
-          <td>${m.salesCount||0}</td><td>${fmtNum(m.salesRevenue)}</td><td>${escapeHtml(m.note||"")}</td>
-        </tr>`).join("") || `<tr><td class="empty" colspan="7">Замеров пока нет</td></tr>`}
+          <td>${m.clicks?fmtNum(m.clicks):"—"}</td><td>${m.salesCount||0}</td><td>${fmtNum(m.salesRevenue)}</td><td>${escapeHtml(m.note||"")}</td>
+        </tr>`).join("") || `<tr><td class="empty" colspan="8">Замеров пока нет</td></tr>`}
       </tbody>
     </table></div>
     <div class="modal-actions">
@@ -2110,9 +2120,9 @@ function wireDeskTab(){
     });
 
     document.getElementById("template-pub-csv-btn").onclick = ()=>{
-      const header = ["блогер","платформа","ссылка","дата_публикации","категория","промокод","дата_замера","просмотры","лайки","комментарии","сохранения","продажи","выручка","комментарий"];
-      const example1 = ["@aizhan_beauty","Instagram Reels","https://instagram.com/reel/xxx","2026-07-10","Малый (эффект 1–7 дней)","AIZHAN15","2026-07-15","15400","780","71","120","14","126000","Через 5 дней после публикации"];
-      const example2 = ["@moldir_mua","TikTok","https://tiktok.com/@moldir/video/xxx","2026-07-12","Малый (эффект 1–7 дней)","MOLDIR10","","","","","","","",""];
+      const header = ["блогер","платформа","ссылка","дата_публикации","категория","промокод","дата_замера","просмотры","лайки","комментарии","сохранения","клики","продажи","выручка","комментарий"];
+      const example1 = ["@aizhan_beauty","Instagram Reels","https://instagram.com/reel/xxx","2026-07-10","Малый (эффект 1–7 дней)","AIZHAN15","2026-07-15","15400","780","71","120","95","14","126000","Через 5 дней после публикации"];
+      const example2 = ["@moldir_mua","TikTok","https://tiktok.com/@moldir/video/xxx","2026-07-12","Малый (эффект 1–7 дней)","MOLDIR10","","","","","","","","",""];
       const csv = [header, example1, example2].map(row=>row.map(csvEscape).join(",")).join("\n");
       downloadFile("barter-box-publications-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
       toast("Шаблон скачан — заполните и загрузите через «Импорт CSV»");
@@ -2264,17 +2274,29 @@ function wireDeskTab(){
     document.getElementById("fr-date-from").onchange = e=>{ UI.filters.dateFrom = e.target.value; renderDeskTab(); };
     document.getElementById("fr-date-to").onchange = e=>{ UI.filters.dateTo = e.target.value; renderDeskTab(); };
 
+    document.querySelectorAll(".rep-add-pub-btn").forEach(btn=>{
+      btn.onclick = ()=> modalAddPublication(parseInt(btn.dataset.order,10));
+    });
+    document.querySelectorAll(".rep-add-measure-btn").forEach(btn=>{
+      btn.onclick = ()=> modalAddMeasurement(parseInt(btn.dataset.order,10), false);
+    });
+    document.querySelectorAll(".rep-history-btn").forEach(btn=>{
+      btn.onclick = ()=> modalPublicationHistory(parseInt(btn.dataset.order,10));
+    });
+
     document.getElementById("export-report-csv-btn").onclick = ()=>{
-      const header = ["ID","Блогер","Проект","Город","Водитель","Статус доставки","Дата доставки","Платформа","Дата публикации","Охват","ER%","Продажи шт","Выручка","Bitrix"];
+      const header = ["ID","Блогер","Проект","Город","Водитель","Статус доставки","Дата доставки","Платформа","Дата публикации","Охват","Оценка охвата","ER%","Клики","Продажи шт","Выручка","Bitrix"];
       const lines = [header.map(csvEscape).join(",")];
       DataManager.state.orders.forEach(o=>{
         const pub = pubOf(o.id); const m = pub ? latestMeasurement(pub) : null;
         const er = m ? erPercent(m) : null;
+        const r = reachInfo(o, pub, m);
         lines.push([
           o.id, o.blogger, campaignName(o.campaignId), o.city, driverName(o.driverCode),
           (STATUS_META[o.status]||{}).label || o.status, o.deliveredAt || "",
           pub ? pub.platform : "", pub ? pub.publishedAt : "",
-          m ? m.views : "", er!=null ? er.toFixed(1) : "",
+          r.value || "", r.estimated ? "да" : "нет", er!=null ? er.toFixed(1) : "",
+          m && m.clicks ? m.clicks : "",
           m ? (m.salesCount||0) : "", m ? (m.salesRevenue||0) : "",
           o.status==="delivered" ? (o.bitrixSynced ? "да" : "нет") : ""
         ].map(csvEscape).join(","));
