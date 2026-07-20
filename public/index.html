@@ -443,6 +443,59 @@ function marketingSummary(){
   const onDelivery = orders.filter(o=>o.status!=="delivered" && o.status!=="cancelled").length;
   return {totalReach, totalSales, totalRevenue, avgEr, gap, pubCount: publications.length, onDelivery};
 }
+// Отчёт по выкладке: не про охваты/продажи (это marketingSummary), а именно про то,
+// сколько из доставленного реально выложено блогером — и по каким проектам сильнее
+// всего "зависло" (маркетологу нужно дожимать точечно, а не искать в общем списке).
+function publicationComplianceSummary(){
+  const {orders, campaigns} = DataManager.state;
+  const delivered = orders.filter(o=>o.status==="delivered");
+  const postedOf = o=>pubOf(o.id);
+  const posted = delivered.filter(o=>postedOf(o));
+  const withLink = posted.filter(o=>{ const p = postedOf(o); return p && p.link; }).length;
+  const withoutLink = posted.length - withLink;
+  const waitingCount = delivered.length - posted.length;
+  const pct = delivered.length ? Math.round(posted.length/delivered.length*100) : null;
+
+  // Среднее время от доставки до выкладки — только там, где обе даты есть и выкладка не раньше доставки
+  // (отрицательные значения обычно означают опечатку в ручной дате, не показательны для средней).
+  const lags = posted.map(o=>{
+    const p = postedOf(o);
+    if(!o.deliveredAt || !p.publishedAt) return null;
+    const d = daysBetween(p.publishedAt, o.deliveredAt);
+    return d>=0 ? d : null;
+  }).filter(v=>v!=null);
+  const avgLagDays = lags.length ? lags.reduce((a,b)=>a+b,0)/lags.length : null;
+
+  const now = new Date();
+  const daysSince = dateStr=>{
+    if(!dateStr) return null;
+    return Math.floor((now.getTime() - new Date(dateStr).getTime())/86400000);
+  };
+  const waitingOrders = delivered.filter(o=>!postedOf(o));
+  const ageBuckets = {fresh:0, mid:0, stale:0}; // 0-3 / 4-7 / 8+ дней с доставки
+  waitingOrders.forEach(o=>{
+    const days = daysSince(o.deliveredAt);
+    if(days==null) return;
+    if(days<=3) ageBuckets.fresh++;
+    else if(days<=7) ageBuckets.mid++;
+    else ageBuckets.stale++;
+  });
+
+  const byCampaign = campaigns.map(c=>{
+    const own = delivered.filter(o=>o.campaignId===c.id);
+    const ownPosted = own.filter(o=>postedOf(o));
+    return {
+      campaign: c,
+      deliveredCount: own.length,
+      postedCount: ownPosted.length,
+      waitingCount: own.length - ownPosted.length,
+      pct: own.length ? Math.round(ownPosted.length/own.length*100) : null,
+    };
+  }).filter(x=>x.deliveredCount>0).sort((a,b)=>(a.pct==null?-1:a.pct)-(b.pct==null?-1:b.pct));
+
+  return {deliveredCount: delivered.length, postedCount: posted.length, waitingCount, pct,
+    withLink, withoutLink, avgLagDays, ageBuckets, byCampaign};
+}
 /* ---------- ROMI крупных инфлюенс-интеграций (кривая затухания) ----------
    Логика (как договорились с заказчиком):
    1) база дня = среднее по «чистым» дням (без эффекта чьей-либо интеграции) по этому товару;
@@ -1501,7 +1554,37 @@ function tplReport(){
     }
     return true;
   });
+  const pc = publicationComplianceSummary();
   return `
+    <div class="panel">
+      <div class="panel-title">Выкладка: доставлено → выложено
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">кликните проект в таблице, чтобы отфильтровать список ниже</span>
+      </div>
+      <div class="grid-kpi" style="margin-bottom:12px">
+        <div class="kpi ${pc.pct==null?'':(pc.pct>=80?'ok':pc.pct>=50?'warn':'bad')}"><div class="num">${pc.pct==null?'—':pc.pct+'%'}</div><div class="lbl">Выложено от доставленного</div></div>
+        <div class="kpi ok"><div class="num">${pc.postedCount}</div><div class="lbl">Выложено (${pc.withLink} со ссылкой, ${pc.withoutLink} сторис без)</div></div>
+        <div class="kpi warn"><div class="num">${pc.waitingCount}</div><div class="lbl">Ждут выкладки</div></div>
+        <div class="kpi"><div class="num">${pc.avgLagDays==null?'—':pc.avgLagDays.toFixed(1)}</div><div class="lbl">Среднее дней доставка → выкладка</div></div>
+      </div>
+      ${pc.waitingCount ? `
+      <div class="grid-kpi" style="margin-bottom:12px">
+        <div class="kpi"><div class="num">${pc.ageBuckets.fresh}</div><div class="lbl">Ждут 0–3 дня</div></div>
+        <div class="kpi warn"><div class="num">${pc.ageBuckets.mid}</div><div class="lbl">Ждут 4–7 дней</div></div>
+        <div class="kpi bad"><div class="num">${pc.ageBuckets.stale}</div><div class="lbl">Ждут больше недели</div></div>
+      </div>` : ""}
+      <div class="table-wrap"><table>
+        <thead><tr><th>Проект</th><th>Доставлено</th><th>Выложено</th><th>Ждут</th><th>%</th></tr></thead>
+        <tbody>
+          ${pc.byCampaign.map(x=>`<tr>
+            <td><button class="link-btn pub-camp-link" data-id="${x.campaign.id}"><b>${escapeHtml(x.campaign.name)}</b></button></td>
+            <td>${x.deliveredCount}</td>
+            <td>${x.postedCount}</td>
+            <td>${x.waitingCount ? `<b style="color:var(--warn)">${x.waitingCount}</b>` : "0"}</td>
+            <td>${x.pct==null?'—':x.pct+'%'}</td>
+          </tr>`).join("") || `<tr><td class="empty" colspan="5">Пока нет доставленных заказов</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
     <div class="panel">
       <div class="panel-title">Сводный отчёт: логистика + доставка + маркетинг
         <button class="btn btn-ghost btn-sm" id="export-report-csv-btn">Экспорт CSV</button>
@@ -2293,6 +2376,9 @@ function wireDeskTab(){
     document.getElementById("fr-campaign").onchange = e=>{ UI.filters.campaign = e.target.value; renderDeskTab(); };
     document.getElementById("fr-date-from").onchange = e=>{ UI.filters.dateFrom = e.target.value; renderDeskTab(); };
     document.getElementById("fr-date-to").onchange = e=>{ UI.filters.dateTo = e.target.value; renderDeskTab(); };
+    document.querySelectorAll(".pub-camp-link").forEach(btn=>{
+      btn.onclick = ()=>{ UI.filters.campaign = btn.dataset.id; renderDeskTab(); };
+    });
 
     document.querySelectorAll(".rep-add-pub-btn").forEach(btn=>{
       btn.onclick = ()=> modalAddPublication(parseInt(btn.dataset.order,10));
