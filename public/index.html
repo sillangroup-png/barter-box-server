@@ -34,6 +34,8 @@ body{
   -webkit-font-smoothing:antialiased;
 }
 button{font-family:inherit;cursor:pointer}
+.link-btn{background:none;border:none;padding:0;margin:0;font:inherit;color:var(--action);cursor:pointer;text-align:left}
+.link-btn:hover{text-decoration:underline;color:var(--action-d)}
 input,select,textarea{font-family:inherit;font-size:13.5px}
 ::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-thumb{background:#c7cfd6;border-radius:4px}
@@ -942,7 +944,7 @@ function tplCampaigns(){
           ${campaigns.map(c=>{
             const cnt = orders.filter(o=>o.campaignId===c.id).length;
             return `<tr>
-              <td><b>${escapeHtml(c.name)}</b></td>
+              <td><button class="link-btn camp-name-link" data-id="${c.id}" title="Открыть сводный отчёт по этому проекту"><b>${escapeHtml(c.name)}</b></button></td>
               <td>${escapeHtml(c.city)}</td>
               <td>${escapeHtml(c.period)}</td>
               <td>${escapeHtml(c.responsible)}</td>
@@ -1926,6 +1928,13 @@ function modalSale(){
 function wireDeskTab(){
   if(UI.tab==="campaigns"){
     document.getElementById("new-campaign-btn").onclick = modalNewCampaign;
+    document.querySelectorAll(".camp-name-link").forEach(btn=>{
+      btn.onclick = ()=>{
+        UI.filters.campaign = btn.dataset.id;
+        UI.tab = "report";
+        render();
+      };
+    });
     document.querySelectorAll(".camp-stage").forEach(sel=>{
       sel.onchange = async ()=>{
         try{ await Api.updateCampaign(parseInt(sel.dataset.id,10), {stage: sel.value}); await DataManager.refresh(); }
