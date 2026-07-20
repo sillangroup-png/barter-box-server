@@ -35,6 +35,9 @@ const CAMPAIGN_STAGES = [
 ];
 const RETURN_STATUSES = ["В офисе","Ожидает решения","Оформлен возврат","Принят на складе","Закрыт"];
 const DEAL_STATUSES = ["Запланирована","Опубликована","Оплачена","Закрыта"];
+// Стоимость логистики за одну доставку — пока фиксированная для всех, проставляется
+// автоматически при создании заказа (вручную или через импорт CSV из UI).
+const LOGISTICS_COST_DEFAULT = 1500;
 
 // ---------- Авторизация менеджера/логиста и маркетолога ----------
 // Пара логин/пароль — общая на роль (как код у водителей), задаётся переменными
@@ -89,7 +92,7 @@ function seedState(){
   ];
   const campaigns = [
     {id:1, name:"Barter-боксы / Июль / Топ-5 товаров", city:"Алматы + Астана", period:"Июль 2026",
-     responsible:"Сауле", boxType:"Уход премиум", plannedCount:500, stage:"В доставке", budget:1200000},
+     responsible:"Сауле", boxType:"Уход премиум", plannedCount:500, stage:"В доставке", budget:1200000, costPerBox:1000},
   ];
   const now = new Date();
   const days = (n)=> new Date(now.getTime()+n*24*3600*1000);
@@ -117,7 +120,7 @@ function seedState(){
     const isTerminal = status!=="created" && status!=="assigned";
     return {
       id:i+1, campaignId:1, driverCode: status==="created" ? null : driverCode,
-      blogger, phone, city, address, box, comment:"",
+      blogger, phone, city, address, box, comment:"", logisticsCost: LOGISTICS_COST_DEFAULT,
       status, closureType: status==="delivered" ? (i%2===0?"writeoff":"sale") : null,
       photo: status==="delivered" ? "" : null,
       driverComment: status==="no_answer" ? "Звонил 2 раза, не ответили" :
@@ -318,7 +321,7 @@ app.post("/api/campaigns", requireAuth, (req,res)=>{
   const campaign = {
     id: nextId("campaigns"), name: b.name||"Без названия", city: b.city||"—", period: b.period||"—",
     responsible: b.responsible||"—", boxType: b.boxType||"", plannedCount: b.plannedCount||0,
-    stage: b.stage || CAMPAIGN_STAGES[0], budget: b.budget||0,
+    stage: b.stage || CAMPAIGN_STAGES[0], budget: b.budget||0, costPerBox: parseInt(b.costPerBox,10)||0,
   };
   state.campaigns.push(campaign);
   persist();
@@ -345,6 +348,7 @@ app.post("/api/orders", requireAuth, (req,res)=>{
     id: nextId("orders"), campaignId: b.campaignId||null, driverCode: b.driverCode||null,
     blogger: b.blogger||"", phone: b.phone||"", city: b.city||"—", address: b.address||"",
     box: b.box||"", comment: b.comment||"", followers: parseInt(b.followers,10)||0,
+    logisticsCost: b.logisticsCost!=null ? (parseInt(b.logisticsCost,10)||0) : LOGISTICS_COST_DEFAULT,
     status: b.driverCode ? "assigned" : "created", closureType: null, photo: null, driverComment: "",
     assignedAt: b.driverCode ? new Date().toLocaleString("ru-RU") : null,
     deliveredAt: null, bitrixSynced: false,
@@ -473,7 +477,7 @@ app.post("/api/orders/import", requireAuth, (req,res)=>{
       id: nextId("orders"), campaignId: defaultCampaign ? defaultCampaign.id : null,
       driverCode: validDriver, blogger, phone: r["телефон"] || r["phone"] || "",
       city: r["город"] || r["city"] || "—", address, box: r["бокс"] || r["box"] || "",
-      followers,
+      followers, logisticsCost: LOGISTICS_COST_DEFAULT,
       comment: "", status: validDriver ? "assigned" : "created", closureType: null, photo: null,
       driverComment: "", assignedAt: validDriver ? new Date().toLocaleString("ru-RU") : null,
       deliveredAt: null, bitrixSynced: false,
