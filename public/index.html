@@ -1649,9 +1649,9 @@ function tplReport(){
         <input type="date" id="fr-date-to" value="${f.dateTo||''}">
       </div>
       ${(()=>{
-        const waitingIds = rows.filter(o=>!pubOf(o.id) && o.status==="delivered").map(o=>o.id);
-        [...UI.selectedPubIds].forEach(id=>{ if(!waitingIds.includes(id)) UI.selectedPubIds.delete(id); });
-        return waitingIds.length ? `
+        const rowIds = rows.map(o=>o.id);
+        [...UI.selectedPubIds].forEach(id=>{ if(!rowIds.includes(id)) UI.selectedPubIds.delete(id); });
+        return rows.length ? `
       <div class="toolbar" id="rep-bulk-bar" style="${UI.selectedPubIds.size? '':'display:none'}">
         <span>${UI.selectedPubIds.size} выбрано</span>
         <button class="btn btn-primary btn-sm" id="rep-bulk-mark-btn">Отметить выложено</button>
@@ -1668,9 +1668,8 @@ function tplReport(){
             const pub = pubOf(o.id);
             const m = pub ? latestMeasurement(pub) : null;
             const r = reachInfo(o, pub, m);
-            const waiting = !pub && o.status==="delivered";
             return `<tr>
-              <td class="rowcheck">${waiting ? `<input type="checkbox" class="rep-row-check" data-id="${o.id}" ${UI.selectedPubIds.has(o.id)?'checked':''}>` : ""}</td>
+              <td class="rowcheck"><input type="checkbox" class="rep-row-check" data-id="${o.id}" ${UI.selectedPubIds.has(o.id)?'checked':''}></td>
               <td>#${o.id}</td>
               <td>${escapeHtml(o.blogger)}</td>
               <td>${fmtNum(o.followers)}</td>
@@ -1977,10 +1976,30 @@ function modalAddPublication(orderId){
 
 function modalBulkMarkPosted(orderIds){
   if(!orderIds.length) return;
-  const orders = orderIds.map(id=>DataManager.find("orders", id)).filter(Boolean);
+  const all = orderIds.map(id=>DataManager.find("orders", id)).filter(Boolean);
+  // выбранные могут быть в разных статусах (доставлено / назначено / уже выложено) —
+  // отмечаем только те, что реально ждут публикации, остальные молча пропускаем и объясняем почему.
+  const eligible = all.filter(o=>o.status==="delivered" && !pubOf(o.id));
+  const skippedNotDelivered = all.filter(o=>o.status!=="delivered");
+  const skippedAlreadyPosted = all.filter(o=>o.status==="delivered" && pubOf(o.id));
+
+  if(!eligible.length){
+    openModal(`
+      <h3>Отметить выложено</h3>
+      <p style="color:var(--ink-soft)">Ни один из выбранных (${all.length}) не подходит: ${skippedNotDelivered.length?`${skippedNotDelivered.length} ещё не доставлены`:''}${skippedNotDelivered.length&&skippedAlreadyPosted.length?', ':''}${skippedAlreadyPosted.length?`${skippedAlreadyPosted.length} уже выложены`:''}.</p>
+      <div class="modal-actions"><button class="btn btn-ghost" id="m-cancel">Закрыть</button></div>
+    `);
+    document.getElementById("m-cancel").onclick = closeModal;
+    return;
+  }
+
   openModal(`
-    <h3>Отметить выложено · ${orders.length} блогер(ов)</h3>
-    <p style="color:var(--ink-soft);margin-bottom:8px">${orders.map(o=>escapeHtml(o.blogger)).join(", ")}</p>
+    <h3>Отметить выложено · ${eligible.length} блогер(ов)</h3>
+    <p style="color:var(--ink-soft);margin-bottom:8px">${eligible.map(o=>escapeHtml(o.blogger)).join(", ")}</p>
+    ${(skippedNotDelivered.length || skippedAlreadyPosted.length) ? `
+    <div class="login-hint" style="margin-bottom:8px">
+      Пропущены (не подходят): ${skippedNotDelivered.length?`${skippedNotDelivered.length} ещё не доставлены`:''}${skippedNotDelivered.length&&skippedAlreadyPosted.length?', ':''}${skippedAlreadyPosted.length?`${skippedAlreadyPosted.length} уже выложены`:''}.
+    </div>` : ""}
     <div class="form-row">
       <div class="field"><label>Платформа</label><select id="m-platform">${PLATFORMS.map(p=>`<option>${p}</option>`).join("")}</select></div>
       <div class="field"><label>Дата публикации</label><input id="m-date" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
@@ -1992,7 +2011,7 @@ function modalBulkMarkPosted(orderIds){
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="m-cancel">Отмена</button>
-      <button class="btn btn-primary" id="m-save">Отметить выложено (${orders.length})</button>
+      <button class="btn btn-primary" id="m-save">Отметить выложено (${eligible.length})</button>
     </div>
   `);
   document.getElementById("m-cancel").onclick = closeModal;
@@ -2003,12 +2022,13 @@ function modalBulkMarkPosted(orderIds){
     const tier = document.getElementById("m-tier").value;
     try{
       await withBusy(btn, async ()=>{
-        for(const o of orders){
+        for(const o of eligible){
           await Api.createPublication({ orderId: o.id, platform, link: "", publishedAt, tier, promoCode: "" });
         }
       });
       closeModal();
-      toast(`Отмечено как выложено: ${orders.length}`);
+      const skipped = skippedNotDelivered.length + skippedAlreadyPosted.length;
+      toast(`Отмечено как выложено: ${eligible.length}${skipped?`, пропущено: ${skipped}`:''}`);
       UI.selectedPubIds.clear();
       await DataManager.refresh(); render();
     }catch(e){ toast(e.message, true); await DataManager.refresh(); render(); }
