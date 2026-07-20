@@ -345,9 +345,13 @@ function statusBadge(status){
 // Пока не доставлено — вопрос не актуален. Доставлено, но маркетолог ещё не подтвердил
 // выкладку (часто сторис, которую нужно руками уточнить у блогера) — "Ждёт публикации".
 // Маркетолог подтвердил (создал публикацию, даже без ссылки) — "Выложено".
-function pubStatusBadge(o, pub){
-  if(pub) return `<span class="badge badge-success">✅ Выложено</span>`;
-  if(o.status==="delivered") return `<span class="badge badge-problem">⏳ Ждёт публикации</span>`;
+// Бейдж кликабелен: открывает то же самое, что и соответствующая кнопка в конце строки
+// ("Отметить выложено" или "История") — так же, как кликабельны ячейки охват/ER/клики.
+// prefix — "rep-" в Сводном отчёте, "" в Публикациях (разные классы кнопок в этих таблицах).
+function pubStatusBadge(o, pub, prefix){
+  prefix = prefix || "";
+  if(pub) return `<button class="link-btn ${prefix}history-btn" data-order="${o.id}" title="Открыть историю замеров"><span class="badge badge-success">✅ Выложено</span></button>`;
+  if(o.status==="delivered") return `<button class="link-btn ${prefix}add-pub-btn" data-order="${o.id}" title="Отметить выложено"><span class="badge badge-problem">⏳ Ждёт публикации</span></button>`;
   return "—";
 }
 function driverName(code){
@@ -1224,7 +1228,7 @@ function tplPublications(){
               <td>${escapeHtml(o.city)}</td>
               <td>${fmtNum(o.followers)}</td>
               <td>${statusBadge(o.status)}</td>
-              <td>${pubStatusBadge(o, pub)}</td>
+              <td>${pubStatusBadge(o, pub, "")}</td>
               <td>${pub?escapeHtml(pub.platform):"—"}</td>
               <td>${pub&&pub.link?`<a href="${escapeHtml(pub.link)}" target="_blank" rel="noopener">ссылка</a>`:"—"}</td>
               <td>${pub?escapeHtml(pub.publishedAt):"—"}</td>
@@ -1621,7 +1625,7 @@ function tplReport(){
               <td>${escapeHtml(o.city)}</td>
               <td>${escapeHtml(driverName(o.driverCode))}</td>
               <td>${statusBadge(o.status)}</td>
-              <td>${pubStatusBadge(o, pub)}</td>
+              <td>${pubStatusBadge(o, pub, "rep-")}</td>
               <td>${escapeHtml(o.deliveredAt||"—")}</td>
               <td>${pub?escapeHtml(pub.platform):"—"}</td>
               <td>${pub?escapeHtml(pub.publishedAt):"—"}</td>
