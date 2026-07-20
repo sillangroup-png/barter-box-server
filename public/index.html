@@ -470,7 +470,12 @@ function editableMeasureCell(pub, orderId, content){
   return `<button class="link-btn rep-add-measure-btn" data-order="${orderId}" title="Изменить охват/ER/клики/продажи">${content}</button>`;
 }
 function marketingSummary(){
-  const {orders, publications} = DataManager.state;
+  const {orders} = DataManager.state;
+  // защита от "осиротевших" публикаций: если заказ был удалён (одиночно или массово) до того,
+  // как сервер стал каскадно чистить его публикации, они могли остаться в базе и продолжать
+  // попадать в сводку, хотя самого заказа уже нет — отсекаем такие на всякий случай и здесь.
+  const orderIds = new Set(orders.map(o=>o.id));
+  const publications = DataManager.state.publications.filter(p=>orderIds.has(p.orderId));
   const withM = publications.map(p=>({p, m: latestMeasurement(p)})).filter(x=>x.m);
   const totalSales   = withM.reduce((s,x)=>s+(x.m.salesCount||0),0);
   const totalRevenue = withM.reduce((s,x)=>s+(x.m.salesRevenue||0),0);
@@ -2926,7 +2931,10 @@ async function runSelfTests(){
   });
   TestSuite.test("marketingSummary агрегирует суммарный охват по всем публикациям (факт + оценка 15%)", ()=>{
     const ms = marketingSummary();
-    const manualTotal = DataManager.state.publications.reduce((s,p)=>{
+    // как и marketingSummary(), считаем вручную только по публикациям с ещё существующим заказом —
+    // "осиротевшие" публикации (заказ удалён, публикация почему-то осталась) не должны попадать в сводку.
+    const orderIds = new Set(DataManager.state.orders.map(o=>o.id));
+    const manualTotal = DataManager.state.publications.filter(p=>orderIds.has(p.orderId)).reduce((s,p)=>{
       const o = DataManager.find("orders", p.orderId);
       const m = latestMeasurement(p);
       return s + reachInfo(o, p, m).value;
