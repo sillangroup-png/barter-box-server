@@ -408,6 +408,11 @@ function campaignExpense(c){
   const logisticsCost = orders.reduce((s,o)=>s+(o.logisticsCost||0), 0);
   return { count: orders.length, boxesCost, logisticsCost, total: boxesCost + logisticsCost };
 }
+// Суммарные расходы по всем бартер-проектам (себес боксов + логистика) — для дашборда.
+function totalExpense(){
+  const {campaigns} = DataManager.state;
+  return campaigns.reduce((s,c)=>s+campaignExpense(c).total, 0);
+}
 function mapsLink(address, city){
   return "https://maps.google.com/?q=" + encodeURIComponent((city?city+", ":"")+address);
 }
@@ -944,6 +949,7 @@ function tplDashboard(){
         <div class="kpi"><div class="num">${fmtPercent(ms.avgEr)}</div><div class="lbl">Средний ER</div></div>
         <div class="kpi ok"><div class="num">${fmtNum(ms.totalRevenue)} ₸</div><div class="lbl">Выручка по промокодам</div></div>
         <div class="kpi warn"><div class="num">${ms.gap.length}</div><div class="lbl">Ждут публикации</div></div>
+        <div class="kpi bad"><div class="num">${fmtNum(totalExpense())} ₸</div><div class="lbl">Расходы на бартер</div></div>
       </div>
     </div>
 
@@ -952,9 +958,10 @@ function tplDashboard(){
       ${campaigns.map(c=>{
         const own = orders.filter(o=>o.campaignId===c.id);
         const pct = own.length ? Math.round(own.filter(o=>o.status==="delivered").length/own.length*100) : 0;
+        const exp = campaignExpense(c);
         return `<div style="margin-bottom:12px">
           <div style="display:flex;justify-content:space-between;font-size:13px">
-            <b>${escapeHtml(c.name)}</b><span>${escapeHtml(c.stage)} · ${pct}%</span>
+            <b>${escapeHtml(c.name)}</b><span>${escapeHtml(c.stage)} · ${pct}% · Расход: ${fmtNum(exp.total)} ₸</span>
           </div>
           <div class="pbar"><span style="width:${pct}%"></span></div>
         </div>`;
@@ -3004,6 +3011,26 @@ async function runSelfTests(){
       if(exp.boxesCost!==2000) throw new Error("боксы посчитаны неверно: "+exp.boxesCost);
       if(exp.logisticsCost!==3000) throw new Error("логистика посчитана неверно: "+exp.logisticsCost);
       if(exp.total!==5000) throw new Error("итог посчитан неверно: "+exp.total);
+    } finally {
+      DataManager.state.campaigns = savedCampaigns;
+      DataManager.state.orders = savedOrders;
+    }
+  });
+  TestSuite.test("totalExpense суммирует расходы по всем бартер-проектам", ()=>{
+    const savedCampaigns = DataManager.state.campaigns;
+    const savedOrders = DataManager.state.orders;
+    try{
+      DataManager.state.campaigns = [{id:9911, costPerBox:1000}, {id:9912, costPerBox:500}];
+      DataManager.state.orders = [
+        {id:9821, campaignId:9911, logisticsCost:1500},
+        {id:9822, campaignId:9911, logisticsCost:1500},
+        {id:9823, campaignId:9912, logisticsCost:1500},
+      ];
+      // проект 9911: боксы 1000×2=2000 + логистика 3000 = 5000
+      // проект 9912: боксы 500×1=500 + логистика 1500 = 2000
+      // итого: 7000
+      const total = totalExpense();
+      if(total!==7000) throw new Error("итог расходов посчитан неверно: "+total);
     } finally {
       DataManager.state.campaigns = savedCampaigns;
       DataManager.state.orders = savedOrders;
