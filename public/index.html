@@ -280,6 +280,7 @@ const Api = {
   bulkAssign: (ids, driverCode)=> apiFetch("/api/orders/bulk-assign", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids, driverCode})}),
   bulkDelete: (ids)=> apiFetch("/api/orders/bulk-delete", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids})}),
   importOrders: (rows)=> apiFetch("/api/orders/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
+  geocode: (address, city)=> apiFetch("/api/geocode", {method:"POST", headers:jsonHeaders, body:JSON.stringify({address, city})}),
 
   createReturn: (r)=> apiFetch("/api/returns", {method:"POST", headers:jsonHeaders, body:JSON.stringify(r)}),
   updateReturn: (id, changes)=> apiFetch("/api/returns/"+id, {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
@@ -358,6 +359,37 @@ function driverName(code){
   if(!code) return "—";
   const d = DataManager.state.drivers.find(d=>d.code===code);
   return d ? d.name : code;
+}
+// Построение маршрута: расстояние по прямой (haversine) + "ближайший сосед" —
+// не идеальный TSP, но для десятков точек даёт разумный маршрут без платных API.
+// Стартуем с первой точки в списке (обычно верхняя в отфильтрованном по водителю
+// списке доставок), дальше на каждом шаге берём ближайшую ещё не посещённую.
+function haversineKm(a, b){
+  const R = 6371;
+  const dLat = (b.lat-a.lat) * Math.PI/180;
+  const dLng = (b.lng-a.lng) * Math.PI/180;
+  const la1 = a.lat * Math.PI/180, la2 = b.lat * Math.PI/180;
+  const h = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function nearestNeighborRoute(points){
+  // points: [{id, lat, lng, ...}] — возвращает те же объекты в порядке маршрута
+  if(points.length<=1) return points.slice();
+  const remaining = points.slice();
+  const route = [remaining.shift()];
+  while(remaining.length){
+    const last = route[route.length-1];
+    let bestIdx = 0, bestDist = Infinity;
+    remaining.forEach((p,i)=>{
+      const d = haversineKm(last, p);
+      if(d<bestDist){ bestDist=d; bestIdx=i; }
+    });
+    route.push(remaining.splice(bestIdx,1)[0]);
+  }
+  return route;
+}
+function googleMapsRouteUrl(points){
+  return "https://www.google.com/maps/dir/" + points.map(p=>`${p.lat},${p.lng}`).join("/");
 }
 function campaignName(id){
   const c = DataManager.state.campaigns.find(c=>c.id===id);
@@ -1044,6 +1076,11 @@ function tplDeliveries(){
     if((f.dateFrom || f.dateTo) && !inDateRange(o.deliveredAt || o.assignedAt, f.dateFrom, f.dateTo)) return false;
     return true;
   });
+  // Если отфильтровано по конкретному водителю и для него уже построен маршрут —
+  // показываем доставки в порядке маршрута (у кого routeOrder нет — в конец списка).
+  if(f.driver && f.driver!=="__none__" && rows.some(o=>o.routeOrder)){
+    rows = rows.slice().sort((a,b)=>(a.routeOrder||9999)-(b.routeOrder||9999));
+  }
 
   return `
     <div class="panel">
@@ -1054,6 +1091,7 @@ function tplDeliveries(){
           <button class="btn btn-ghost btn-sm" id="import-csv-btn">Импорт CSV</button>
           <input type="file" id="import-csv-input" accept=".csv" class="hide">
           <button class="btn btn-ghost btn-sm" id="export-csv-btn">Экспорт отчёта</button>
+          ${f.driver && f.driver!=="__none__" ? `<button class="btn btn-ghost btn-sm" id="build-route-btn">🗺️ Построить маршрут</button>` : ""}
           <button class="btn btn-primary btn-sm" id="new-delivery-btn">+ Доставка вручную</button>
         </div>
       </div>
@@ -1088,7 +1126,7 @@ function tplDeliveries(){
       <div class="table-wrap"><table>
         <thead><tr>
           <th class="rowcheck"><input type="checkbox" id="check-all"></th>
-          <th>№</th><th>Блогер</th><th>Город</th><th>Адрес</th><th>Телефон</th><th>Бокс</th>
+          <th>№</th><th>№ марш.</th><th>Блогер</th><th>Город</th><th>Район</th><th>Адрес</th><th>Телефон</th><th>Бокс</th>
           <th>Водитель</th><th>Статус</th><th>Дата</th><th>Фото</th><th>Закрытие</th><th>Bitrix</th><th></th>
         </tr></thead>
         <tbody>
@@ -1096,8 +1134,10 @@ function tplDeliveries(){
             <tr>
               <td class="rowcheck"><input type="checkbox" class="row-check" data-id="${o.id}" ${UI.selectedOrderIds.has(o.id)?'checked':''}></td>
               <td>#${o.id}</td>
+              <td>${o.routeOrder||"—"}</td>
               <td>${escapeHtml(o.blogger)}</td>
               <td>${escapeHtml(o.city)}</td>
+              <td>${escapeHtml(o.district||"—")}</td>
               <td class="wrap">${escapeHtml(o.address)}</td>
               <td>${escapeHtml(o.phone)}</td>
               <td>${escapeHtml(o.box)}</td>
@@ -1120,7 +1160,7 @@ function tplDeliveries(){
               <td>${o.status==="delivered" ? `<button class="btn btn-sm ${o.bitrixSynced?'btn-ghost':'btn-primary'} sync-bitrix-btn" data-id="${o.id}">${o.bitrixSynced?'✓ синхр.':'Отправить'}</button>` : "—"}</td>
               <td><button class="btn btn-danger btn-sm del-order-btn" data-id="${o.id}">✕</button></td>
             </tr>
-          `).join("") || `<tr><td colspan="13" class="empty">Ничего не найдено по фильтрам</td></tr>`}
+          `).join("") || `<tr><td colspan="15" class="empty">Ничего не найдено по фильтрам</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -1696,6 +1736,78 @@ function modalNewCampaign(){
   };
 }
 
+// Построение маршрута для конкретного водителя: геокодируем адреса без координат
+// (бесплатный сервис, ~1 адрес/сек — предупреждаем прогрессом, чтобы не выглядело
+// зависшим), считаем порядок объезда "ближайший сосед" и сохраняем № в маршруте
+// у каждой доставки + предлагаем открыть готовый маршрут в Google Maps.
+async function modalBuildRoute(driverCode){
+  const drv = DataManager.state.drivers.find(d=>d.code===driverCode);
+  const own = DataManager.state.orders.filter(o=>o.driverCode===driverCode && o.status!=="delivered" && o.status!=="cancelled" && o.address);
+  if(!own.length){ toast("У этого водителя нет активных доставок с адресом", true); return; }
+
+  openModal(`
+    <h3>Маршрут · ${escapeHtml(drv ? drv.name : driverCode)}</h3>
+    <div id="route-progress">
+      <p style="color:var(--ink-soft);margin-bottom:8px">Геокодируем адреса (бесплатный сервис, ~1 адрес/сек)…</p>
+      <p id="route-progress-text" style="font-weight:600">0 / ${own.length}</p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="m-cancel">Закрыть</button>
+    </div>
+  `);
+  document.getElementById("m-cancel").onclick = closeModal;
+
+  const progressText = document.getElementById("route-progress-text");
+  let done = 0;
+  const geocoded = [];
+  for(const o of own){
+    if(!document.getElementById("route-progress")) return; // модалку закрыли — прерываем
+    if(o.lat && o.lng){
+      geocoded.push(o);
+    }else{
+      try{
+        const g = await Api.geocode(o.address, o.city);
+        await Api.updateOrder(o.id, {lat: g.lat, lng: g.lng, district: g.district || ""});
+        o.lat = g.lat; o.lng = g.lng; o.district = g.district || "";
+        geocoded.push(o);
+      }catch(e){
+        // Адрес не нашёлся геосервисом — пропускаем его в маршруте, но не роняем весь процесс
+        toast(`Не удалось определить координаты: ${o.blogger} (${o.address})`, true);
+      }
+    }
+    done++;
+    if(progressText) progressText.textContent = `${done} / ${own.length}`;
+  }
+
+  if(!document.getElementById("route-progress")) return;
+
+  if(geocoded.length<2){
+    document.getElementById("route-progress").innerHTML = `<p style="color:var(--bad)">Недостаточно адресов с координатами, чтобы построить маршрут.</p>`;
+    return;
+  }
+
+  const ordered = nearestNeighborRoute(geocoded);
+  for(let i=0;i<ordered.length;i++){
+    ordered[i].routeOrder = i+1;
+    await Api.updateOrder(ordered[i].id, {routeOrder: i+1});
+  }
+  await DataManager.refresh();
+
+  const mapsUrl = googleMapsRouteUrl(ordered);
+  document.getElementById("route-progress").innerHTML = `
+    <p style="color:var(--ink-soft);margin-bottom:8px">Маршрут построен (${ordered.length} точек, по прямой — не по реальным дорогам):</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>№</th><th>Блогер</th><th>Район</th><th>Адрес</th></tr></thead>
+      <tbody>
+        ${ordered.map((o,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(o.blogger)}</td><td>${escapeHtml(o.district||"—")}</td><td>${escapeHtml(o.address)}</td></tr>`).join("")}
+      </tbody>
+    </table></div>
+    <a class="btn btn-primary btn-sm" style="margin-top:10px;display:inline-block" href="${mapsUrl}" target="_blank" rel="noopener">Открыть маршрут в Google Maps</a>
+  `;
+  toast("Маршрут построен");
+  renderDeskTab();
+}
+
 function modalNewDelivery(){
   const {campaigns, drivers} = DataManager.state;
   openModal(`
@@ -2049,6 +2161,8 @@ function wireDeskTab(){
 
   else if(UI.tab==="deliveries"){
     document.getElementById("new-delivery-btn").onclick = modalNewDelivery;
+    const buildRouteBtn = document.getElementById("build-route-btn");
+    if(buildRouteBtn) buildRouteBtn.onclick = ()=> modalBuildRoute(UI.filters.driver);
     const fSearch = document.getElementById("f-search");
     fSearch.oninput = debounce(()=>{ UI.filters.search = fSearch.value; renderDeskTab(); }, 250);
     document.getElementById("f-campaign").onchange = e=>{ UI.filters.campaign = e.target.value; renderDeskTab(); };
