@@ -360,6 +360,34 @@ app.patch("/api/orders/:id", requireAuth, (req,res)=>{
   persist();
   res.json(o);
 });
+
+// ---------- геокодирование (для построения маршрутов) ----------
+// Бесплатный сервис OpenStreetMap Nominatim — без API-ключа, но с жёстким лимитом
+// 1 запрос/сек на весь сервис (по их usage policy), поэтому держим здесь глобальную
+// метку времени последнего запроса и придерживаем следующий, если он приходит раньше.
+let lastGeocodeAt = 0;
+app.post("/api/geocode", requireAuth, async (req,res)=>{
+  const { address, city } = req.body || {};
+  if(!address) return res.status(400).json({error:"address обязателен"});
+  const q = encodeURIComponent([address, city, "Казахстан"].filter(Boolean).join(", "));
+  const wait = Math.max(0, 1100 - (Date.now() - lastGeocodeAt));
+  if(wait) await new Promise(r=>setTimeout(r, wait));
+  lastGeocodeAt = Date.now();
+  try{
+    const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=1&q=${q}`, {
+      headers: { "User-Agent": "BarterBoxApp/1.0 (barter-box-server.onrender.com)" }
+    });
+    if(!r.ok) return res.status(502).json({error:"Геосервис вернул ошибку: "+r.status});
+    const data = await r.json();
+    if(!data || !data.length) return res.status(404).json({error:"Адрес не найден"});
+    const item = data[0];
+    const a = item.address || {};
+    const district = a.suburb || a.city_district || a.district || a.neighbourhood || a.borough || "";
+    res.json({ lat: parseFloat(item.lat), lng: parseFloat(item.lon), district });
+  }catch(e){
+    res.status(502).json({error:"Не удалось обратиться к геосервису: "+e.message});
+  }
+});
 app.delete("/api/orders/:id", requireAuth, (req,res)=>{
   const id = +req.params.id;
   state.orders = state.orders.filter(o=>o.id!==id);
