@@ -706,6 +706,7 @@ const UI = {
   inflCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
   inflTopFilter: {from:"", to:""},
   selectedOrderIds: new Set(),
+  selectedPubIds: new Set(),
   openOrderId: null, driverAwaiting: null, driverReasonCode: null,
 };
 function loadSession(){
@@ -1647,8 +1648,18 @@ function tplReport(){
         <span style="align-self:center;color:var(--ink-mute);font-size:12px">по</span>
         <input type="date" id="fr-date-to" value="${f.dateTo||''}">
       </div>
+      ${(()=>{
+        const waitingIds = rows.filter(o=>!pubOf(o.id) && o.status==="delivered").map(o=>o.id);
+        [...UI.selectedPubIds].forEach(id=>{ if(!waitingIds.includes(id)) UI.selectedPubIds.delete(id); });
+        return waitingIds.length ? `
+      <div class="toolbar" id="rep-bulk-bar" style="${UI.selectedPubIds.size? '':'display:none'}">
+        <span>${UI.selectedPubIds.size} выбрано</span>
+        <button class="btn btn-primary btn-sm" id="rep-bulk-mark-btn">Отметить выложено</button>
+      </div>` : "";
+      })()}
       <div class="table-wrap"><table>
         <thead><tr>
+          <th class="rowcheck"><input type="checkbox" id="rep-check-all"></th>
           <th>№</th><th>Блогер</th><th>Подписчики</th><th>Проект</th><th>Город</th><th>Водитель</th><th>Статус доставки</th><th>Статус публикации</th><th>Дата доставки</th>
           <th>Платформа</th><th>Дата публ.</th><th>Охват</th><th>ER</th><th>Клики</th><th>Продажи</th><th>Выручка</th><th>Bitrix</th><th></th>
         </tr></thead>
@@ -1657,7 +1668,9 @@ function tplReport(){
             const pub = pubOf(o.id);
             const m = pub ? latestMeasurement(pub) : null;
             const r = reachInfo(o, pub, m);
+            const waiting = !pub && o.status==="delivered";
             return `<tr>
+              <td class="rowcheck">${waiting ? `<input type="checkbox" class="rep-row-check" data-id="${o.id}" ${UI.selectedPubIds.has(o.id)?'checked':''}>` : ""}</td>
               <td>#${o.id}</td>
               <td>${escapeHtml(o.blogger)}</td>
               <td>${fmtNum(o.followers)}</td>
@@ -1682,7 +1695,7 @@ function tplReport(){
                   : `<button class="btn btn-primary btn-sm rep-add-pub-btn" data-order="${o.id}">Отметить выложено</button>`}
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="18">Нет данных</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="19">Нет данных</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -1959,6 +1972,46 @@ function modalAddPublication(orderId){
       closeModal(); toast("Отмечено как выложено"); await DataManager.refresh();
       modalAddMeasurement(orderId, true);
     }catch(e){ toast(e.message, true); }
+  };
+}
+
+function modalBulkMarkPosted(orderIds){
+  if(!orderIds.length) return;
+  const orders = orderIds.map(id=>DataManager.find("orders", id)).filter(Boolean);
+  openModal(`
+    <h3>Отметить выложено · ${orders.length} блогер(ов)</h3>
+    <p style="color:var(--ink-soft);margin-bottom:8px">${orders.map(o=>escapeHtml(o.blogger)).join(", ")}</p>
+    <div class="form-row">
+      <div class="field"><label>Платформа</label><select id="m-platform">${PLATFORMS.map(p=>`<option>${p}</option>`).join("")}</select></div>
+      <div class="field"><label>Дата публикации</label><input id="m-date" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="field"><label>Категория блогера</label><select id="m-tier">${BLOGGER_TIERS.map(t=>`<option>${t}</option>`).join("")}</select></div>
+    </div>
+    <div class="login-hint" style="margin-top:6px">
+      Эти значения применятся ко всем выбранным. Ссылку и точные охваты/клики/продажи для отдельных публикаций
+      можно будет добавить позже через «+ Данные» в таблице.
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="m-cancel">Отмена</button>
+      <button class="btn btn-primary" id="m-save">Отметить выложено (${orders.length})</button>
+    </div>
+  `);
+  document.getElementById("m-cancel").onclick = closeModal;
+  document.getElementById("m-save").onclick = async ()=>{
+    const btn = document.getElementById("m-save");
+    const platform = document.getElementById("m-platform").value;
+    const publishedAt = document.getElementById("m-date").value;
+    const tier = document.getElementById("m-tier").value;
+    try{
+      await withBusy(btn, async ()=>{
+        for(const o of orders){
+          await Api.createPublication({ orderId: o.id, platform, link: "", publishedAt, tier, promoCode: "" });
+        }
+      });
+      closeModal();
+      toast(`Отмечено как выложено: ${orders.length}`);
+      UI.selectedPubIds.clear();
+      await DataManager.refresh(); render();
+    }catch(e){ toast(e.message, true); await DataManager.refresh(); render(); }
   };
 }
 
@@ -2514,6 +2567,25 @@ function wireDeskTab(){
     document.querySelectorAll(".rep-history-btn").forEach(btn=>{
       btn.onclick = ()=> modalPublicationHistory(parseInt(btn.dataset.order,10));
     });
+
+    const repCheckAll = document.getElementById("rep-check-all");
+    if(repCheckAll) repCheckAll.onchange = e=>{
+      document.querySelectorAll(".rep-row-check").forEach(cb=>{
+        cb.checked = e.target.checked;
+        const id = parseInt(cb.dataset.id,10);
+        if(e.target.checked) UI.selectedPubIds.add(id); else UI.selectedPubIds.delete(id);
+      });
+      renderDeskTab();
+    };
+    document.querySelectorAll(".rep-row-check").forEach(cb=>{
+      cb.onchange = ()=>{
+        const id = parseInt(cb.dataset.id,10);
+        if(cb.checked) UI.selectedPubIds.add(id); else UI.selectedPubIds.delete(id);
+        renderDeskTab();
+      };
+    });
+    const repBulkMark = document.getElementById("rep-bulk-mark-btn");
+    if(repBulkMark) repBulkMark.onclick = ()=> modalBulkMarkPosted([...UI.selectedPubIds]);
 
     document.getElementById("export-report-csv-btn").onclick = ()=>{
       const header = ["ID","Блогер","Подписчики","Проект","Город","Водитель","Статус доставки","Дата доставки","Платформа","Дата публикации","Охват","Оценка охвата","ER%","Клики","Продажи шт","Выручка","Bitrix"];
