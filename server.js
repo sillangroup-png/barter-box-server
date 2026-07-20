@@ -391,6 +391,9 @@ app.post("/api/geocode", requireAuth, async (req,res)=>{
 app.delete("/api/orders/:id", requireAuth, (req,res)=>{
   const id = +req.params.id;
   state.orders = state.orders.filter(o=>o.id!==id);
+  // без этого публикация (и её замеры охвата/продаж) остаётся "осиротевшей" в базе и
+  // продолжает попадать в сводки на дашборде, хотя сам заказ уже удалён.
+  state.publications = state.publications.filter(p=>p.orderId!==id);
   persist();
   res.json({ok:true});
 });
@@ -446,6 +449,9 @@ app.post("/api/orders/bulk-delete", requireAuth, (req,res)=>{
   const idSet = new Set(ids.map(Number));
   const before = state.orders.length;
   state.orders = state.orders.filter(o=>!idSet.has(o.id));
+  // та же причина, что и в одиночном удалении: без каскада публикации выбранных заказов
+  // остаются в базе и продолжают попадать в сводки на дашборде.
+  state.publications = state.publications.filter(p=>!idSet.has(p.orderId));
   persist();
   res.json({ok:true, count: before - state.orders.length});
 });
