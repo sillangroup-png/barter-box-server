@@ -497,7 +497,7 @@ app.post("/api/publications/:id/measurements", requireAuth, (req,res)=>{
   const b = req.body || {};
   const measurement = {
     id: nextMeasurementId(), date: b.date||"", views: b.views||0, likes: b.likes||0,
-    comments: b.comments||0, saves: b.saves||0, salesCount: b.salesCount||0,
+    comments: b.comments||0, saves: b.saves||0, clicks: b.clicks||0, salesCount: b.salesCount||0,
     salesRevenue: b.salesRevenue||0, note: b.note||"",
   };
   pub.measurements.push(measurement);
@@ -539,6 +539,7 @@ app.post("/api/publications/import", requireAuth, (req,res)=>{
         likes: parseInt(r["лайки"] || r["likes"] || 0, 10) || 0,
         comments: parseInt(r["комментарии"] || r["comments"] || 0, 10) || 0,
         saves: parseInt(r["сохранения"] || r["saves"] || 0, 10) || 0,
+        clicks: parseInt(r["клики"] || r["clicks"] || 0, 10) || 0,
         salesCount: parseInt(r["продажи"] || r["sales"] || 0, 10) || 0,
         salesRevenue: parseInt(r["выручка"] || r["revenue"] || 0, 10) || 0,
         note: r["комментарий"] || r["note"] || "",
