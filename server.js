@@ -92,7 +92,8 @@ function seedState(){
   ];
   const campaigns = [
     {id:1, name:"Barter-боксы / Июль / Топ-5 товаров", city:"Алматы + Астана", period:"Июль 2026",
-     responsible:"Сауле", boxType:"Уход премиум", plannedCount:500, stage:"В доставке", budget:1200000, costPerBox:1000},
+     responsible:"Сауле", boxType:"Уход премиум", plannedCount:500, stage:"В доставке", budget:1200000, costPerBox:1000,
+     realizationNumber:""},
   ];
   const now = new Date();
   const days = (n)=> new Date(now.getTime()+n*24*3600*1000);
@@ -322,6 +323,9 @@ app.post("/api/campaigns", requireAuth, (req,res)=>{
     id: nextId("campaigns"), name: b.name||"Без названия", city: b.city||"—", period: b.period||"—",
     responsible: b.responsible||"—", boxType: b.boxType||"", plannedCount: b.plannedCount||0,
     stage: b.stage || CAMPAIGN_STAGES[0], budget: b.budget||0, costPerBox: parseInt(b.costPerBox,10)||0,
+    // Номер реализации из 1С, по которой списывались товары этого проекта — не выводится
+    // в общий отчёт, нужен только чтобы найти проводку списания при сверке с бухгалтерией.
+    realizationNumber: b.realizationNumber || "",
   };
   state.campaigns.push(campaign);
   persist();
@@ -349,7 +353,9 @@ app.post("/api/orders", requireAuth, (req,res)=>{
     blogger: b.blogger||"", phone: b.phone||"", city: b.city||"—", address: b.address||"",
     box: b.box||"", comment: b.comment||"", followers: parseInt(b.followers,10)||0,
     logisticsCost: b.logisticsCost!=null ? (parseInt(b.logisticsCost,10)||0) : LOGISTICS_COST_DEFAULT,
-    status: b.driverCode ? "assigned" : "created", closureType: null, photo: null, driverComment: "",
+    // По умолчанию бартер закрывается реализацией (а не списанием) — так делается почти всегда,
+    // менеджер меняет вручную в редких случаях, когда нужно списание.
+    status: b.driverCode ? "assigned" : "created", closureType: "sale", photo: null, driverComment: "",
     assignedAt: b.driverCode ? new Date().toLocaleString("ru-RU") : null,
     deliveredAt: null, bitrixSynced: false,
   };
@@ -478,7 +484,7 @@ app.post("/api/orders/import", requireAuth, (req,res)=>{
       driverCode: validDriver, blogger, phone: r["телефон"] || r["phone"] || "",
       city: r["город"] || r["city"] || "—", address, box: r["бокс"] || r["box"] || "",
       followers, logisticsCost: LOGISTICS_COST_DEFAULT,
-      comment: "", status: validDriver ? "assigned" : "created", closureType: null, photo: null,
+      comment: "", status: validDriver ? "assigned" : "created", closureType: "sale", photo: null,
       driverComment: "", assignedAt: validDriver ? new Date().toLocaleString("ru-RU") : null,
       deliveredAt: null, bitrixSynced: false,
     });
