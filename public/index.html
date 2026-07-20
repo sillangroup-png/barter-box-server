@@ -1676,6 +1676,7 @@ function tplReport(){
       <div class="toolbar" id="rep-bulk-bar" style="${UI.selectedPubIds.size? '':'display:none'}">
         <span>${UI.selectedPubIds.size} выбрано</span>
         <button class="btn btn-primary btn-sm" id="rep-bulk-mark-btn">Отметить выложено</button>
+        <button class="btn btn-danger btn-sm" id="rep-bulk-delete-btn">Удалить выделенное</button>
       </div>` : "";
       })()}
       <div class="table-wrap"><table>
@@ -2647,6 +2648,16 @@ function wireDeskTab(){
     });
     const repBulkMark = document.getElementById("rep-bulk-mark-btn");
     if(repBulkMark) repBulkMark.onclick = ()=> modalBulkMarkPosted([...UI.selectedPubIds]);
+    const repBulkDelete = document.getElementById("rep-bulk-delete-btn");
+    if(repBulkDelete) repBulkDelete.onclick = async ()=>{
+      if(!confirm(`Удалить ${UI.selectedPubIds.size} блогеров из списка? Это удалит доставку и связанную публикацию/замеры, если они есть.`)) return;
+      try{
+        await Api.bulkDelete([...UI.selectedPubIds]);
+        UI.selectedPubIds.clear();
+        toast("Удалено");
+        await DataManager.refresh(); render();
+      }catch(e){ toast(e.message, true); }
+    };
 
     document.getElementById("export-report-csv-btn").onclick = ()=>{
       const header = ["ID","Блогер","Подписчики","Проект","Город","Водитель","Статус доставки","Дата доставки","Платформа","Дата публикации","Охват","Оценка охвата","ER%","Клики","Продажи шт","Выручка","Bitrix"];
