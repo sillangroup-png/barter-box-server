@@ -412,9 +412,9 @@ function erPercent(m){
 function fmtPercent(v){ return v==null ? "—" : v.toFixed(1)+"%"; }
 // Охват: если есть реальный замер просмотров — берём его. Если нет (блогер не поделился
 // статистикой в сторис), но заказ уже "доставлено" и публикация уже есть (т.е. блогер
-// точно выложил) — считаем оценку как 10% от подписчиков (наша активная аудитория).
+// точно выложил) — считаем оценку как 15% от подписчиков (наша активная аудитория).
 // До этого момента (не доставлено или ещё не опубликовано) оценка не считается вообще.
-const ACTIVE_AUDIENCE_RATE = 0.1;
+const ACTIVE_AUDIENCE_RATE = 0.15;
 function reachInfo(o, pub, m){
   if(m && m.views) return {value:m.views, estimated:false};
   if(o && pub && o.status==="delivered" && pub.publishedAt && o.followers){
@@ -423,7 +423,7 @@ function reachInfo(o, pub, m){
   return {value:0, estimated:false};
 }
 function reachBadge(r){
-  return r.estimated ? ` <span class="badge badge-plan" title="Оценка: 10% от подписчиков блогера — реальных просмотров нет">оценка</span>` : "";
+  return r.estimated ? ` <span class="badge badge-plan" title="Оценка: 15% от подписчиков блогера — реальных просмотров нет">оценка</span>` : "";
 }
 // Ячейка охвата/ER/кликов/продаж/выручки в таблицах: если публикация уже есть — значение
 // кликабельно и открывает то же окно ввода замера (с уже заполненными текущими значениями),
@@ -1055,7 +1055,7 @@ function tplDeliveries(){
       </div>
       <div class="login-hint" style="margin-bottom:12px">
         В шаблоне есть колонка «подписчики» — заполните её при загрузке базы блогеров, тогда после доставки и публикации
-        охват можно будет оценить (10% от подписчиков), даже если блогер не поделится просмотрами сторис.
+        охват можно будет оценить (15% от подписчиков), даже если блогер не поделится просмотрами сторис.
       </div>
       <div class="toolbar">
         <input type="search" class="fill" id="f-search" placeholder="Поиск: блогер, адрес, телефон" value="${escapeHtml(f.search)}">
@@ -1605,7 +1605,7 @@ function tplReport(){
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
-          <th>№</th><th>Блогер</th><th>Проект</th><th>Город</th><th>Водитель</th><th>Статус доставки</th><th>Статус публикации</th><th>Дата доставки</th>
+          <th>№</th><th>Блогер</th><th>Подписчики</th><th>Проект</th><th>Город</th><th>Водитель</th><th>Статус доставки</th><th>Статус публикации</th><th>Дата доставки</th>
           <th>Платформа</th><th>Дата публ.</th><th>Охват</th><th>ER</th><th>Клики</th><th>Продажи</th><th>Выручка</th><th>Bitrix</th><th></th>
         </tr></thead>
         <tbody>
@@ -1616,6 +1616,7 @@ function tplReport(){
             return `<tr>
               <td>#${o.id}</td>
               <td>${escapeHtml(o.blogger)}</td>
+              <td>${fmtNum(o.followers)}</td>
               <td>${escapeHtml(campaignName(o.campaignId))}</td>
               <td>${escapeHtml(o.city)}</td>
               <td>${escapeHtml(driverName(o.driverCode))}</td>
@@ -1637,7 +1638,7 @@ function tplReport(){
                   : `<button class="btn btn-primary btn-sm rep-add-pub-btn" data-order="${o.id}">Отметить выложено</button>`}
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="17">Нет данных</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="18">Нет данных</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -1817,7 +1818,7 @@ function modalAddPublication(orderId){
     </div>
     <div class="login-hint" style="margin-top:6px">
       Сторис часто не имеют ссылки (исчезают за 24 часа) — можно оставить поле пустым и просто отметить, что блогер выложил.
-      Если блогер не поделится просмотрами, охват оценим как 10% от подписчиков.
+      Если блогер не поделится просмотрами, охват оценим как 15% от подписчиков.
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="m-cancel">Отмена</button>
@@ -2397,14 +2398,14 @@ function wireDeskTab(){
     });
 
     document.getElementById("export-report-csv-btn").onclick = ()=>{
-      const header = ["ID","Блогер","Проект","Город","Водитель","Статус доставки","Дата доставки","Платформа","Дата публикации","Охват","Оценка охвата","ER%","Клики","Продажи шт","Выручка","Bitrix"];
+      const header = ["ID","Блогер","Подписчики","Проект","Город","Водитель","Статус доставки","Дата доставки","Платформа","Дата публикации","Охват","Оценка охвата","ER%","Клики","Продажи шт","Выручка","Bitrix"];
       const lines = [header.map(csvEscape).join(",")];
       DataManager.state.orders.forEach(o=>{
         const pub = pubOf(o.id); const m = pub ? latestMeasurement(pub) : null;
         const er = m ? erPercent(m) : null;
         const r = reachInfo(o, pub, m);
         lines.push([
-          o.id, o.blogger, campaignName(o.campaignId), o.city, driverName(o.driverCode),
+          o.id, o.blogger, o.followers||0, campaignName(o.campaignId), o.city, driverName(o.driverCode),
           (STATUS_META[o.status]||{}).label || o.status, o.deliveredAt || "",
           pub ? pub.platform : "", pub ? pub.publishedAt : "",
           r.value || "", r.estimated ? "да" : "нет", er!=null ? er.toFixed(1) : "",
@@ -2713,7 +2714,7 @@ async function runSelfTests(){
       DataManager.state.salesByDay = savedSales;
     }
   });
-  TestSuite.test("marketingSummary агрегирует суммарный охват по всем публикациям (факт + оценка 10%)", ()=>{
+  TestSuite.test("marketingSummary агрегирует суммарный охват по всем публикациям (факт + оценка 15%)", ()=>{
     const ms = marketingSummary();
     const manualTotal = DataManager.state.publications.reduce((s,p)=>{
       const o = DataManager.find("orders", p.orderId);
@@ -2722,11 +2723,11 @@ async function runSelfTests(){
     }, 0);
     if(ms.totalReach !== manualTotal) throw new Error("marketingSummary reach mismatch");
   });
-  TestSuite.test("reachInfo: оценка 10% только когда доставлено и опубликовано", ()=>{
+  TestSuite.test("reachInfo: оценка 15% только когда доставлено и опубликовано", ()=>{
     const realView = reachInfo({status:"delivered", followers:20000}, {publishedAt:"2026-01-01"}, {views:5000});
     if(realView.value!==5000 || realView.estimated!==false) throw new Error("реальный охват не должен подменяться оценкой");
     const est = reachInfo({status:"delivered", followers:20000}, {publishedAt:"2026-01-01"}, null);
-    if(est.value!==2000 || est.estimated!==true) throw new Error("оценка 10% рассчитана неверно: "+JSON.stringify(est));
+    if(est.value!==3000 || est.estimated!==true) throw new Error("оценка 15% рассчитана неверно: "+JSON.stringify(est));
     const notDelivered = reachInfo({status:"in_route", followers:20000}, {publishedAt:"2026-01-01"}, null);
     if(notDelivered.value!==0) throw new Error("оценка не должна считаться до статуса «доставлено»");
     const notPublished = reachInfo({status:"delivered", followers:20000}, null, null);
