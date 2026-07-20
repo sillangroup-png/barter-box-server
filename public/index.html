@@ -1060,7 +1060,7 @@ function tplCampaigns(){
     <div class="panel">
       <div class="panel-title">Бартер-проекты <button class="btn btn-primary btn-sm" id="new-campaign-btn">+ Новый проект</button></div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Название</th><th>Город</th><th>Период</th><th>Ответственный</th><th>Тип бокса</th><th>План, шт.</th><th>Себес/бокс</th><th>Расход</th><th>Этап</th><th>Доставок</th><th></th></tr></thead>
+        <thead><tr><th>Название</th><th>Город</th><th>Период</th><th>Ответственный</th><th>Тип бокса</th><th>План, шт.</th><th>Себес/бокс</th><th>Расход</th><th>№ реализации (1С)</th><th>Этап</th><th>Доставок</th><th></th></tr></thead>
         <tbody>
           ${campaigns.map(c=>{
             const exp = campaignExpense(c);
@@ -1073,11 +1073,12 @@ function tplCampaigns(){
               <td>${c.plannedCount}</td>
               <td><input type="number" class="camp-costbox" data-id="${c.id}" value="${c.costPerBox||0}" style="width:90px" title="Себестоимость одного бокса, ₸"></td>
               <td title="Боксы: ${fmtNum(exp.boxesCost)} ₸ (${fmtNum(c.costPerBox||0)} × ${exp.count} шт.) + Логистика: ${fmtNum(exp.logisticsCost)} ₸">${fmtNum(exp.total)} ₸</td>
+              <td><input type="text" class="camp-realization" data-id="${c.id}" value="${escapeHtml(c.realizationNumber||"")}" style="width:120px" placeholder="РЕАЛ-00123" title="Номер реализации из 1С, по которой списаны товары проекта"></td>
               <td><select class="camp-stage" data-id="${c.id}">${CAMPAIGN_STAGES.map(s=>`<option ${s===c.stage?'selected':''}>${s}</option>`).join("")}</select></td>
               <td>${exp.count}</td>
               <td><button class="btn btn-danger btn-sm del-campaign" data-id="${c.id}">Удалить</button></td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="11">Проектов пока нет</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="12">Проектов пока нет</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -1753,10 +1754,13 @@ function modalNewCampaign(){
       <div class="field"><label>Тип бокса</label><select id="m-box">${BOX_TYPES.map(b=>`<option>${b}</option>`).join("")}</select></div>
       <div class="field"><label>План, шт.</label><input id="m-count" type="number" value="100"></div>
       <div class="field"><label>Себестоимость 1 бокса, ₸</label><input id="m-costbox" type="number" value="0" placeholder="1000"></div>
+      <div class="field"><label>Номер реализации (1С)</label><input id="m-realization" placeholder="РЕАЛ-00123"></div>
     </div>
     <div class="login-hint" style="margin-top:6px">
       Общий расход по проекту посчитается сам: себестоимость × количество загруженных контактов (боксов),
       плюс логистика по каждой доставке (по умолчанию ${fmtNum(LOGISTICS_COST_DEFAULT)} ₸, можно поправить вручную).
+      Закрытие каждой доставки по умолчанию — «Реализация»; номер из 1С здесь нужен, чтобы потом понять,
+      по какой проводке списаны товары этого проекта (в общий отчёт не выводится, смотрите тут, в проекте).
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="m-cancel">Отмена</button>
@@ -1776,6 +1780,7 @@ function modalNewCampaign(){
         boxType: document.getElementById("m-box").value,
         plannedCount: parseInt(document.getElementById("m-count").value,10) || 0,
         costPerBox: parseInt(document.getElementById("m-costbox").value,10) || 0,
+        realizationNumber: document.getElementById("m-realization").value.trim(),
         stage: CAMPAIGN_STAGES[0], budget:0,
       }));
       closeModal(); toast("Проект создан"); await DataManager.refresh(); render();
@@ -2259,6 +2264,13 @@ function wireDeskTab(){
       inp.onchange = async ()=>{
         const costPerBox = parseInt(inp.value,10) || 0;
         try{ await Api.updateCampaign(parseInt(inp.dataset.id,10), {costPerBox}); await DataManager.refresh(); render(); }
+        catch(e){ toast(e.message, true); render(); }
+      };
+    });
+    document.querySelectorAll(".camp-realization").forEach(inp=>{
+      inp.onchange = async ()=>{
+        const realizationNumber = inp.value.trim();
+        try{ await Api.updateCampaign(parseInt(inp.dataset.id,10), {realizationNumber}); await DataManager.refresh(); render(); }
         catch(e){ toast(e.message, true); render(); }
       };
     });
@@ -3031,6 +3043,20 @@ async function runSelfTests(){
       // итого: 7000
       const total = totalExpense();
       if(total!==7000) throw new Error("итог расходов посчитан неверно: "+total);
+    } finally {
+      DataManager.state.campaigns = savedCampaigns;
+      DataManager.state.orders = savedOrders;
+    }
+  });
+  TestSuite.test("tplCampaigns отображает номер реализации проекта (для сверки с 1С, не в отчёте)", ()=>{
+    const savedCampaigns = DataManager.state.campaigns;
+    const savedOrders = DataManager.state.orders;
+    try{
+      DataManager.state.campaigns = [{id:9921, name:"Тест", city:"—", period:"—", responsible:"—", boxType:"", plannedCount:0, stage:CAMPAIGN_STAGES[0], costPerBox:0, realizationNumber:"РЕАЛ-00777"}];
+      DataManager.state.orders = [];
+      const html = tplCampaigns();
+      if(!html.includes("РЕАЛ-00777")) throw new Error("номер реализации не отрисован в таблице проектов");
+      if(!html.includes("№ реализации (1С)")) throw new Error("заголовок колонки отсутствует");
     } finally {
       DataManager.state.campaigns = savedCampaigns;
       DataManager.state.orders = savedOrders;
