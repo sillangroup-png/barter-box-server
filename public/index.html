@@ -2363,6 +2363,10 @@ function tplMicroInfluencers(){
   if(mf.paymentStatus){
     deals = deals.filter(d=> d.paymentStatus===mf.paymentStatus);
   }
+  // Вклад в продажи/ROMI посчитаны в microInfluencerSummary() через romiRows — раскладываем
+  // по id сделки, чтобы показать в таблице рядом с каждой интеграцией (как в "Инфлюенс интеграции крупные").
+  const romiById = {};
+  s.romiRows.forEach(r=>{ romiById[r.deal.id] = r; });
   const sorters = {
     cost_desc: (a,b)=> (b.cost||0)-(a.cost||0),
     cost_asc: (a,b)=> (a.cost||0)-(b.cost||0),
@@ -2370,6 +2374,16 @@ function tplMicroInfluencers(){
     reach_asc: (a,b)=> microDealFactReach(a)-microDealFactReach(b),
     cpv_desc: (a,b)=> (microDealCpv(b)==null?-Infinity:microDealCpv(b))-(microDealCpv(a)==null?-Infinity:microDealCpv(a)),
     cpv_asc: (a,b)=> (microDealCpv(a)==null?Infinity:microDealCpv(a))-(microDealCpv(b)==null?Infinity:microDealCpv(b)),
+    sales_desc: (a,b)=> ((romiById[b.id]||{}).netContribution||0)-((romiById[a.id]||{}).netContribution||0),
+    sales_asc: (a,b)=> ((romiById[a.id]||{}).netContribution||0)-((romiById[b.id]||{}).netContribution||0),
+    romi_desc: (a,b)=> {
+      const av=(romiById[a.id]||{}).romi, bv=(romiById[b.id]||{}).romi;
+      return (bv==null?-Infinity:bv)-(av==null?-Infinity:av);
+    },
+    romi_asc: (a,b)=> {
+      const av=(romiById[a.id]||{}).romi, bv=(romiById[b.id]||{}).romi;
+      return (av==null?Infinity:av)-(bv==null?Infinity:bv);
+    },
   };
   if(sorters[mf.sort]) deals = deals.slice().sort(sorters[mf.sort]);
 
@@ -2396,8 +2410,9 @@ function tplMicroInfluencers(){
         </div>
       </div>
       <div class="login-hint" style="margin-bottom:12px">
-        Для мелких и средних блогеров ROMI по продажам не считаем (слишком много размещений
-        одновременно — атрибуция по товару была бы шумной). Вместо этого — CPV = сумма / факт.охват
+        «Вклад в продажи» и ROMI считаются только там, где у интеграции указан ШК товара —
+        по нему сопоставляем с продажами из 1С (импорт по вторникам) и раскладываем прирост
+        между интеграциями, вышедшими за 0-2 дня до продажи. Без ШК — только CPV = сумма / факт.охват
         (Reels + TikTok кросспостинг).
       </div>
       <div class="toolbar" style="margin-bottom:12px">
@@ -2414,18 +2429,25 @@ function tplMicroInfluencers(){
           <option value="reach_asc" ${mf.sort==='reach_asc'?'selected':''}>Факт.охват: сначала меньше</option>
           <option value="cpv_desc" ${mf.sort==='cpv_desc'?'selected':''}>CPV: сначала больше</option>
           <option value="cpv_asc" ${mf.sort==='cpv_asc'?'selected':''}>CPV: сначала меньше</option>
+          <option value="sales_desc" ${mf.sort==='sales_desc'?'selected':''}>Вклад в продажи: сначала больше</option>
+          <option value="sales_asc" ${mf.sort==='sales_asc'?'selected':''}>Вклад в продажи: сначала меньше</option>
+          <option value="romi_desc" ${mf.sort==='romi_desc'?'selected':''}>ROMI: сначала больше</option>
+          <option value="romi_asc" ${mf.sort==='romi_asc'?'selected':''}>ROMI: сначала меньше</option>
         </select>
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
           <th>Блогер</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
           <th>Сумма</th><th>Статус оплаты</th><th>Факт.охват</th><th>CPV</th>
+          <th>Вклад в продажи</th><th>ROMI</th>
           <th>Статус товара</th><th>Статус видео</th><th>Дата выкладки</th><th></th>
         </tr></thead>
         <tbody>
           ${deals.map(d=>{
             const factReach = microDealFactReach(d);
             const cpv = microDealCpv(d);
+            const r = romiById[d.id];
+            const hasBaseline = r && r.hasBaseline;
             return `<tr>
               <td><b>${escapeHtml(d.blogerName)}</b>${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
               <td>${d.instagramAccount?`<a href="${escapeHtml(d.instagramAccount)}" target="_blank" rel="noopener">IG</a> ${fmtNum(d.followers)}`:"—"}</td>
@@ -2436,6 +2458,8 @@ function tplMicroInfluencers(){
               <td>${escapeHtml(d.paymentStatus||"—")}</td>
               <td>${fmtNum(factReach)}</td>
               <td>${cpv==null?"—":cpv.toFixed(3)+" ₸"}</td>
+              <td>${!d.barcode ? '<span style="color:var(--ink-mute)">нет ШК</span>' : (hasBaseline ? fmtNum(r.netContribution)+" ₸" : '<span style="color:var(--ink-mute)">—</span>')}</td>
+              <td>${(r && r.romi!=null) ? r.romi.toFixed(2) : "—"}</td>
               <td>${escapeHtml(d.productStatus||"—")}</td>
               <td>${escapeHtml(d.videoStatus||"—")}</td>
               <td>${escapeHtml(d.publishDate||"—")}</td>
@@ -2444,7 +2468,7 @@ function tplMicroInfluencers(){
                 <button class="btn btn-danger btn-sm del-micro-btn" data-id="${d.id}">✕</button>
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="13">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="15">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -4191,6 +4215,31 @@ async function runSelfTests(){
       if(!html.includes("new-micro-btn")) throw new Error("должна быть кнопка добавления интеграции");
     } finally {
       DataManager.state.microInfluencerDeals = saved;
+      UI.microFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("tplMicroInfluencers показывает Вклад в продажи и ROMI по ШК, и 'нет ШК' без него", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedSales = DataManager.state.salesByDay;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9962, blogerName:"Блогер С ШК", cost:10000, factReachReels:3000, factReachTT:0, product:"Черри", barcode:"4620400204820", publishDate:"2026-07-10"},
+        {id:9963, blogerName:"Блогер Без ШК", cost:5000, factReachReels:1000, factReachTT:0, product:"Другой товар", barcode:"", publishDate:"2026-07-10"},
+      ];
+      DataManager.state.salesByDay = [
+        {date:"2026-07-01", product:"Черри", revenue:1000},
+        {date:"2026-07-02", product:"Черри", revenue:1000},
+        {date:"2026-07-10", product:"Черри", revenue:5000},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      const html = tplMicroInfluencers();
+      if(!html.includes("Вклад в продажи")) throw new Error("должен быть заголовок колонки 'Вклад в продажи'");
+      if(!html.includes(">ROMI<")) throw new Error("должен быть заголовок колонки ROMI");
+      if(!html.includes("нет ШК")) throw new Error("для интеграции без ШК должна быть пометка 'нет ШК'");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+      DataManager.state.salesByDay = savedSales;
       UI.microFilter = JSON.parse(savedFilter);
     }
   });
