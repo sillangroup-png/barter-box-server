@@ -485,6 +485,22 @@ function inDateRange(dateStr, from, to){
 function latestMeasurement(pub){
   return (pub && pub.measurements && pub.measurements.length) ? pub.measurements[pub.measurements.length-1] : null;
 }
+// Быстрые пресеты периода для фильтра "по неделе / по конкретной дате" на дашборде маркетолога.
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function weekRangeStr(){
+  const now = new Date();
+  const day = now.getDay(); // 0=вс,1=пн...6=сб
+  const diffToMonday = day===0 ? -6 : 1-day;
+  const monday = new Date(now); monday.setDate(now.getDate()+diffToMonday);
+  const sunday = new Date(monday); sunday.setDate(monday.getDate()+6);
+  return {from: monday.toISOString().slice(0,10), to: sunday.toISOString().slice(0,10)};
+}
+function monthRangeStr(){
+  const now = new Date();
+  const first = new Date(now.getFullYear(), now.getMonth(), 1);
+  const last = new Date(now.getFullYear(), now.getMonth()+1, 0);
+  return {from: first.toISOString().slice(0,10), to: last.toISOString().slice(0,10)};
+}
 function erPercent(m){
   if(!m || !m.views) return null;
   return ((m.likes||0)+(m.comments||0)) / m.views * 100;
@@ -513,13 +529,16 @@ function editableMeasureCell(pub, orderId, content){
   if(!pub) return content;
   return `<button class="link-btn rep-add-measure-btn" data-order="${orderId}" title="Изменить охват/ER/клики/продажи">${content}</button>`;
 }
-function marketingSummary(){
+// from/to (необязательные, "YYYY-MM-DD") — фильтр периода по дате публикации (для дашборда
+// маркетолога с выбором диапазона/недели/конкретной даты). Без периода — вся история, как раньше.
+function marketingSummary(from, to){
   const {orders} = DataManager.state;
   // защита от "осиротевших" публикаций: если заказ был удалён (одиночно или массово) до того,
   // как сервер стал каскадно чистить его публикации, они могли остаться в базе и продолжать
   // попадать в сводку, хотя самого заказа уже нет — отсекаем такие на всякий случай и здесь.
   const orderIds = new Set(orders.map(o=>o.id));
-  const publications = DataManager.state.publications.filter(p=>orderIds.has(p.orderId));
+  let publications = DataManager.state.publications.filter(p=>orderIds.has(p.orderId));
+  if(from || to) publications = publications.filter(p=>inDateRange(p.publishedAt, from, to));
   const withM = publications.map(p=>({p, m: latestMeasurement(p)})).filter(x=>x.m);
   const totalSales   = withM.reduce((s,x)=>s+(x.m.salesCount||0),0);
   const totalRevenue = withM.reduce((s,x)=>s+(x.m.salesRevenue||0),0);
@@ -699,8 +718,11 @@ function computeInfluencerRomi(){
     return {deal:d, netContribution, romi, hasBaseline};
   });
 }
-function influencerSummary(){
-  const rows = computeInfluencerRomi();
+// from/to — тот же необязательный фильтр периода, что и в marketingSummary; фильтрует по
+// дате интеграции (inflDealDate: факт публикации, а если его нет — план).
+function influencerSummary(from, to){
+  let rows = computeInfluencerRomi();
+  if(from || to) rows = rows.filter(r=>inDateRange(inflDealDate(r.deal), from, to));
   const totalCost = rows.reduce((s,r)=>s+(r.deal.cost||0),0);
   const plannedCost = rows.reduce((s,r)=>s+(r.deal.plannedCost||0),0);
   const totalReach = rows.reduce((s,r)=>s+(r.deal.reach||0),0);
@@ -986,6 +1008,7 @@ const UI = {
   inflDashMonth: "", // выбранный месяц в новом стилизованном дашборде "Платный инфлюенс" (см. tplInfluencerBrandDashboard)
   inflCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
   inflTopFilter: {from:"", to:""},
+  dashPeriod: {from:"", to:""}, // фильтр по периоду на главном дашборде маркетолога (диапазон/неделя/конкретная дата)
   selectedOrderIds: new Set(),
   selectedPubIds: new Set(),
   openOrderId: null, driverAwaiting: null, driverReasonCode: null,
@@ -1242,17 +1265,42 @@ function tplDashboard(){
 }
 
 /* ---------- Дашборд маркетолога ---------- */
+// Тулбар периода наверху дашборда: диапазон дат (свои "с"/"по"), либо быстрые пресеты —
+// сегодня / эта неделя / этот месяц. Фильтрует все блоки ниже (охваты/продажи/инфлюенс/топ-3)
+// по дате публикации; "На доставке" и "Доставлено, но нет публикации" — это текущее состояние
+// очереди, а не история, поэтому период на них не влияет.
+function tplDashPeriodPicker(){
+  const f = UI.dashPeriod;
+  const wk = weekRangeStr(), mo = monthRangeStr(), td = todayStr();
+  const isActive = (from,to)=> f.from===from && f.to===to;
+  return `
+    <div class="toolbar" style="gap:8px;margin-bottom:12px">
+      <span style="align-self:center;color:var(--ink-mute);font-size:12px">Период</span>
+      <input type="date" id="dash-period-from" value="${f.from}">
+      <span style="align-self:center;color:var(--ink-mute);font-size:12px">—</span>
+      <input type="date" id="dash-period-to" value="${f.to}">
+      <button class="btn btn-sm ${isActive(td,td)?'btn-primary':'btn-ghost'}" id="dash-period-today">Сегодня</button>
+      <button class="btn btn-sm ${isActive(wk.from,wk.to)?'btn-primary':'btn-ghost'}" id="dash-period-week">Эта неделя</button>
+      <button class="btn btn-sm ${isActive(mo.from,mo.to)?'btn-primary':'btn-ghost'}" id="dash-period-month">Этот месяц</button>
+      ${(f.from || f.to) ? `<button class="btn btn-ghost btn-sm" id="dash-period-clear">Весь период</button>` : ""}
+    </div>
+  `;
+}
 function tplMarketerDashboard(){
   const {publications} = DataManager.state;
-  const ms = marketingSummary();
-  const ranked = publications.map(p=>{
-    const o = DataManager.find("orders", p.orderId);
-    const m = latestMeasurement(p);
-    const r = o ? reachInfo(o, p, m) : {value:0, estimated:false};
-    return {p, o, m, r};
-  }).filter(x=>x.o && (x.m || x.r.value>0)).sort((a,b)=>b.r.value-a.r.value).slice(0,3);
+  const f = UI.dashPeriod;
+  const ms = marketingSummary(f.from, f.to);
+  const ranked = publications
+    .filter(p=>!(f.from||f.to) || inDateRange(p.publishedAt, f.from, f.to))
+    .map(p=>{
+      const o = DataManager.find("orders", p.orderId);
+      const m = latestMeasurement(p);
+      const r = o ? reachInfo(o, p, m) : {value:0, estimated:false};
+      return {p, o, m, r};
+    }).filter(x=>x.o && (x.m || x.r.value>0)).sort((a,b)=>b.r.value-a.r.value).slice(0,3);
   return `
     <div class="panel-title">Бартерные рассылки</div>
+    ${tplDashPeriodPicker()}
     <div class="grid-kpi">
       <div class="kpi"><div class="num">${ms.onDelivery}</div><div class="lbl">На доставке</div></div>
       <div class="kpi"><div class="num">${ms.pubCount}</div><div class="lbl">Публикаций зафиксировано</div></div>
@@ -1263,7 +1311,7 @@ function tplMarketerDashboard(){
       <div class="kpi ok"><div class="num">${fmtNum(ms.totalRevenue)} ₸</div><div class="lbl">Выручка по промокодам</div></div>
     </div>
 
-    ${tplInfluencerDashboardBlock()}
+    ${tplInfluencerDashboardBlock(f.from, f.to)}
 
     <div class="panel">
       <div class="panel-title">Топ-3 блогера по охвату</div>
@@ -1274,7 +1322,7 @@ function tplMarketerDashboard(){
             <td>${i+1}</td><td>${escapeHtml(x.o.blogger)}</td><td>${escapeHtml(x.p.platform)}</td>
             <td>${x.r.value?fmtNum(x.r.value)+reachBadge(x.r):"—"}</td><td>${x.m?fmtPercent(erPercent(x.m)):"—"}</td>
             <td>${x.m?(x.m.salesCount||0)+" шт · "+fmtNum(x.m.salesRevenue)+" ₸":"—"}</td>
-          </tr>`).join("") || `<tr><td class="empty" colspan="6">Пока нет данных — добавьте публикации во вкладке «Публикации и охваты»</td></tr>`}
+          </tr>`).join("") || `<tr><td class="empty" colspan="6">${(f.from||f.to)?"Нет данных за выбранный период":"Пока нет данных — добавьте публикации во вкладке «Публикации и охваты»"}</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -1290,9 +1338,12 @@ function tplMarketerDashboard(){
 }
 
 /* ---------- Блок «Инфлюенс интеграции крупные» (общий, на оба дашборда) ---------- */
-function tplInfluencerDashboardBlock(){
-  const s = influencerSummary();
-  if(!s.count) return "";
+function tplInfluencerDashboardBlock(from, to){
+  const s = influencerSummary(from, to);
+  if(!s.count){
+    if(from || to) return `<div class="panel"><div class="panel-title">Инфлюенс интеграции крупные</div><div class="empty">Нет интеграций за выбранный период</div></div>`;
+    return "";
+  }
   return `
     <div class="panel">
       <div class="panel-title">Инфлюенс интеграции крупные
@@ -2549,7 +2600,22 @@ function modalSale(){
    9. ОБРАБОТЧИКИ ВКЛАДОК
    ========================================================================= */
 function wireDeskTab(){
-  if(UI.tab==="campaigns"){
+  if(UI.tab==="dashboard" && UI.role==="marketer"){
+    const dpFrom = document.getElementById("dash-period-from");
+    if(dpFrom) dpFrom.onchange = e=>{ UI.dashPeriod.from = e.target.value; renderDeskTab(); };
+    const dpTo = document.getElementById("dash-period-to");
+    if(dpTo) dpTo.onchange = e=>{ UI.dashPeriod.to = e.target.value; renderDeskTab(); };
+    const dpToday = document.getElementById("dash-period-today");
+    if(dpToday) dpToday.onclick = ()=>{ const d=todayStr(); UI.dashPeriod = {from:d, to:d}; renderDeskTab(); };
+    const dpWeek = document.getElementById("dash-period-week");
+    if(dpWeek) dpWeek.onclick = ()=>{ UI.dashPeriod = weekRangeStr(); renderDeskTab(); };
+    const dpMonth = document.getElementById("dash-period-month");
+    if(dpMonth) dpMonth.onclick = ()=>{ UI.dashPeriod = monthRangeStr(); renderDeskTab(); };
+    const dpClear = document.getElementById("dash-period-clear");
+    if(dpClear) dpClear.onclick = ()=>{ UI.dashPeriod = {from:"", to:""}; renderDeskTab(); };
+  }
+
+  else if(UI.tab==="campaigns"){
     document.getElementById("new-campaign-btn").onclick = modalNewCampaign;
     document.querySelectorAll(".camp-name-link").forEach(btn=>{
       btn.onclick = ()=>{
@@ -3327,6 +3393,63 @@ async function runSelfTests(){
       return s + reachInfo(o, p, m).value;
     }, 0);
     if(ms.totalReach !== manualTotal) throw new Error("marketingSummary reach mismatch");
+  });
+  TestSuite.test("marketingSummary(from,to) фильтрует публикации по дате (для периода на дашборде маркетолога)", ()=>{
+    const savedOrders = DataManager.state.orders;
+    const savedPubs = DataManager.state.publications;
+    try{
+      DataManager.state.orders = [{id:9910, blogger:"@a", status:"delivered", followers:1000}, {id:9911, blogger:"@b", status:"delivered", followers:1000}];
+      DataManager.state.publications = [
+        {id:9920, orderId:9910, publishedAt:"2026-07-01", measurements:[{views:100, salesCount:1, salesRevenue:5000}]},
+        {id:9921, orderId:9911, publishedAt:"2026-07-15", measurements:[{views:200, salesCount:2, salesRevenue:9000}]},
+      ];
+      const all = marketingSummary();
+      if(all.totalRevenue !== 14000) throw new Error("без периода должны учитываться обе публикации: "+all.totalRevenue);
+      const july1 = marketingSummary("2026-07-01","2026-07-01");
+      if(july1.totalRevenue !== 5000 || july1.pubCount !== 1) throw new Error("период 07-01 должен взять только первую публикацию: "+JSON.stringify(july1));
+      const range = marketingSummary("2026-07-10","2026-07-20");
+      if(range.totalRevenue !== 9000 || range.pubCount !== 1) throw new Error("диапазон 07-10..07-20 должен взять только вторую публикацию: "+JSON.stringify(range));
+    } finally {
+      DataManager.state.orders = savedOrders;
+      DataManager.state.publications = savedPubs;
+    }
+  });
+  TestSuite.test("influencerSummary(from,to) фильтрует интеграции по дате публикации/плана", ()=>{
+    const saved = DataManager.state.influencerDeals;
+    const savedSales = DataManager.state.salesByDay;
+    try{
+      DataManager.state.influencerDeals = [
+        {id:9930, blogerLogin:"@x", product:"Товар А", cost:1000, publishedDate:"2026-07-01", plannedDate:"2026-07-01"},
+        {id:9931, blogerLogin:"@y", product:"Товар Б", cost:2000, publishedDate:"2026-07-15", plannedDate:"2026-07-15"},
+      ];
+      DataManager.state.salesByDay = [];
+      const all = influencerSummary();
+      if(all.count !== 2) throw new Error("без периода должны учитываться обе интеграции: "+all.count);
+      const july1 = influencerSummary("2026-07-01","2026-07-01");
+      if(july1.count !== 1 || july1.totalCost !== 1000) throw new Error("период 07-01 должен взять только первую интеграцию: "+JSON.stringify(july1));
+    } finally {
+      DataManager.state.influencerDeals = saved;
+      DataManager.state.salesByDay = savedSales;
+    }
+  });
+  TestSuite.test("weekRangeStr/monthRangeStr возвращают корректный диапазон, включающий сегодня", ()=>{
+    const wk = weekRangeStr(), mo = monthRangeStr(), td = todayStr();
+    if(!(wk.from <= td && td <= wk.to)) throw new Error("сегодня должно попадать в диапазон недели: "+JSON.stringify(wk)+" today="+td);
+    if(!(mo.from <= td && td <= mo.to)) throw new Error("сегодня должно попадать в диапазон месяца: "+JSON.stringify(mo)+" today="+td);
+  });
+  TestSuite.test("tplDashPeriodPicker рисует поля периода и пресеты", ()=>{
+    const saved = UI.dashPeriod;
+    try{
+      UI.dashPeriod = {from:"", to:""};
+      const html = tplDashPeriodPicker();
+      if(!html.includes('id="dash-period-from"') || !html.includes('id="dash-period-to"')) throw new Error("нет полей диапазона дат");
+      if(!html.includes("Сегодня") || !html.includes("Эта неделя") || !html.includes("Этот месяц")) throw new Error("нет кнопок-пресетов");
+      if(html.includes("dash-period-clear")) throw new Error("кнопка сброса не должна показываться, пока период не выбран");
+      UI.dashPeriod = {from:"2026-07-01", to:"2026-07-01"};
+      if(!tplDashPeriodPicker().includes("dash-period-clear")) throw new Error("кнопка сброса должна появиться при выбранном периоде");
+    } finally {
+      UI.dashPeriod = saved;
+    }
   });
   TestSuite.test("campaignExpense считает себестоимость боксов + логистику по доставкам проекта", ()=>{
     const savedCampaigns = DataManager.state.campaigns;
