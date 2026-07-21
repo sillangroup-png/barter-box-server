@@ -225,6 +225,11 @@ const LOGISTICS_COST_DEFAULT = 1500;
 const PLATFORMS = ["Instagram Reels","Instagram Stories","TikTok","YouTube Shorts","Отзыв / пост"];
 const BLOGGER_TIERS = ["Малый (эффект 1–7 дней)","Крупный (эффект 2–3 недели)"];
 const DEAL_STATUSES = ["Запланирована","Опубликована","Оплачена","Закрыта"];
+// Инфлюенс интеграции микро/средние (отв. Нина) — платные размещения у мелких/средних блогеров,
+// обычно Instagram Reels + TikTok кросспостингом за одну сумму. Без ROMI по продажам (см. server.js).
+const MICRO_PAYMENT_STATUSES = ["не оплачено","к оплате","оплачено"];
+const MICRO_PRODUCT_STATUSES = ["товар заказан","товар доставлен"];
+const MICRO_VIDEO_STATUSES = ["не опубликовано","опубликовано"];
 // Акцентный цвет только для стилизованного дашборда "Платный инфлюенс" (не трогает остальной интерфейс).
 const INFL_BRAND = "#d6336c";
 const INFL_BRAND_LIGHT = "#f9d7e6";
@@ -310,6 +315,11 @@ const Api = {
   saveSale: (s)=> apiFetch("/api/sales", {method:"POST", headers:jsonHeaders, body:JSON.stringify(s)}),
   deleteSale: (id)=> apiFetch("/api/sales/"+id, {method:"DELETE"}),
   importSales: (rows)=> apiFetch("/api/sales/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
+
+  createMicroDeal: (d)=> apiFetch("/api/micro-influencer-deals", {method:"POST", headers:jsonHeaders, body:JSON.stringify(d)}),
+  updateMicroDeal: (id, changes)=> apiFetch("/api/micro-influencer-deals/"+id, {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
+  deleteMicroDeal: (id)=> apiFetch("/api/micro-influencer-deals/"+id, {method:"DELETE"}),
+  importMicroDeals: (rows)=> apiFetch("/api/micro-influencer-deals/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
 };
 
 /* =========================================================================
@@ -318,7 +328,7 @@ const Api = {
    ОТКУДА берутся данные и КАК они изменяются)
    ========================================================================= */
 const DataManager = {
-  state: {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[]},
+  state: {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[], microInfluencerDeals:[]},
   async load(){ this.state = await Api.getState(); return this.state; },
   async refresh(){ this.state = await Api.getState(); return this.state; },
   find(collection, id){ return this.state[collection].find(i=> (i.id===id) || (i.code===id)); },
@@ -742,6 +752,29 @@ function influencerSummary(from, to){
 }
 // Агрегация по блогеру для рейтингов «Топ блогеров» среди платных инфлюенс-интеграций
 // (используется только база influencerDeals — крупные платные интеграции, не бартерные рассылки).
+// ---------- Инфлюенс интеграции микро/средние (отв. Нина) ----------
+// Без ROMI по продажам (см. комментарий у server.js): для каждой интеграции считаем только
+// факт.охват (Reels+TikTok) и CPV = сумма/факт.охват. from/to — необязательный фильтр периода
+// по дате выкладки (тот же паттерн, что и в marketingSummary/influencerSummary).
+function microDealFactReach(d){ return (d.factReachReels||0) + (d.factReachTT||0); }
+function microDealAvgReach(d){ return (d.avgReach||0) + (d.avgReachTT||0); }
+function microDealCpv(d){
+  const reach = microDealFactReach(d);
+  return (d.cost>0 && reach>0) ? d.cost/reach : null;
+}
+function microInfluencerSummary(from, to){
+  let deals = DataManager.state.microInfluencerDeals;
+  if(from || to) deals = deals.filter(d=>inDateRange(d.publishDate, from, to));
+  const totalCost = deals.reduce((s,d)=>s+(d.cost||0),0);
+  const totalFactReach = deals.reduce((s,d)=>s+microDealFactReach(d),0);
+  const totalAvgReach = deals.reduce((s,d)=>s+microDealAvgReach(d),0);
+  const paidCount = deals.filter(d=>d.paymentStatus==="оплачено").length;
+  const unpaidCount = deals.filter(d=>d.paymentStatus==="не оплачено").length;
+  const toPayCount = deals.filter(d=>d.paymentStatus==="к оплате").length;
+  const publishedCount = deals.filter(d=>d.videoStatus==="опубликовано").length;
+  const avgCpv = (totalCost>0 && totalFactReach>0) ? totalCost/totalFactReach : null;
+  return {deals, totalCost, totalFactReach, totalAvgReach, paidCount, unpaidCount, toPayCount, publishedCount, avgCpv, count: deals.length};
+}
 function influencerBloggerAgg(rows){
   const map = {};
   rows.forEach(r=>{
@@ -1005,6 +1038,7 @@ const UI = {
   filters: {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""},
   topSort: "views",
   inflFilter: {search:"", sort:"default", month:""},
+  microFilter: {search:"", sort:"default", paymentStatus:""},
   inflDashMonth: "", // выбранный месяц в новом стилизованном дашборде "Платный инфлюенс" (см. tplInfluencerBrandDashboard)
   inflCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
   inflTopFilter: {from:"", to:""},
@@ -1144,6 +1178,7 @@ const MARKETER_TABS = [
   {id:"dashboard",        label:"Дашборд"},
   {id:"publications",     label:"Публикации и охваты"},
   {id:"influencerDeals",  label:"Инфлюенс интеграции крупные"},
+  {id:"microInfluencers", label:"Инфлюенс интеграции микро/средние"},
   {id:"report",           label:"Сводный отчёт"},
 ];
 function tabsForRole(){ return UI.role==="marketer" ? MARKETER_TABS : MANAGER_TABS; }
@@ -1191,6 +1226,7 @@ function renderDeskTab(){
   else if(UI.tab==="publications") main.innerHTML = tplPublications();
   else if(UI.tab==="topBloggers") main.innerHTML = tplTopBloggers();
   else if(UI.tab==="influencerDeals") main.innerHTML = tplInfluencerDeals();
+  else if(UI.tab==="microInfluencers") main.innerHTML = tplMicroInfluencers();
   else if(UI.tab==="report") main.innerHTML = tplReport();
   wireDeskTab();
 }
@@ -1303,6 +1339,8 @@ function tplMarketerDashboard(){
 
     ${tplInfluencerDashboardBlock(f.from, f.to)}
 
+    ${tplMicroInfluencerDashboardBlock(f.from, f.to)}
+
     ${ms.gap.length ? `
     <div class="panel">
       <div class="panel-title">⚠️ Доставлены, но ещё не опубликовали</div>
@@ -1334,6 +1372,29 @@ function tplInfluencerDashboardBlock(from, to){
         <div class="kpi ok"><div class="num">${fmtNum(s.totalSalesContribution)} ₸</div><div class="lbl">Продажи, факт (вклад)</div></div>
         <div class="kpi ${s.avgRomi==null?'':(s.avgRomi>=1?'ok':'warn')}"><div class="num">${s.avgRomi==null?'—':s.avgRomi.toFixed(2)}</div><div class="lbl">Средний ROMI</div></div>
         <div class="kpi"><div class="num" style="font-size:14px">${s.top?escapeHtml(s.top.deal.blogerLogin):'—'}</div><div class="lbl">Лучший ROMI${s.top?` (${s.top.romi.toFixed(2)})`:''}</div></div>
+      </div>
+    </div>
+  `;
+}
+
+/* ---------- Блок «Инфлюенс интеграции микро/средние» (общий, на оба дашборда) ---------- */
+function tplMicroInfluencerDashboardBlock(from, to){
+  const s = microInfluencerSummary(from, to);
+  if(!s.count){
+    if(from || to) return `<div class="panel"><div class="panel-title">Инфлюенс интеграции микро/средние</div><div class="empty">Нет интеграций за выбранный период</div></div>`;
+    return "";
+  }
+  return `
+    <div class="panel">
+      <div class="panel-title">Инфлюенс интеграции микро/средние
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">отв. Нина · детали — вкладка «Инфлюенс интеграции микро/средние»</span>
+      </div>
+      <div class="grid-kpi" style="margin-bottom:0">
+        <div class="kpi"><div class="num">${s.count}</div><div class="lbl">Интеграций</div></div>
+        <div class="kpi bad"><div class="num">${fmtNum(s.totalCost)} ₸</div><div class="lbl">Расход (${s.paidCount} оплачено, ${s.toPayCount} к оплате, ${s.unpaidCount} не оплачено)</div></div>
+        <div class="kpi ok"><div class="num">${fmtNum(s.totalFactReach)}</div><div class="lbl">Факт.охват (Reels+TikTok)</div></div>
+        <div class="kpi"><div class="num">${s.avgCpv==null?'—':s.avgCpv.toFixed(3)+' ₸'}</div><div class="lbl">Средний CPV</div></div>
+        <div class="kpi"><div class="num">${s.publishedCount}</div><div class="lbl">Опубликовано (план ${s.count})</div></div>
       </div>
     </div>
   `;
@@ -1902,6 +1963,103 @@ function tplInfluencerDeals(){
         </tbody>
       </table></div>
       ${salesByDay.length>30 ? `<div style="margin-top:8px;color:var(--ink-mute);font-size:11.5px">Показаны последние 30 записей из ${salesByDay.length}</div>` : ""}
+    </div>
+  `;
+}
+
+/* ---------- Инфлюенс интеграции микро/средние (отв. Нина) ---------- */
+function tplMicroInfluencers(){
+  const s = microInfluencerSummary();
+  const mf = UI.microFilter;
+  let deals = s.deals;
+  if(mf.search){
+    const q = mf.search.toLowerCase();
+    deals = deals.filter(d=> (d.blogerName||"").toLowerCase().includes(q) || (d.product||"").toLowerCase().includes(q));
+  }
+  if(mf.paymentStatus){
+    deals = deals.filter(d=> d.paymentStatus===mf.paymentStatus);
+  }
+  const sorters = {
+    cost_desc: (a,b)=> (b.cost||0)-(a.cost||0),
+    cost_asc: (a,b)=> (a.cost||0)-(b.cost||0),
+    reach_desc: (a,b)=> microDealFactReach(b)-microDealFactReach(a),
+    reach_asc: (a,b)=> microDealFactReach(a)-microDealFactReach(b),
+    cpv_desc: (a,b)=> (microDealCpv(b)==null?-Infinity:microDealCpv(b))-(microDealCpv(a)==null?-Infinity:microDealCpv(a)),
+    cpv_asc: (a,b)=> (microDealCpv(a)==null?Infinity:microDealCpv(a))-(microDealCpv(b)==null?Infinity:microDealCpv(b)),
+  };
+  if(sorters[mf.sort]) deals = deals.slice().sort(sorters[mf.sort]);
+
+  return `
+    <div class="grid-kpi">
+      <div class="kpi"><div class="num">${s.count}</div><div class="lbl">Всего интеграций</div></div>
+      <div class="kpi bad"><div class="num">${fmtNum(s.totalCost)} ₸</div><div class="lbl">Сумма (${s.paidCount} оплачено, ${s.toPayCount} к оплате, ${s.unpaidCount} не оплачено)</div></div>
+      <div class="kpi ok"><div class="num">${fmtNum(s.totalFactReach)}</div><div class="lbl">Факт.охват (Reels+TikTok)</div></div>
+      <div class="kpi"><div class="num">${s.avgCpv==null?'—':s.avgCpv.toFixed(3)+' ₸'}</div><div class="lbl">Средний CPV (сумма/факт.охват)</div></div>
+      <div class="kpi"><div class="num">${s.publishedCount}</div><div class="lbl">Опубликовано видео (план ${s.count})</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">
+        Инфлюенс интеграции микро/средние
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">отв. Нина</span>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" id="template-micro-csv-btn">Шаблон CSV</button>
+          <button class="btn btn-ghost btn-sm" id="import-micro-csv-btn">Импорт CSV</button>
+          <input type="file" id="import-micro-csv-input" accept=".csv" class="hide">
+          <button class="btn btn-primary btn-sm" id="new-micro-btn">+ Интеграция</button>
+        </div>
+      </div>
+      <div class="login-hint" style="margin-bottom:12px">
+        Для мелких и средних блогеров ROMI по продажам не считаем (слишком много размещений
+        одновременно — атрибуция по товару была бы шумной). Вместо этого — CPV = сумма / факт.охват
+        (Reels + TikTok кросспостинг).
+      </div>
+      <div class="toolbar" style="margin-bottom:12px">
+        <input type="search" class="fill" id="micro-search" placeholder="Поиск по блогеру / товару" value="${escapeHtml(mf.search)}">
+        <select id="micro-payment-filter">
+          <option value="">Все статусы оплаты</option>
+          ${MICRO_PAYMENT_STATUSES.map(st=>`<option value="${st}" ${mf.paymentStatus===st?'selected':''}>${st}</option>`).join("")}
+        </select>
+        <select id="micro-sort">
+          <option value="default" ${mf.sort==='default'?'selected':''}>Без сортировки</option>
+          <option value="cost_desc" ${mf.sort==='cost_desc'?'selected':''}>Сумма: сначала больше</option>
+          <option value="cost_asc" ${mf.sort==='cost_asc'?'selected':''}>Сумма: сначала меньше</option>
+          <option value="reach_desc" ${mf.sort==='reach_desc'?'selected':''}>Факт.охват: сначала больше</option>
+          <option value="reach_asc" ${mf.sort==='reach_asc'?'selected':''}>Факт.охват: сначала меньше</option>
+          <option value="cpv_desc" ${mf.sort==='cpv_desc'?'selected':''}>CPV: сначала больше</option>
+          <option value="cpv_asc" ${mf.sort==='cpv_asc'?'selected':''}>CPV: сначала меньше</option>
+        </select>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Блогер</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
+          <th>Сумма</th><th>Статус оплаты</th><th>Факт.охват</th><th>CPV</th>
+          <th>Статус товара</th><th>Статус видео</th><th>Дата выкладки</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${deals.map(d=>{
+            const factReach = microDealFactReach(d);
+            const cpv = microDealCpv(d);
+            return `<tr>
+              <td><b>${escapeHtml(d.blogerName)}</b>${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
+              <td>${d.instagramAccount?`<a href="${escapeHtml(d.instagramAccount)}" target="_blank" rel="noopener">IG</a> ${fmtNum(d.followers)}`:"—"}</td>
+              <td>${d.tiktokAccount?`<a href="${escapeHtml(d.tiktokAccount)}" target="_blank" rel="noopener">TT</a> ${fmtNum(d.followersTT)}`:"—"}</td>
+              <td>${escapeHtml(d.product||"—")}${d.productCategory?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.productCategory)}</span>`:""}</td>
+              <td>${escapeHtml(d.city||"—")}</td>
+              <td>${fmtNum(d.cost)} ₸</td>
+              <td>${escapeHtml(d.paymentStatus||"—")}</td>
+              <td>${fmtNum(factReach)}</td>
+              <td>${cpv==null?"—":cpv.toFixed(3)+" ₸"}</td>
+              <td>${escapeHtml(d.productStatus||"—")}</td>
+              <td>${escapeHtml(d.videoStatus||"—")}</td>
+              <td>${escapeHtml(d.publishDate||"—")}</td>
+              <td>
+                <button class="btn btn-ghost btn-sm edit-micro-btn" data-id="${d.id}">✎</button>
+                <button class="btn btn-danger btn-sm del-micro-btn" data-id="${d.id}">✕</button>
+              </td>
+            </tr>`;
+          }).join("") || `<tr><td class="empty" colspan="13">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
+        </tbody>
+      </table></div>
     </div>
   `;
 }
@@ -2477,8 +2635,8 @@ function modalPublicationHistory(orderId){
 // Подсказки для поля "Продукт": типы боксов + все уже встречавшиеся названия товаров
 // (из интеграций и из загруженных продаж) — чтобы не приходилось печатать точное название заново.
 function knownProductNames(){
-  const {influencerDeals, salesByDay} = DataManager.state;
-  return [...new Set([...BOX_TYPES, ...influencerDeals.map(d=>d.product), ...salesByDay.map(s=>s.product)])].filter(Boolean);
+  const {influencerDeals, salesByDay, microInfluencerDeals} = DataManager.state;
+  return [...new Set([...BOX_TYPES, ...influencerDeals.map(d=>d.product), ...salesByDay.map(s=>s.product), ...(microInfluencerDeals||[]).map(d=>d.product)])].filter(Boolean);
 }
 function modalDeal(existing){
   const isEdit = !!existing;
@@ -2569,6 +2727,108 @@ function modalSale(){
         revenue: parseInt(document.getElementById("m-srevenue").value,10)||0,
       }));
       closeModal(); toast("Продажи сохранены"); await DataManager.refresh(); render();
+    }catch(e){ toast(e.message, true); }
+  };
+}
+
+function modalMicroDeal(existing){
+  const isEdit = !!existing;
+  const d = existing || {
+    responsible:"Нина", blogerName:"", phone:"",
+    instagramAccount:"", followers:0, er:0, avgReach:0,
+    tiktokAccount:"", followersTT:0, erTT:0, avgReachTT:0,
+    cost:0, paymentStatus: MICRO_PAYMENT_STATUSES[0],
+    conditions:"", paymentMethod:"", iin:"",
+    city:"", address:"",
+    product:"", productCategory:"",
+    productStatus: MICRO_PRODUCT_STATUSES[0], videoStatus: MICRO_VIDEO_STATUSES[0],
+    reelsLink:"", factReachReels:0, tiktokVideoLink:"", factReachTT:0,
+    publishDate:"", notes:"",
+  };
+  openModal(`
+    <h3>${isEdit?'Изменить':'Новая'} интеграция · Инфлюенс микро/средние</h3>
+    <div class="form-row">
+      <div class="field"><label>Блогер</label><input id="mm-name" placeholder="Имя / название аккаунта" value="${escapeHtml(d.blogerName)}"></div>
+      <div class="field"><label>Телефон</label><input id="mm-phone" value="${escapeHtml(d.phone||'')}"></div>
+      <div class="field"><label>Город</label><input id="mm-city" value="${escapeHtml(d.city||'')}"></div>
+      <div class="field"><label>Адрес</label><input id="mm-address" value="${escapeHtml(d.address||'')}"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Instagram (ссылка/логин)</label><input id="mm-ig" value="${escapeHtml(d.instagramAccount||'')}"></div>
+      <div class="field"><label>Подписчики IG</label><input id="mm-followers" type="number" value="${d.followers||0}"></div>
+      <div class="field"><label>ER IG, %</label><input id="mm-er" type="number" step="0.1" value="${d.er||0}"></div>
+      <div class="field"><label>Ср. охваты IG</label><input id="mm-avg-reach" type="number" value="${d.avgReach||0}"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>TikTok (ссылка/логин)</label><input id="mm-tt" value="${escapeHtml(d.tiktokAccount||'')}"></div>
+      <div class="field"><label>Подписчики TT</label><input id="mm-followers-tt" type="number" value="${d.followersTT||0}"></div>
+      <div class="field"><label>ER TT, %</label><input id="mm-er-tt" type="number" step="0.1" value="${d.erTT||0}"></div>
+      <div class="field"><label>Ср. охваты TT</label><input id="mm-avg-reach-tt" type="number" value="${d.avgReachTT||0}"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Сумма, ₸</label><input id="mm-cost" type="number" value="${d.cost||0}"></div>
+      <div class="field"><label>Статус оплаты</label><select id="mm-payment-status">${MICRO_PAYMENT_STATUSES.map(st=>`<option ${st===d.paymentStatus?'selected':''}>${st}</option>`).join("")}</select></div>
+      <div class="field"><label>Способ оплаты</label><input id="mm-payment-method" value="${escapeHtml(d.paymentMethod||'')}"></div>
+      <div class="field"><label>ИИН</label><input id="mm-iin" value="${escapeHtml(d.iin||'')}"></div>
+    </div>
+    <div class="field"><label>Условия</label><input id="mm-conditions" value="${escapeHtml(d.conditions||'')}"></div>
+    <div class="form-row">
+      <div class="field"><label>Товар</label><input id="mm-product" list="product-suggestions" placeholder="Название товара как в 1С" value="${escapeHtml(d.product||'')}"></div>
+      <div class="field"><label>Категория товара</label><input id="mm-product-category" value="${escapeHtml(d.productCategory||'')}"></div>
+      <div class="field"><label>Статус товара</label><select id="mm-product-status">${MICRO_PRODUCT_STATUSES.map(st=>`<option ${st===d.productStatus?'selected':''}>${st}</option>`).join("")}</select></div>
+      <div class="field"><label>Статус видео</label><select id="mm-video-status">${MICRO_VIDEO_STATUSES.map(st=>`<option ${st===d.videoStatus?'selected':''}>${st}</option>`).join("")}</select></div>
+    </div>
+    <datalist id="product-suggestions">${knownProductNames().map(p=>`<option value="${escapeHtml(p)}">`).join("")}</datalist>
+    <div class="form-row">
+      <div class="field"><label>Ссылка на Reels</label><input id="mm-reels-link" value="${escapeHtml(d.reelsLink||'')}"></div>
+      <div class="field"><label>Факт.охват Reels</label><input id="mm-fact-reach-reels" type="number" value="${d.factReachReels||0}"></div>
+      <div class="field"><label>Ссылка на видео TikTok</label><input id="mm-tt-link" value="${escapeHtml(d.tiktokVideoLink||'')}"></div>
+      <div class="field"><label>Факт.охват TikTok</label><input id="mm-fact-reach-tt" type="number" value="${d.factReachTT||0}"></div>
+    </div>
+    <div class="field"><label>Дата выкладки</label><input id="mm-publish-date" type="date" value="${d.publishDate||''}"></div>
+    <div class="field"><label>Комментарий</label><textarea id="mm-notes">${escapeHtml(d.notes||"")}</textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="mm-cancel">Отмена</button>
+      <button class="btn btn-primary" id="mm-save">${isEdit?'Сохранить':'Добавить'}</button>
+    </div>
+  `);
+  document.getElementById("mm-cancel").onclick = closeModal;
+  document.getElementById("mm-save").onclick = async ()=>{
+    const btn = document.getElementById("mm-save");
+    const blogerName = document.getElementById("mm-name").value.trim();
+    if(!blogerName){ toast("Укажите блогера", true); return; }
+    const payload = {
+      responsible: "Нина", blogerName,
+      phone: document.getElementById("mm-phone").value.trim(),
+      city: document.getElementById("mm-city").value.trim(),
+      address: document.getElementById("mm-address").value.trim(),
+      instagramAccount: document.getElementById("mm-ig").value.trim(),
+      followers: parseInt(document.getElementById("mm-followers").value,10)||0,
+      er: parseFloat(document.getElementById("mm-er").value)||0,
+      avgReach: parseInt(document.getElementById("mm-avg-reach").value,10)||0,
+      tiktokAccount: document.getElementById("mm-tt").value.trim(),
+      followersTT: parseInt(document.getElementById("mm-followers-tt").value,10)||0,
+      erTT: parseFloat(document.getElementById("mm-er-tt").value)||0,
+      avgReachTT: parseInt(document.getElementById("mm-avg-reach-tt").value,10)||0,
+      cost: parseInt(document.getElementById("mm-cost").value,10)||0,
+      paymentStatus: document.getElementById("mm-payment-status").value,
+      paymentMethod: document.getElementById("mm-payment-method").value.trim(),
+      iin: document.getElementById("mm-iin").value.trim(),
+      conditions: document.getElementById("mm-conditions").value.trim(),
+      product: document.getElementById("mm-product").value.trim(),
+      productCategory: document.getElementById("mm-product-category").value.trim(),
+      productStatus: document.getElementById("mm-product-status").value,
+      videoStatus: document.getElementById("mm-video-status").value,
+      reelsLink: document.getElementById("mm-reels-link").value.trim(),
+      factReachReels: parseInt(document.getElementById("mm-fact-reach-reels").value,10)||0,
+      tiktokVideoLink: document.getElementById("mm-tt-link").value.trim(),
+      factReachTT: parseInt(document.getElementById("mm-fact-reach-tt").value,10)||0,
+      publishDate: document.getElementById("mm-publish-date").value,
+      notes: document.getElementById("mm-notes").value.trim(),
+    };
+    try{
+      await withBusy(btn, ()=> isEdit ? Api.updateMicroDeal(existing.id, payload) : Api.createMicroDeal(payload));
+      closeModal(); toast(isEdit?"Интеграция обновлена":"Интеграция добавлена"); await DataManager.refresh(); render();
     }catch(e){ toast(e.message, true); }
   };
 }
@@ -2978,6 +3238,51 @@ function wireDeskTab(){
       reader.onload = async ()=>{
         const rows = parseCsv(String(reader.result));
         try{ const res = await Api.importSales(rows); toast(`Продажи: добавлено ${res.added}, обновлено ${res.updated}`); }
+        catch(e){ toast(e.message, true); }
+        e.target.value = "";
+        await DataManager.refresh(); render();
+      };
+      reader.readAsText(file, "UTF-8");
+    };
+  }
+
+  else if(UI.tab==="microInfluencers"){
+    document.getElementById("new-micro-btn").onclick = ()=> modalMicroDeal(null);
+
+    const microSearch = document.getElementById("micro-search");
+    microSearch.oninput = debounce(()=>{ UI.microFilter.search = microSearch.value; renderDeskTab(); }, 250);
+    document.getElementById("micro-payment-filter").onchange = e=>{ UI.microFilter.paymentStatus = e.target.value; renderDeskTab(); };
+    document.getElementById("micro-sort").onchange = e=>{ UI.microFilter.sort = e.target.value; renderDeskTab(); };
+
+    document.querySelectorAll(".edit-micro-btn").forEach(btn=>{
+      btn.onclick = ()=>{
+        const deal = DataManager.state.microInfluencerDeals.find(d=>d.id===parseInt(btn.dataset.id,10));
+        if(deal) modalMicroDeal(deal);
+      };
+    });
+    document.querySelectorAll(".del-micro-btn").forEach(btn=>{
+      btn.onclick = async ()=>{
+        if(!confirm("Удалить интеграцию?")) return;
+        try{ await Api.deleteMicroDeal(parseInt(btn.dataset.id,10)); await DataManager.refresh(); render(); }
+        catch(e){ toast(e.message, true); }
+      };
+    });
+
+    document.getElementById("template-micro-csv-btn").onclick = ()=>{
+      const header = ["блогер","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","статус оплаты","способ оплаты","иин","условия","товар","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","дата выкладки","комментарий"];
+      const example = ["@small_blogger","+77001234567","Алматы","","https://instagram.com/small_blogger","15000","3.2","2000","https://tiktok.com/@small_blogger","8000","4.1","1500","30000","не оплачено","Kaspi","000000000000","1 сторис + 1 reels","Питательный бальзам для губ","Уход","товар заказан","не опубликовано","","0","","0","2026-07-20",""];
+      const csv = [header, example].map(row=>row.map(csvEscape).join(",")).join("\n");
+      downloadFile("barter-box-micro-influencers-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
+      toast("Шаблон скачан");
+    };
+    document.getElementById("import-micro-csv-btn").onclick = ()=> document.getElementById("import-micro-csv-input").click();
+    document.getElementById("import-micro-csv-input").onchange = (e)=>{
+      const file = e.target.files[0];
+      if(!file) return;
+      const reader = new FileReader();
+      reader.onload = async ()=>{
+        const rows = parseCsv(String(reader.result));
+        try{ const res = await Api.importMicroDeals(rows); toast(`Импортировано интеграций: ${res.added}`); }
         catch(e){ toast(e.message, true); }
         e.target.value = "";
         await DataManager.refresh(); render();
@@ -3426,6 +3731,59 @@ async function runSelfTests(){
       if(!tplDashPeriodPicker().includes("dash-period-clear")) throw new Error("кнопка сброса должна появиться при выбранном периоде");
     } finally {
       UI.dashPeriod = saved;
+    }
+  });
+  TestSuite.test("microDealCpv считает CPV = сумма / (факт.охват Reels + факт.охват TikTok)", ()=>{
+    const d1 = {cost:30000, factReachReels:6000, factReachTT:4000};
+    if(microDealCpv(d1) !== 3) throw new Error("30000/10000 должно быть 3: "+microDealCpv(d1));
+    const d2 = {cost:0, factReachReels:0, factReachTT:0};
+    if(microDealCpv(d2) !== null) throw new Error("без охвата/суммы CPV должен быть null: "+microDealCpv(d2));
+    const d3 = {cost:5000, factReachReels:0, factReachTT:0};
+    if(microDealCpv(d3) !== null) throw new Error("без охвата CPV должен быть null (защита от деления на 0): "+microDealCpv(d3));
+  });
+  TestSuite.test("microInfluencerSummary агрегирует расход/охват/статусы и фильтрует по дате выкладки", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9950, blogerName:"@micro1", cost:10000, factReachReels:2000, factReachTT:1000, avgReach:1500, avgReachTT:800, paymentStatus:"оплачено", videoStatus:"опубликовано", publishDate:"2026-07-01"},
+        {id:9951, blogerName:"@micro2", cost:20000, factReachReels:0, factReachTT:0, avgReach:1000, avgReachTT:500, paymentStatus:"не оплачено", videoStatus:"не опубликовано", publishDate:"2026-07-15"},
+      ];
+      const all = microInfluencerSummary();
+      if(all.count !== 2) throw new Error("без периода должны учитываться обе интеграции: "+all.count);
+      if(all.totalCost !== 30000) throw new Error("суммарный расход должен быть 30000: "+all.totalCost);
+      if(all.totalFactReach !== 3000) throw new Error("суммарный факт.охват должен быть 3000: "+all.totalFactReach);
+      if(all.paidCount !== 1 || all.unpaidCount !== 1) throw new Error("счётчики статусов оплаты неверны: "+JSON.stringify(all));
+      if(all.publishedCount !== 1) throw new Error("счётчик опубликованных неверен: "+all.publishedCount);
+      const july1 = microInfluencerSummary("2026-07-01","2026-07-01");
+      if(july1.count !== 1 || july1.totalCost !== 10000) throw new Error("период 07-01 должен взять только первую интеграцию: "+JSON.stringify(july1));
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+    }
+  });
+  TestSuite.test("tplMicroInfluencers рисует KPI и таблицу с интеграциями", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9960, blogerName:"Тестовый Блогер", cost:15000, factReachReels:3000, factReachTT:2000, paymentStatus:"к оплате", product:"Питательный бальзам для губ"},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      const html = tplMicroInfluencers();
+      if(!html.includes("Тестовый Блогер")) throw new Error("таблица должна показывать имя блогера");
+      if(!html.includes("Питательный бальзам для губ")) throw new Error("таблица должна показывать товар");
+      if(!html.includes("new-micro-btn")) throw new Error("должна быть кнопка добавления интеграции");
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+      UI.microFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("knownProductNames() включает товары из microInfluencerDeals", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    try{
+      DataManager.state.microInfluencerDeals = [{id:9970, blogerName:"@x", product:"Уникальный микро-товар"}];
+      if(!knownProductNames().includes("Уникальный микро-товар")) throw new Error("товар из микро-интеграций должен попадать в список подсказок");
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
     }
   });
   TestSuite.test("campaignExpense считает себестоимость боксов + логистику по доставкам проекта", ()=>{
