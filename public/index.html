@@ -1198,7 +1198,7 @@ function tplMicroInfluencerBrandDashboard(allRows){
     return multiYear ? `${short} '${m.slice(2,4)}` : short;
   };
 
-  const kpi = (label, value) => `<div class="kpi"><div class="num" style="color:${MICRO_BRAND}">${value}</div><div class="lbl">${label}</div></div>`;
+  const kpi = (label, value, formula) => `<div class="kpi"><div class="num" style="color:${MICRO_BRAND}">${value}</div><div class="lbl">${label}</div>${formula?`<div style="font-size:10px;color:var(--ink-mute);margin-top:3px;line-height:1.35">${formula}</div>`:""}</div>`;
   const fmtSigned = (v) => (v>=0?"+":"−") + fmtNum(Math.abs(Math.round(v))) + " ₸";
 
   const card = (title, borderColor, bg, body) => `
@@ -1282,15 +1282,15 @@ function tplMicroInfluencerBrandDashboard(allRows){
     </div>
 
     <div class="grid-kpi">
-      ${kpi("Расходы", fmtNum(s.totalCost)+" ₸")}
-      ${kpi("Выручка (вклад)", fmtNum(Math.round(s.totalContribution))+" ₸")}
-      ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2))}
-      ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%")}
-      ${kpi("ДРР", s.drrPct==null?"—":s.drrPct.toFixed(1)+"%")}
-      ${kpi("CPV", s.cpv==null?"—":(Math.round(s.cpv*100)/100)+" ₸")}
-      ${kpi("Охват", fmtNum(s.totalReach))}
-      ${kpi("Прирост ₸/просмотр", s.upliftPerView==null?"—":(Math.round(s.upliftPerView*100)/100)+" ₸")}
-      ${kpi("Прирост ₸/интеграцию", s.upliftPerDeal==null?"—":fmtNum(Math.round(s.upliftPerDeal))+" ₸")}
+      ${kpi("Расходы", fmtNum(s.totalCost)+" ₸", "сумма расходов по всем интеграциям месяца")}
+      ${kpi("Выручка (вклад)", fmtNum(Math.round(s.totalContribution))+" ₸", "сумма вклада в продажи (только там, где есть ШК)")}
+      ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2), "вклад в продажи ÷ расходы")}
+      ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%", "вклад в продажи ÷ расходы × 100%")}
+      ${kpi("ДРР", s.drrPct==null?"—":s.drrPct.toFixed(1)+"%", "расходы ÷ вклад в продажи × 100%")}
+      ${kpi("CPV", s.cpv==null?"—":(Math.round(s.cpv*100)/100)+" ₸", "расходы ÷ факт.охват (Reels + TikTok)")}
+      ${kpi("Охват", fmtNum(s.totalReach), "сумма факт.охвата всех интеграций месяца")}
+      ${kpi("Прирост ₸/просмотр", s.upliftPerView==null?"—":(Math.round(s.upliftPerView*100)/100)+" ₸", "вклад в продажи ÷ факт.охват")}
+      ${kpi("Прирост ₸/интеграцию", s.upliftPerDeal==null?"—":fmtNum(Math.round(s.upliftPerDeal))+" ₸", "среднее (вклад в продажи − расход) по интеграциям с посчитанным ROMI")}
     </div>
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-bottom:14px">
