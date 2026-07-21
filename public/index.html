@@ -450,31 +450,44 @@ function csvEscape(v){
 // Раньше строка резалась наивным line.split(sep), из-за чего товары с запятой в названии
 // (например, "Название, 03 - ... Series, 03") разъезжались по колонкам и портили ШК/выручку.
 function parseCsvLine(line, sep){
-  const cells = [];
-  let cur = "", inQuotes = false;
-  for(let i=0;i<line.length;i++){
-    const ch = line[i];
+  // Оставлено для обратной совместимости (используется в тестах и там, где строка уже точно без переносов внутри кавычек).
+  return parseCsvRecords(line, sep)[0] || [];
+}
+// Полностью quote-aware разбор CSV-текста: строки разбиваются по переводу строки ТОЛЬКО вне кавычек,
+// поэтому ячейка в кавычках с реальным переносом строки внутри (например, многострочный комментарий
+// из Excel) не разрывает запись на несколько "строк" — раньше именно так и происходило, потому что
+// текст сначала резался по \r?\n, а кавычки учитывались только после этого.
+function parseCsvRecords(text, sep){
+  const records = [];
+  let row = [], cur = "", inQuotes = false;
+  for(let i=0;i<text.length;i++){
+    const ch = text[i];
     if(inQuotes){
       if(ch === '"'){
-        if(line[i+1] === '"'){ cur += '"'; i++; }
+        if(text[i+1] === '"'){ cur += '"'; i++; }
         else inQuotes = false;
       } else cur += ch;
     } else {
       if(ch === '"') inQuotes = true;
-      else if(ch === sep){ cells.push(cur); cur = ""; }
+      else if(ch === sep){ row.push(cur); cur = ""; }
+      else if(ch === "\r"){ /* пропускаем, \n обработает перевод строки */ }
+      else if(ch === "\n"){ row.push(cur); records.push(row); row = []; cur = ""; }
       else cur += ch;
     }
   }
-  cells.push(cur);
-  return cells;
+  row.push(cur);
+  records.push(row);
+  return records;
 }
 function parseCsv(text){
-  const lines = text.split(/\r?\n/).filter(l=>l.trim().length);
-  if(!lines.length) return [];
-  const sep = lines[0].includes(";") && !lines[0].includes(",") ? ";" : ",";
-  const headers = parseCsvLine(lines[0], sep).map(h=>h.trim().toLowerCase());
-  return lines.slice(1).map(line=>{
-    const cells = parseCsvLine(line, sep).map(c=>c.trim());
+  const firstLine = (text.split(/\r?\n/)[0] || "");
+  const sep = firstLine.includes(";") && !firstLine.includes(",") ? ";" : ",";
+  const records = parseCsvRecords(text, sep)
+    .map(cells=>cells.map(c=>c.trim()))
+    .filter(cells=> !(cells.length===1 && cells[0]===""));
+  if(!records.length) return [];
+  const headers = records[0].map(h=>h.trim().toLowerCase());
+  return records.slice(1).map(cells=>{
     const row = {};
     headers.forEach((h,i)=> row[h] = cells[i]!==undefined ? cells[i] : "");
     return row;
@@ -3620,6 +3633,14 @@ async function runSelfTests(){
     if(rows[0]["продукт"] !== "Бальзам для губ, 03 - Series, 03 4г") throw new Error("название товара с запятой разъехалось: "+JSON.stringify(rows[0]));
     if(rows[0]["шк"] !== "4620400203663") throw new Error("ШК разъехался: "+JSON.stringify(rows[0]));
     if(rows[0]["выручка"] !== "176610") throw new Error("выручка разъехалась: "+JSON.stringify(rows[0]));
+  });
+  TestSuite.test("parseCsv не разъезжается, если ячейка в кавычках содержит перенос строки (многострочный комментарий из Excel)", ()=>{
+    const rows = parseCsv('блогер,условия,город\n"Бота","3 видео - 280к\nгарант просмотры\ntiktok - 30.000+",Алматы\nАдина,,Астана');
+    if(rows.length!==2) throw new Error("ожидалось 2 строки, получили "+rows.length+": "+JSON.stringify(rows));
+    if(rows[0]["блогер"]!=="Бота") throw new Error("блогер первой строки разъехался: "+JSON.stringify(rows[0]));
+    if(rows[0]["условия"]!=="3 видео - 280к\nгарант просмотры\ntiktok - 30.000+") throw new Error("многострочные условия потерялись/разъехались: "+JSON.stringify(rows[0]));
+    if(rows[0]["город"]!=="Алматы") throw new Error("город первой строки разъехался (перенос строки не должен был закрыть запись раньше времени): "+JSON.stringify(rows[0]));
+    if(rows[1]["блогер"]!=="Адина" || rows[1]["город"]!=="Астана") throw new Error("вторая строка после многострочной ячейки повреждена: "+JSON.stringify(rows[1]));
   });
   TestSuite.test("erPercent считает вовлечённость (лайки+комменты / просмотры)", ()=>{
     const v = erPercent({views:1000, likes:50, comments:10});
