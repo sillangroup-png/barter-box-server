@@ -435,13 +435,36 @@ function csvEscape(v){
   if(/[",\n;]/.test(v)) return '"' + v.replace(/"/g,'""') + '"';
   return v;
 }
+// Разбирает одну строку CSV с учётом кавычек (RFC4180): запятая/точка с запятой внутри
+// "..." не считается разделителем колонок, а "" внутри кавычек — это экранированная кавычка.
+// Раньше строка резалась наивным line.split(sep), из-за чего товары с запятой в названии
+// (например, "Название, 03 - ... Series, 03") разъезжались по колонкам и портили ШК/выручку.
+function parseCsvLine(line, sep){
+  const cells = [];
+  let cur = "", inQuotes = false;
+  for(let i=0;i<line.length;i++){
+    const ch = line[i];
+    if(inQuotes){
+      if(ch === '"'){
+        if(line[i+1] === '"'){ cur += '"'; i++; }
+        else inQuotes = false;
+      } else cur += ch;
+    } else {
+      if(ch === '"') inQuotes = true;
+      else if(ch === sep){ cells.push(cur); cur = ""; }
+      else cur += ch;
+    }
+  }
+  cells.push(cur);
+  return cells;
+}
 function parseCsv(text){
   const lines = text.split(/\r?\n/).filter(l=>l.trim().length);
   if(!lines.length) return [];
   const sep = lines[0].includes(";") && !lines[0].includes(",") ? ";" : ",";
-  const headers = lines[0].split(sep).map(h=>h.trim().toLowerCase());
+  const headers = parseCsvLine(lines[0], sep).map(h=>h.trim().toLowerCase());
   return lines.slice(1).map(line=>{
-    const cells = line.split(sep).map(c=>c.trim());
+    const cells = parseCsvLine(line, sep).map(c=>c.trim());
     const row = {};
     headers.forEach((h,i)=> row[h] = cells[i]!==undefined ? cells[i] : "");
     return row;
@@ -3242,6 +3265,13 @@ async function runSelfTests(){
   TestSuite.test("parseCsv корректно разбирает строки с запятой-разделителем", ()=>{
     const rows = parseCsv("блогер,телефон,город,адрес\n@test,+7700,Алматы,ул. Тест 1");
     if(rows.length!==1 || rows[0]["блогер"]!=="@test" || rows[0]["адрес"]!=="ул. Тест 1") throw new Error("csv parse mismatch");
+  });
+  TestSuite.test("parseCsv не разъезжается, если название товара в кавычках содержит запятую", ()=>{
+    const rows = parseCsv('дата,продукт,шк,выручка\n2026-07-13,"Бальзам для губ, 03 - Series, 03 4г",4620400203663,176610');
+    if(rows.length!==1) throw new Error("ожидалась 1 строка, получили "+rows.length);
+    if(rows[0]["продукт"] !== "Бальзам для губ, 03 - Series, 03 4г") throw new Error("название товара с запятой разъехалось: "+JSON.stringify(rows[0]));
+    if(rows[0]["шк"] !== "4620400203663") throw new Error("ШК разъехался: "+JSON.stringify(rows[0]));
+    if(rows[0]["выручка"] !== "176610") throw new Error("выручка разъехалась: "+JSON.stringify(rows[0]));
   });
   TestSuite.test("erPercent считает вовлечённость (лайки+комменты / просмотры)", ()=>{
     const v = erPercent({views:1000, likes:50, comments:10});
