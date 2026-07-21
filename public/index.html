@@ -781,6 +781,19 @@ function tplInfluencerBrandDashboard(allRows){
   const trend = influencerReachTrend(allRows);
   const funnel = influencerFunnelCounts(allRows);
 
+  // Если данные копятся годами, пилюли-вкладки на все месяцы не влезут и не будут читаемы —
+  // показываем только последние 6 (плюс выбранный месяц, если он старше), а остальные месяцы
+  // доступны через выпадающий список рядом. Если годов несколько — подписываем месяц годом,
+  // иначе "Июль" повторится и для 2025, и для 2026 без возможности их отличить.
+  const MAX_MONTH_TABS = 6;
+  const recentMonths = Array.from(new Set([...months.slice(-MAX_MONTH_TABS), month])).sort();
+  const hasMoreMonths = months.length > recentMonths.length;
+  const multiYear = new Set(months.map(m=>m.slice(0,4))).size > 1;
+  const tabLabel = (m) => {
+    const short = monthLabel(m).split(" ")[0].slice(0,3); // Янв, Фев, Июл...
+    return multiYear ? `${short} '${m.slice(2,4)}` : short;
+  };
+
   const kpi = (label, value) => `<div class="kpi"><div class="num" style="color:${INFL_BRAND}">${value}</div><div class="lbl">${label}</div></div>`;
   const fmtSigned = (v) => (v>=0?"+":"−") + fmtNum(Math.abs(Math.round(v))) + " ₸";
 
@@ -811,7 +824,7 @@ function tplInfluencerBrandDashboard(allRows){
         return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%">
           <div style="font-size:11px;color:var(--ink-mute);margin-bottom:4px">${fmtNum(t.avgReach)}</div>
           <div style="width:100%;max-width:46px;height:${h}px;border-radius:6px 6px 0 0;background:${active?INFL_BRAND:INFL_BRAND_LIGHT};border:1px solid ${INFL_BRAND}"></div>
-          <div style="font-size:11px;color:var(--ink-mute);margin-top:6px">${escapeHtml(monthLabel(t.month).slice(0,3))}</div>
+          <div style="font-size:11px;color:var(--ink-mute);margin-top:6px">${escapeHtml(tabLabel(t.month))}</div>
         </div>`;
       }).join("")}
     </div>`;
@@ -853,8 +866,12 @@ function tplInfluencerBrandDashboard(allRows){
   <div class="panel">
     <div class="panel-title">
       Платный инфлюенс · дашборд
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
-        ${months.map(m=>`<button class="btn btn-sm infl-dash-month-tab" data-month="${m}" style="background:${m===month?INFL_BRAND:INFL_BRAND_LIGHT};color:${m===month?'#fff':INFL_BRAND}">${escapeHtml(monthLabel(m).split(" ")[0])}</button>`).join("")}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        ${recentMonths.map(m=>`<button class="btn btn-sm infl-dash-month-tab" data-month="${m}" style="background:${m===month?INFL_BRAND:INFL_BRAND_LIGHT};color:${m===month?'#fff':INFL_BRAND}">${escapeHtml(tabLabel(m))}</button>`).join("")}
+        ${hasMoreMonths ? `<select id="infl-dash-month-select" style="border:1px solid ${INFL_BRAND};border-radius:8px;padding:6px 8px;color:${INFL_BRAND};font-weight:600;font-size:12px;background:#fff">
+          <option value="">Ещё месяцы…</option>
+          ${months.map(m=>`<option value="${m}" ${m===month?'selected':''}>${escapeHtml(monthLabel(m))}</option>`).join("")}
+        </select>` : ""}
       </div>
     </div>
 
@@ -2810,6 +2827,10 @@ function wireDeskTab(){
     document.querySelectorAll(".infl-dash-month-tab").forEach(btn=>{
       btn.onclick = ()=>{ UI.inflDashMonth = btn.dataset.month; renderDeskTab(); };
     });
+    const inflDashMonthSelect = document.getElementById("infl-dash-month-select");
+    if(inflDashMonthSelect) inflDashMonthSelect.onchange = ()=>{
+      if(inflDashMonthSelect.value){ UI.inflDashMonth = inflDashMonthSelect.value; renderDeskTab(); }
+    };
 
     ["cmp-a-from","cmp-a-to","cmp-b-from","cmp-b-to"].forEach(id=>{
       const el = document.getElementById(id);
@@ -3397,6 +3418,34 @@ async function runSelfTests(){
       if(!html.includes("@best2") || !html.includes("@worst2")) throw new Error("лучший/худший блогер не показаны");
       if(!html.includes("3\u00a0000") && !html.includes("3 000")) throw new Error("суммарные расходы не отрисованы");
       if(!html.includes(escapeHtml("Опубликована"))) throw new Error("воронка стадий не отрисована");
+    } finally {
+      DataManager.state.influencerDeals = savedDeals;
+      UI.inflDashMonth = savedDashMonth;
+    }
+  });
+  TestSuite.test("tplInfluencerBrandDashboard: при данных за 2+ года показывает не все вкладки, а выпадающий список + год в подписи", ()=>{
+    const savedDeals = DataManager.state.influencerDeals;
+    const savedDashMonth = UI.inflDashMonth;
+    try{
+      // 26 месяцев данных подряд (больше 2 лет) — по одной интеграции на месяц.
+      const deals = [];
+      const rows = [];
+      for(let i=0;i<26;i++){
+        const y = 2024 + Math.floor(i/12);
+        const mo = (i%12)+1;
+        const ym = `${y}-${String(mo).padStart(2,"0")}`;
+        const deal = {id:9960+i, blogerLogin:"@m"+i, platform:"Reels", product:"P", plannedDate:ym+"-01", publishedDate:ym+"-01", plannedReach:0, plannedClicks:0, reach:1000, clicks:10, plannedCost:0, cost:100, status:"Опубликована"};
+        deals.push(deal);
+        rows.push({deal, netContribution:200, romi:2, hasBaseline:true});
+      }
+      DataManager.state.influencerDeals = deals;
+      UI.inflDashMonth = ""; // по умолчанию — последний месяц
+      const html = tplInfluencerBrandDashboard(rows);
+      const tabCount = (html.match(/infl-dash-month-tab/g)||[]).length;
+      if(tabCount > 6) throw new Error("вкладок месяцев больше 6 — при годах данных они не влезут: "+tabCount);
+      if(!html.includes("infl-dash-month-select")) throw new Error("выпадающий список 'ещё месяцы' не появился при длинной истории");
+      // apostrophe уходит через escapeHtml() как &#39; — проверяем экранированную форму.
+      if(!html.includes("&#39;24") || !html.includes("&#39;25") || !html.includes("&#39;26")) throw new Error("год не подписан у месяцев, хотя данных больше одного года");
     } finally {
       DataManager.state.influencerDeals = savedDeals;
       UI.inflDashMonth = savedDashMonth;
