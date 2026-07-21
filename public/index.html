@@ -1177,7 +1177,8 @@ function tplMicroInfluencerBrandDashboard(allRows){
     return multiYear ? `${short} '${m.slice(2,4)}` : short;
   };
 
-  const kpi = (label, value, formula) => `<div class="kpi"><div class="num" style="color:${MICRO_BRAND}">${value}</div><div class="lbl">${label}</div>${formula?`<div style="font-size:10px;color:var(--ink-mute);margin-top:3px;line-height:1.35">${formula}</div>`:""}</div>`;
+  const qMark = (formula) => `<span title="${escapeHtml(formula)}" style="display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:var(--line-2);color:var(--ink-mute);font-size:10px;font-weight:700;cursor:help;vertical-align:middle;margin-left:4px">?</span>`;
+  const kpi = (label, value, formula) => `<div class="kpi"><div class="num" style="color:${MICRO_BRAND}">${value}</div><div class="lbl">${label}${formula?qMark(formula):""}</div>${formula?`<div style="font-size:10px;color:var(--ink-mute);margin-top:3px;line-height:1.35">${formula}</div>`:""}</div>`;
   const fmtSigned = (v) => (v>=0?"+":"−") + fmtNum(Math.abs(Math.round(v))) + " ₸";
 
   const card = (title, borderColor, bg, body) => `
@@ -4340,6 +4341,7 @@ async function runSelfTests(){
       if(!html.includes("Микро/средние")) throw new Error("заголовок дашборда отсутствует");
       if(!html.includes("micro-dash-month-tab")) throw new Error("вкладки месяцев не отрисованы");
       if(!html.includes("@mbest2") || !html.includes("@mworst2")) throw new Error("лучший/худший блогер не показаны");
+      if(!html.includes('title="вклад в продажи ÷ расходы"')) throw new Error("у показателя ROMI должен быть значок с подсказкой формулы (title)");
       if(!html.includes("3 000") && !html.includes("3 000")) throw new Error("суммарные расходы не отрисованы");
     } finally {
       DataManager.state.microInfluencerDeals = savedDeals;
