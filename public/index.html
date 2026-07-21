@@ -1154,6 +1154,36 @@ function microInfluencerBrandStats(monthRows){
   return {totalCost, totalReach, totalContribution, dealsCount, publishedCount, paidCount, romi, roasPct, drrPct, cpv, upliftPerView, upliftPerDeal,
     bloggerAgg, bestBlogger, worstBlogger, bestDeal, worstDeal};
 }
+// Человекочитаемое объяснение конкретной цифры "Выручка (вклад)" за месяц — по просьбе Нины:
+// не просто формула, а разбивка — сколько интеграций с ШК учтено, из них скольким реально
+// посчитан вклад (есть история продаж/база), было ли в те же даты пересечение с крупными
+// блогерами (и как тогда делился прирост, чтобы не задваивался — см. computeUnifiedInfluencerRomi),
+// и за какой период считается база (вся история продаж, а не только выбранный месяц).
+function microContributionExplain(monthRows, month){
+  const withShk = monthRows.filter(r=>(r.deal.barcode||"").trim());
+  const withBaseline = withShk.filter(r=>r.hasBaseline);
+  const {influencerDeals} = DataManager.state;
+  let overlapCount = 0;
+  withBaseline.forEach(r=>{
+    const matchKey = microDealMatchKey(r.deal);
+    const overlaps = influencerDeals.some(ld=>{
+      if(dealMatchKey(ld)!==matchKey || !ld.publishedDate || !r.deal.publishDate) return false;
+      return Math.abs(daysBetween(r.deal.publishDate, ld.publishedDate))<=2;
+    });
+    if(overlaps) overlapCount++;
+  });
+  const total = Math.round(withBaseline.reduce((s,r)=>s+(r.netContribution||0),0));
+  const lines = [
+    `Показатель за: ${monthLabel(month)}.`,
+    `Интеграций с ШК за месяц: ${withShk.length}; из них с историей продаж по товару (посчитан вклад): ${withBaseline.length}.`,
+    `База — средняя выручка по товару в "чистые" дни (без рекламы любого типа по этому товару). Считается по всей истории продаж в 1С, а не только за этот месяц.`,
+    overlapCount>0
+      ? `У ${overlapCount} из них в те же 0-2 дня выходила реклама и у крупных блогеров — прирост продаж в такие дни поделён между каналами пропорционально весам (1.0 в день поста, 0.5 на следующий день, 0.2 на третий), а не задвоен.`
+      : `Пересечений по датам с интеграциями крупных блогеров в этом месяце не найдено.`,
+    `Итоговая сумма: ${fmtNum(total)} ₸.`
+  ];
+  return lines.join("\n");
+}
 function tplMicroInfluencerBrandDashboard(allRows){
   const months = microAvailableMonths();
   if(!months.length){
@@ -1178,7 +1208,10 @@ function tplMicroInfluencerBrandDashboard(allRows){
   };
 
   const qMark = (formula) => `<span title="${escapeHtml(formula)}" style="display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:var(--line-2);color:var(--ink-mute);font-size:10px;font-weight:700;cursor:help;vertical-align:middle;margin-left:4px">?</span>`;
-  const kpi = (label, value, formula) => `<div class="kpi"><div class="num" style="color:${MICRO_BRAND}">${value}</div><div class="lbl">${label}${formula?qMark(formula):""}</div>${formula?`<div style="font-size:10px;color:var(--ink-mute);margin-top:3px;line-height:1.35">${formula}</div>`:""}</div>`;
+  // detail — необязательная развёрнутая расшифровка именно для тултипа (значок "?"), когда короткой
+  // формулы недостаточно (см. "Выручка (вклад)" ниже — microContributionExplain). Короткая подпись
+  // под цифрой всегда показывает formula, а не detail — так под каждой цифрой не разрастается текст.
+  const kpi = (label, value, formula, detail) => `<div class="kpi"><div class="num" style="color:${MICRO_BRAND}">${value}</div><div class="lbl">${label}${formula?qMark(detail||formula):""}</div>${formula?`<div style="font-size:10px;color:var(--ink-mute);margin-top:3px;line-height:1.35">${formula}</div>`:""}</div>`;
   const fmtSigned = (v) => (v>=0?"+":"−") + fmtNum(Math.abs(Math.round(v))) + " ₸";
 
   const card = (title, borderColor, bg, body) => `
@@ -1263,7 +1296,7 @@ function tplMicroInfluencerBrandDashboard(allRows){
 
     <div class="grid-kpi">
       ${kpi("Расходы", fmtNum(s.totalCost)+" ₸", "сумма расходов по всем интеграциям месяца")}
-      ${kpi("Выручка (вклад)", fmtNum(Math.round(s.totalContribution))+" ₸", "сумма вклада в продажи (только там, где есть ШК)")}
+      ${kpi("Выручка (вклад)", fmtNum(Math.round(s.totalContribution))+" ₸", "сумма вклада в продажи (только там, где есть ШК)", microContributionExplain(monthRows, month))}
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2), "вклад в продажи ÷ расходы")}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%", "вклад в продажи ÷ расходы × 100%")}
       ${kpi("ДРР", s.drrPct==null?"—":s.drrPct.toFixed(1)+"%", "расходы ÷ вклад в продажи × 100%")}
@@ -4345,6 +4378,37 @@ async function runSelfTests(){
       if(!html.includes("3 000") && !html.includes("3 000")) throw new Error("суммарные расходы не отрисованы");
     } finally {
       DataManager.state.microInfluencerDeals = savedDeals;
+      UI.microDashMonth = savedDashMonth;
+    }
+  });
+  TestSuite.test("microContributionExplain объясняет вклад в продажи: период, ШК, пересечение с крупными блогерами", ()=>{
+    const savedMicro = DataManager.state.microInfluencerDeals;
+    const savedLarge = DataManager.state.influencerDeals;
+    const savedSales = DataManager.state.salesByDay;
+    const savedDashMonth = UI.microDashMonth;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9080, blogerName:"@micro_x", product:"ОбъяснТовар", barcode:"111", cost:1000, publishDate:"2026-07-05"},
+      ];
+      DataManager.state.influencerDeals = [
+        {id:9081, blogerLogin:"@large_x", product:"ОбъяснТовар", barcode:"111", publishedDate:"2026-07-05", cost:2000, status:"Опубликована"},
+      ];
+      DataManager.state.salesByDay = [
+        {id:9281, date:"2026-07-01", barcode:"111", revenue:100},
+        {id:9282, date:"2026-07-02", barcode:"111", revenue:100},
+        {id:9283, date:"2026-07-05", barcode:"111", revenue:300},
+      ];
+      UI.microDashMonth = "";
+      const rows = computeMicroInfluencerRomi();
+      const explain = microContributionExplain(rows, "2026-07");
+      if(!explain.includes("Интеграций с ШК за месяц: 1")) throw new Error("должно учитывать 1 интеграцию с ШК: "+explain);
+      if(!explain.includes("крупных блогеров")) throw new Error("должно упоминать пересечение с крупными блогерами: "+explain);
+      const html = tplMicroInfluencerBrandDashboard(rows);
+      if(!html.includes("Интеграций с ШК за месяц")) throw new Error("детальная подсказка должна попасть в HTML дашборда (title у 'Выручка (вклад)')");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedMicro;
+      DataManager.state.influencerDeals = savedLarge;
+      DataManager.state.salesByDay = savedSales;
       UI.microDashMonth = savedDashMonth;
     }
   });
