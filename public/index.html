@@ -1287,17 +1287,8 @@ function tplDashPeriodPicker(){
   `;
 }
 function tplMarketerDashboard(){
-  const {publications} = DataManager.state;
   const f = UI.dashPeriod;
   const ms = marketingSummary(f.from, f.to);
-  const ranked = publications
-    .filter(p=>!(f.from||f.to) || inDateRange(p.publishedAt, f.from, f.to))
-    .map(p=>{
-      const o = DataManager.find("orders", p.orderId);
-      const m = latestMeasurement(p);
-      const r = o ? reachInfo(o, p, m) : {value:0, estimated:false};
-      return {p, o, m, r};
-    }).filter(x=>x.o && (x.m || x.r.value>0)).sort((a,b)=>b.r.value-a.r.value).slice(0,3);
   return `
     <div class="panel-title">Бартерные рассылки</div>
     ${tplDashPeriodPicker()}
@@ -1313,19 +1304,6 @@ function tplMarketerDashboard(){
 
     ${tplInfluencerDashboardBlock(f.from, f.to)}
 
-    <div class="panel">
-      <div class="panel-title">Топ-3 блогера по охвату</div>
-      <div class="table-wrap"><table>
-        <thead><tr><th>#</th><th>Блогер</th><th>Платформа</th><th>Охват</th><th>ER</th><th>Продажи</th></tr></thead>
-        <tbody>
-          ${ranked.map((x,i)=>`<tr>
-            <td>${i+1}</td><td>${escapeHtml(x.o.blogger)}</td><td>${escapeHtml(x.p.platform)}</td>
-            <td>${x.r.value?fmtNum(x.r.value)+reachBadge(x.r):"—"}</td><td>${x.m?fmtPercent(erPercent(x.m)):"—"}</td>
-            <td>${x.m?(x.m.salesCount||0)+" шт · "+fmtNum(x.m.salesRevenue)+" ₸":"—"}</td>
-          </tr>`).join("") || `<tr><td class="empty" colspan="6">${(f.from||f.to)?"Нет данных за выбранный период":"Пока нет данных — добавьте публикации во вкладке «Публикации и охваты»"}</td></tr>`}
-        </tbody>
-      </table></div>
-    </div>
     ${ms.gap.length ? `
     <div class="panel">
       <div class="panel-title">⚠️ Доставлены, но ещё не опубликовали</div>
