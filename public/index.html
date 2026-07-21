@@ -225,6 +225,9 @@ const LOGISTICS_COST_DEFAULT = 1500;
 const PLATFORMS = ["Instagram Reels","Instagram Stories","TikTok","YouTube Shorts","Отзыв / пост"];
 const BLOGGER_TIERS = ["Малый (эффект 1–7 дней)","Крупный (эффект 2–3 недели)"];
 const DEAL_STATUSES = ["Запланирована","Опубликована","Оплачена","Закрыта"];
+// Акцентный цвет только для стилизованного дашборда "Платный инфлюенс" (не трогает остальной интерфейс).
+const INFL_BRAND = "#d6336c";
+const INFL_BRAND_LIGHT = "#f9d7e6";
 
 /* =========================================================================
    2. API-КЛИЕНТ — вся запись/чтение идёт на общий сервер, а не в localStorage
@@ -698,14 +701,228 @@ function influencerBloggerAgg(rows){
   const map = {};
   rows.forEach(r=>{
     const login = r.deal.blogerLogin || "—";
-    if(!map[login]) map[login] = {login, reach:0, clicks:0, contribution:0, dealsCount:0};
+    if(!map[login]) map[login] = {login, reach:0, clicks:0, contribution:0, cost:0, dealsCount:0};
     const a = map[login];
     a.reach += r.deal.reach||0;
     a.clicks += r.deal.clicks||0;
     a.contribution += r.netContribution||0;
+    a.cost += r.deal.cost||0;
     a.dealsCount++;
   });
   return Object.values(map);
+}
+
+/* ---------- Стилизованный дашборд "Платный инфлюенс" (по референсу заказчика) ----------
+   Показывается наверху вкладки "Инфлюенс интеграции крупные". КПИ/лучший-худший/план-факт/
+   тренд считаются по интеграциям ВЫБРАННОГО месяца; воронка стадий — по всем интеграциям
+   без привязки к месяцу (это состояние текущего пайплайна "здесь и сейчас", а не месячная метрика,
+   иначе интеграции без даты публикации/плана никогда бы в неё не попадали). */
+function influencerReachTrend(allRows){
+  return inflAvailableMonths().map(m=>{
+    const rows = allRows.filter(r=>inflDealDate(r.deal).slice(0,7)===m);
+    const avgReach = rows.length ? Math.round(rows.reduce((s,r)=>s+(r.deal.reach||0),0)/rows.length) : 0;
+    return {month:m, avgReach};
+  });
+}
+function influencerFunnelCounts(allRows){
+  const counts = {};
+  DEAL_STATUSES.forEach(st=>counts[st]=0);
+  allRows.forEach(r=>{ const st=r.deal.status; counts[st] = (counts[st]||0)+1; });
+  return DEAL_STATUSES.map(st=>({status:st, count:counts[st]||0}));
+}
+function influencerBrandStats(monthRows){
+  const withBaseline = monthRows.filter(r=>r.hasBaseline);
+  const totalCost = monthRows.reduce((s,r)=>s+(r.deal.cost||0),0);
+  const plannedCost = monthRows.reduce((s,r)=>s+(r.deal.plannedCost||0),0);
+  const totalReach = monthRows.reduce((s,r)=>s+(r.deal.reach||0),0);
+  const plannedReach = monthRows.reduce((s,r)=>s+(r.deal.plannedReach||0),0);
+  const totalClicks = monthRows.reduce((s,r)=>s+(r.deal.clicks||0),0);
+  const plannedClicks = monthRows.reduce((s,r)=>s+(r.deal.plannedClicks||0),0);
+  const totalContribution = monthRows.reduce((s,r)=>s+(r.netContribution||0),0);
+  const dealsCount = monthRows.length;
+  const publishedCount = monthRows.filter(r=>r.deal.publishedDate).length;
+
+  const romi = totalCost>0 ? totalContribution/totalCost : null;
+  const roasPct = totalCost>0 ? totalContribution/totalCost*100 : null;
+  const drrPct = totalContribution>0 ? totalCost/totalContribution*100 : null;
+  const cpv = totalReach>0 ? totalCost/totalReach : null;
+  const upliftPerView = totalReach>0 ? totalContribution/totalReach : null;
+  const upliftPerDeal = withBaseline.length
+    ? withBaseline.reduce((s,r)=>s+(r.netContribution-(r.deal.cost||0)),0)/withBaseline.length
+    : null;
+
+  // Лучший/худший блогер и лучшая/худшая интеграция — только среди тех, у кого вообще посчитан
+  // ROMI (hasBaseline), иначе "нет данных" (contribution=0) выглядело бы как чистый убыток.
+  const bloggerAgg = influencerBloggerAgg(withBaseline)
+    .filter(a=>a.cost>0)
+    .map(a=>({...a, profit: a.contribution-a.cost, romi: a.contribution/a.cost}));
+  const bestBlogger = bloggerAgg.slice().sort((a,b)=>b.profit-a.profit)[0] || null;
+  const worstBlogger = bloggerAgg.length>1 ? bloggerAgg.slice().sort((a,b)=>a.profit-b.profit)[0] : null;
+
+  const dealProfit = withBaseline.filter(r=>(r.deal.cost||0)>0).map(r=>({r, profit:r.netContribution-r.deal.cost}));
+  const bestDeal = dealProfit.slice().sort((a,b)=>b.profit-a.profit)[0] || null;
+  const worstDeal = dealProfit.length>1 ? dealProfit.slice().sort((a,b)=>a.profit-b.profit)[0] : null;
+
+  return {totalCost, plannedCost, totalReach, plannedReach, totalClicks, plannedClicks,
+    totalContribution, dealsCount, publishedCount, romi, roasPct, drrPct, cpv, upliftPerView, upliftPerDeal,
+    bloggerAgg, bestBlogger, worstBlogger, bestDeal, worstDeal};
+}
+function tplInfluencerBrandDashboard(allRows){
+  const months = inflAvailableMonths();
+  if(!months.length){
+    return `<div class="panel">
+      <div class="panel-title">Платный инфлюенс · дашборд</div>
+      <div class="login-hint">Добавьте интеграции с датой (план или факт публикации), чтобы увидеть сводку по месяцам.</div>
+    </div>`;
+  }
+  const month = (UI.inflDashMonth && months.includes(UI.inflDashMonth)) ? UI.inflDashMonth : months[months.length-1];
+  const monthRows = allRows.filter(r=>inflDealDate(r.deal).slice(0,7)===month);
+  const s = influencerBrandStats(monthRows);
+  const trend = influencerReachTrend(allRows);
+  const funnel = influencerFunnelCounts(allRows);
+
+  const kpi = (label, value) => `<div class="kpi"><div class="num" style="color:${INFL_BRAND}">${value}</div><div class="lbl">${label}</div></div>`;
+  const fmtSigned = (v) => (v>=0?"+":"−") + fmtNum(Math.abs(Math.round(v))) + " ₸";
+
+  const card = (title, borderColor, bg, body) => `
+    <div style="border-left:3px solid ${borderColor};background:${bg};border-radius:8px;padding:12px">
+      <div style="font-size:11px;font-weight:700;color:${borderColor};text-transform:uppercase">${title}</div>
+      ${body}
+    </div>`;
+
+  const planFactRow = (label, fact, plan) => {
+    const pct = plan>0 ? Math.round(fact/plan*100) : (fact>0?100:0);
+    const ok = pct>=100;
+    return `<div style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;font-size:12.8px;margin-bottom:4px">
+        <b>${label}</b>
+        <span>${fmtNum(fact)} / <b>${fmtNum(plan)}</b> <b style="color:${ok?'var(--ok)':'var(--warn)'}">${pct}%</b></span>
+      </div>
+      <div class="pbar" style="background:${INFL_BRAND_LIGHT}"><span style="width:${Math.min(100,pct)}%;background:${INFL_BRAND}"></span></div>
+    </div>`;
+  };
+
+  const maxTrend = Math.max(1, ...trend.map(t=>t.avgReach));
+  const trendChart = `
+    <div style="display:flex;align-items:flex-end;gap:10px;height:180px;padding-top:10px">
+      ${trend.map(t=>{
+        const h = Math.round(t.avgReach/maxTrend*140)+6;
+        const active = t.month===month;
+        return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%">
+          <div style="font-size:11px;color:var(--ink-mute);margin-bottom:4px">${fmtNum(t.avgReach)}</div>
+          <div style="width:100%;max-width:46px;height:${h}px;border-radius:6px 6px 0 0;background:${active?INFL_BRAND:INFL_BRAND_LIGHT};border:1px solid ${INFL_BRAND}"></div>
+          <div style="font-size:11px;color:var(--ink-mute);margin-top:6px">${escapeHtml(monthLabel(t.month).slice(0,3))}</div>
+        </div>`;
+      }).join("")}
+    </div>`;
+
+  const maxFunnel = Math.max(1, ...funnel.map(f=>f.count));
+  const funnelChart = funnel.map(f=>`
+    <div style="margin-bottom:10px">
+      <div style="font-size:12.8px;margin-bottom:4px"><b>${escapeHtml(f.status)}</b></div>
+      <div style="background:${INFL_BRAND_LIGHT};border-radius:8px;height:26px">
+        <div style="height:100%;border-radius:8px;background:${INFL_BRAND};width:${Math.max(f.count?10:0,Math.round(f.count/maxFunnel*100))}%;display:flex;align-items:center;justify-content:flex-end;padding-right:8px;min-width:${f.count?'28px':'0'}">
+          ${f.count ? `<b style="color:#fff;font-size:12px">${f.count}</b>` : ""}
+        </div>
+      </div>
+    </div>`).join("");
+
+  const bcgBubbles = s.bloggerAgg;
+  const bcg = bcgBubbles.length>=2 ? (()=>{
+    const W=560,H=260,pad=42;
+    const maxRomi = Math.max(0.1, ...bcgBubbles.map(a=>a.romi));
+    const maxReach = Math.max(1, ...bcgBubbles.map(a=>a.reach));
+    const maxCost = Math.max(1, ...bcgBubbles.map(a=>a.cost));
+    const pts = bcgBubbles.map(a=>{
+      const x = pad + (a.romi/maxRomi)*(W-2*pad);
+      const y = H-pad - (a.reach/maxReach)*(H-2*pad);
+      const r = 6 + Math.sqrt(a.cost/maxCost)*22;
+      return {x,y,r,login:a.login};
+    });
+    return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;max-height:220px">
+      <line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="var(--line-2)"/>
+      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${H-pad}" stroke="var(--line-2)"/>
+      <text x="${W-pad}" y="${H-pad+16}" font-size="10" fill="var(--ink-mute)" text-anchor="end">ROMI →</text>
+      <text x="${pad-6}" y="${pad+2}" font-size="10" fill="var(--ink-mute)" text-anchor="end">Охват</text>
+      ${pts.map(p=>`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${p.r.toFixed(1)}" fill="${INFL_BRAND}" fill-opacity="0.55" stroke="${INFL_BRAND}"/>
+      <text x="${p.x.toFixed(1)}" y="${(p.y-p.r-4).toFixed(1)}" font-size="10" fill="var(--ink)" text-anchor="middle">${escapeHtml(p.login)}</text>`).join("")}
+    </svg>`;
+  })() : `<div class="login-hint">Нужно минимум 2 блогера с посчитанным ROMI за этот месяц</div>`;
+
+  return `
+  <div class="panel">
+    <div class="panel-title">
+      Платный инфлюенс · дашборд
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${months.map(m=>`<button class="btn btn-sm infl-dash-month-tab" data-month="${m}" style="background:${m===month?INFL_BRAND:INFL_BRAND_LIGHT};color:${m===month?'#fff':INFL_BRAND}">${escapeHtml(monthLabel(m).split(" ")[0])}</button>`).join("")}
+      </div>
+    </div>
+
+    <div class="grid-kpi">
+      ${kpi("Расходы", fmtNum(s.totalCost)+" ₸")}
+      ${kpi("Выручка (вклад)", fmtNum(Math.round(s.totalContribution))+" ₸")}
+      ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2))}
+      ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%")}
+      ${kpi("ДРР", s.drrPct==null?"—":s.drrPct.toFixed(1)+"%")}
+      ${kpi("CPV", s.cpv==null?"—":(Math.round(s.cpv*100)/100)+" ₸")}
+      ${kpi("Охват", fmtNum(s.totalReach))}
+      ${kpi("Прирост ₸/просмотр", s.upliftPerView==null?"—":(Math.round(s.upliftPerView*100)/100)+" ₸")}
+      ${kpi("Прирост ₸/интеграцию", s.upliftPerDeal==null?"—":fmtNum(Math.round(s.upliftPerDeal))+" ₸")}
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-bottom:14px">
+      ${card("Лучший блогер", "var(--ok)", "var(--ok-bg)", s.bestBlogger ? `
+        <div style="font-weight:700;margin:4px 0">${escapeHtml(s.bestBlogger.login)}</div>
+        <div style="color:var(--ok);font-weight:700">${fmtSigned(s.bestBlogger.profit)} прироста</div>
+        <div style="color:var(--ink-mute);font-size:11.5px">ROMI ×${s.bestBlogger.romi.toFixed(2)} · охват ${fmtNum(s.bestBlogger.reach)}</div>`
+        : `<div class="login-hint" style="margin-top:6px">Нет данных за месяц</div>`)}
+      ${card("Худший блогер", "var(--bad)", "var(--bad-bg)", s.worstBlogger ? `
+        <div style="font-weight:700;margin:4px 0">${escapeHtml(s.worstBlogger.login)}</div>
+        <div style="color:${s.worstBlogger.profit<0?'var(--bad)':'var(--ok)'};font-weight:700">${fmtSigned(s.worstBlogger.profit)}${s.worstBlogger.profit<0?" (убыток)":""}</div>
+        <div style="color:var(--ink-mute);font-size:11.5px">ROMI ×${s.worstBlogger.romi.toFixed(2)} · охват ${fmtNum(s.worstBlogger.reach)}</div>`
+        : `<div class="login-hint" style="margin-top:6px">Нужно ≥2 блогера с ROMI</div>`)}
+      ${card("Лучшая интеграция", "var(--ok)", "var(--ok-bg)", s.bestDeal ? `
+        <div style="font-weight:700;margin:4px 0">${escapeHtml(s.bestDeal.r.deal.platform)} «${escapeHtml(s.bestDeal.r.deal.product)}»</div>
+        <div style="color:var(--ok);font-weight:700">${fmtSigned(s.bestDeal.profit)}</div>
+        <div style="color:var(--ink-mute);font-size:11.5px">${escapeHtml(s.bestDeal.r.deal.blogerLogin)} · ${escapeHtml(s.bestDeal.r.deal.publishedDate||"—")} · охват ${fmtNum(s.bestDeal.r.deal.reach)}</div>`
+        : `<div class="login-hint" style="margin-top:6px">Нет данных за месяц</div>`)}
+      ${card("Худшая интеграция", "var(--bad)", "var(--bad-bg)", s.worstDeal ? `
+        <div style="font-weight:700;margin:4px 0">${escapeHtml(s.worstDeal.r.deal.platform)} «${escapeHtml(s.worstDeal.r.deal.product)}»</div>
+        <div style="color:${s.worstDeal.profit<0?'var(--bad)':'var(--ok)'};font-weight:700">${fmtSigned(s.worstDeal.profit)}</div>
+        <div style="color:var(--ink-mute);font-size:11.5px">${escapeHtml(s.worstDeal.r.deal.blogerLogin)} · ${escapeHtml(s.worstDeal.r.deal.publishedDate||"—")} · охват ${fmtNum(s.worstDeal.r.deal.reach)}</div>`
+        : `<div class="login-hint" style="margin-top:6px">Нужно ≥2 интеграции с ROMI</div>`)}
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:14px">
+      <div>
+        <div style="font-weight:700;font-size:13px;margin-bottom:8px">План/факт · ${escapeHtml(monthLabel(month))}</div>
+        ${planFactRow("Охват", s.totalReach, s.plannedReach)}
+        ${planFactRow("Клики", s.totalClicks, s.plannedClicks)}
+        ${planFactRow("Расход, ₸", s.totalCost, s.plannedCost)}
+        ${planFactRow("Интеграций опубликовано", s.publishedCount, s.dealsCount)}
+      </div>
+      <div>
+        <div style="font-weight:700;font-size:13px;margin-bottom:8px">Средний охват интеграции по месяцам</div>
+        ${trendChart}
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px">
+      <div>
+        <div style="font-weight:700;font-size:13px;margin-bottom:8px">БКГ-матрица · платные блогеры
+          <span style="font-weight:400;color:var(--ink-mute);font-size:11px">X — ROMI, Y — охват, размер — расход</span>
+        </div>
+        ${bcg}
+      </div>
+      <div>
+        <div style="font-weight:700;font-size:13px;margin-bottom:8px">Стадии интеграций
+          <span style="font-weight:400;color:var(--ink-mute);font-size:11px">по всем интеграциям, без привязки к месяцу</span>
+        </div>
+        ${funnelChart}
+      </div>
+    </div>
+  </div>
+  `;
 }
 
 async function withBusy(button, fn){
@@ -726,6 +943,7 @@ const UI = {
   filters: {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""},
   topSort: "views",
   inflFilter: {search:"", sort:"default", month:""},
+  inflDashMonth: "", // выбранный месяц в новом стилизованном дашборде "Платный инфлюенс" (см. tplInfluencerBrandDashboard)
   inflCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
   inflTopFilter: {from:"", to:""},
   selectedOrderIds: new Set(),
@@ -1060,7 +1278,7 @@ function tplCampaigns(){
     <div class="panel">
       <div class="panel-title">Бартер-проекты <button class="btn btn-primary btn-sm" id="new-campaign-btn">+ Новый проект</button></div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Название</th><th>Город</th><th>Период</th><th>Ответственный</th><th>Тип бокса</th><th>План, шт.</th><th>Себес/бокс</th><th>Расход</th><th>№ реализации (1С)</th><th>Этап</th><th>Доставок</th><th></th></tr></thead>
+        <thead><tr><th>Название</th><th>Город</th><th>Период</th><th>Ответственный</th><th>Тип бокса</th><th>План, шт.</th><th>Себес/бокс</th><th>Расход</th><th>№ реализации (1С)</th><th>Этап</th><th>Доставок</th><th>Действия</th></tr></thead>
         <tbody>
           ${campaigns.map(c=>{
             const exp = campaignExpense(c);
@@ -1076,7 +1294,10 @@ function tplCampaigns(){
               <td><input type="text" class="camp-realization" data-id="${c.id}" value="${escapeHtml(c.realizationNumber||"")}" style="width:120px" placeholder="РЕАЛ-00123" title="Номер реализации из 1С, по которой списаны товары проекта"></td>
               <td><select class="camp-stage" data-id="${c.id}">${CAMPAIGN_STAGES.map(s=>`<option ${s===c.stage?'selected':''}>${s}</option>`).join("")}</select></td>
               <td>${exp.count}</td>
-              <td><button class="btn btn-danger btn-sm del-campaign" data-id="${c.id}">Удалить</button></td>
+              <td style="white-space:nowrap">
+                <button class="btn btn-ghost btn-sm edit-campaign-btn" data-id="${c.id}" title="Редактировать проект">✏️</button>
+                <button class="btn btn-danger btn-sm del-campaign" data-id="${c.id}">Удалить</button>
+              </td>
             </tr>`;
           }).join("") || `<tr><td class="empty" colspan="12">Проектов пока нет</td></tr>`}
         </tbody>
@@ -1518,6 +1739,7 @@ function tplInfluencerDeals(){
   if(sorters[fi.sort]) rows = rows.slice().sort(sorters[fi.sort]);
 
   return `
+    ${tplInfluencerBrandDashboard(s.rows)}
     ${tplInfluencerCompare(s.rows)}
 
     <div class="panel">
@@ -1784,6 +2006,48 @@ function modalNewCampaign(){
         stage: CAMPAIGN_STAGES[0], budget:0,
       }));
       closeModal(); toast("Проект создан"); await DataManager.refresh(); render();
+    }catch(e){ toast(e.message, true); }
+  };
+}
+
+// Редактирование уже созданного проекта (карандашик в таблице «Бартер-проекты») —
+// те же поля, что и при создании, плюс номер реализации, если его нужно поправить.
+function modalEditCampaign(id){
+  const c = DataManager.state.campaigns.find(c=>c.id===id);
+  if(!c) return;
+  openModal(`
+    <h3>Редактировать проект</h3>
+    <div class="form-row">
+      <div class="field"><label>Название</label><input id="m-name" value="${escapeHtml(c.name)}"></div>
+      <div class="field"><label>Город</label><input id="m-city" value="${escapeHtml(c.city)}"></div>
+      <div class="field"><label>Период</label><input id="m-period" value="${escapeHtml(c.period)}"></div>
+      <div class="field"><label>Ответственный</label><input id="m-resp" value="${escapeHtml(c.responsible)}"></div>
+      <div class="field"><label>Тип бокса</label><select id="m-box">${BOX_TYPES.map(b=>`<option ${b===c.boxType?'selected':''}>${b}</option>`).join("")}</select></div>
+      <div class="field"><label>План, шт.</label><input id="m-count" type="number" value="${c.plannedCount}"></div>
+      <div class="field"><label>Себестоимость 1 бокса, ₸</label><input id="m-costbox" type="number" value="${c.costPerBox||0}"></div>
+      <div class="field"><label>Номер реализации (1С)</label><input id="m-realization" value="${escapeHtml(c.realizationNumber||"")}" placeholder="РЕАЛ-00123"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="m-cancel">Отмена</button>
+      <button class="btn btn-primary" id="m-save">Сохранить</button>
+    </div>
+  `);
+  document.getElementById("m-cancel").onclick = closeModal;
+  document.getElementById("m-save").onclick = async ()=>{
+    const btn = document.getElementById("m-save");
+    const name = document.getElementById("m-name").value.trim();
+    if(!name){ toast("Укажите название проекта", true); return; }
+    try{
+      await withBusy(btn, ()=> Api.updateCampaign(id, {
+        name, city: document.getElementById("m-city").value.trim() || "—",
+        period: document.getElementById("m-period").value.trim() || "—",
+        responsible: document.getElementById("m-resp").value.trim() || "—",
+        boxType: document.getElementById("m-box").value,
+        plannedCount: parseInt(document.getElementById("m-count").value,10) || 0,
+        costPerBox: parseInt(document.getElementById("m-costbox").value,10) || 0,
+        realizationNumber: document.getElementById("m-realization").value.trim(),
+      }));
+      closeModal(); toast("Проект обновлён"); await DataManager.refresh(); render();
     }catch(e){ toast(e.message, true); }
   };
 }
@@ -2274,6 +2538,9 @@ function wireDeskTab(){
         catch(e){ toast(e.message, true); render(); }
       };
     });
+    document.querySelectorAll(".edit-campaign-btn").forEach(btn=>{
+      btn.onclick = ()=> modalEditCampaign(parseInt(btn.dataset.id,10));
+    });
     document.querySelectorAll(".del-campaign").forEach(btn=>{
       btn.onclick = async ()=>{
         const id = parseInt(btn.dataset.id,10);
@@ -2540,6 +2807,9 @@ function wireDeskTab(){
     inflSearch.oninput = debounce(()=>{ UI.inflFilter.search = inflSearch.value; renderDeskTab(); }, 250);
     document.getElementById("infl-sort").onchange = e=>{ UI.inflFilter.sort = e.target.value; renderDeskTab(); };
     document.getElementById("infl-month").onchange = e=>{ UI.inflFilter.month = e.target.value; renderDeskTab(); };
+    document.querySelectorAll(".infl-dash-month-tab").forEach(btn=>{
+      btn.onclick = ()=>{ UI.inflDashMonth = btn.dataset.month; renderDeskTab(); };
+    });
 
     ["cmp-a-from","cmp-a-to","cmp-b-from","cmp-b-to"].forEach(id=>{
       const el = document.getElementById(id);
@@ -3060,6 +3330,76 @@ async function runSelfTests(){
     } finally {
       DataManager.state.campaigns = savedCampaigns;
       DataManager.state.orders = savedOrders;
+    }
+  });
+  TestSuite.test("tplCampaigns показывает карандашик редактирования, modalEditCampaign предзаполняет форму", ()=>{
+    const savedCampaigns = DataManager.state.campaigns;
+    try{
+      DataManager.state.campaigns = [{id:9931, name:"Тест-Э", city:"Астана", period:"Июнь", responsible:"Аяужан", boxType:"Уход премиум", plannedCount:42, stage:CAMPAIGN_STAGES[0], costPerBox:777, realizationNumber:"РЕАЛ-999"}];
+      const html = tplCampaigns();
+      if(!html.includes("edit-campaign-btn")) throw new Error("кнопка редактирования (карандашик) не отрисована");
+      document.body.innerHTML = '<div id="app"></div>';
+      modalEditCampaign(9931);
+      const modal = document.getElementById("modal-back");
+      if(!modal) throw new Error("модал редактирования не открылся");
+      if(document.getElementById("m-name").value !== "Тест-Э") throw new Error("название не предзаполнено");
+      if(document.getElementById("m-realization").value !== "РЕАЛ-999") throw new Error("номер реализации не предзаполнен");
+      if(document.getElementById("m-costbox").value !== "777") throw new Error("себестоимость не предзаполнена");
+      closeModal();
+    } finally {
+      DataManager.state.campaigns = savedCampaigns;
+      document.body.innerHTML = '<div id="app"></div>';
+    }
+  });
+  TestSuite.test("influencerBrandStats считает KPI и лучшего/худшего блогера и интеграцию за месяц", ()=>{
+    // Строки уже "посчитаны" (как будто это выход computeInfluencerRomi) — так проще проверить
+    // саму агрегацию отдельно от движка ROMI/decay, который уже покрыт своим тестом выше.
+    const dealBest = {id:9941, blogerLogin:"@best", platform:"Reels", product:"P1", plannedDate:"2026-07-01", publishedDate:"2026-07-05", plannedReach:9000, plannedClicks:400, reach:10000, clicks:500, plannedCost:1000, cost:1000, status:"Опубликована"};
+    const dealWorst = {id:9942, blogerLogin:"@worst", platform:"Stories", product:"P2", plannedDate:"2026-07-02", publishedDate:"2026-07-10", plannedReach:6000, plannedClicks:150, reach:5000, clicks:100, plannedCost:1800, cost:2000, status:"Закрыта"};
+    const dealNoData = {id:9943, blogerLogin:"@nodata", platform:"Reels", product:"P3", plannedDate:"2026-07-12", plannedReach:0, plannedClicks:0, reach:1000, clicks:10, plannedCost:0, cost:500, status:"Запланирована"};
+    const rows = [
+      {deal:dealBest,  netContribution:2500, romi:2.5,  hasBaseline:true},
+      {deal:dealWorst, netContribution:500,  romi:0.25, hasBaseline:true},
+      {deal:dealNoData,netContribution:0,    romi:null, hasBaseline:false},
+    ];
+    const s = influencerBrandStats(rows);
+    if(s.totalCost!==3500) throw new Error("расходы посчитаны неверно: "+s.totalCost);
+    if(s.totalReach!==16000) throw new Error("охват посчитан неверно: "+s.totalReach);
+    if(Math.round(s.totalContribution)!==3000) throw new Error("вклад в продажи посчитан неверно: "+s.totalContribution);
+    if(Math.abs(s.romi-3000/3500)>0.001) throw new Error("ROMI посчитан неверно: "+s.romi);
+    if(Math.abs(s.cpv-3500/16000)>0.001) throw new Error("CPV посчитан неверно: "+s.cpv);
+    if(s.dealsCount!==3) throw new Error("кол-во интеграций неверно: "+s.dealsCount);
+    if(s.publishedCount!==2) throw new Error("кол-во опубликованных неверно: "+s.publishedCount);
+    if(!s.bestBlogger || s.bestBlogger.login!=="@best") throw new Error("лучший блогер определён неверно");
+    if(!s.worstBlogger || s.worstBlogger.login!=="@worst") throw new Error("худший блогер определён неверно");
+    if(Math.round(s.bestBlogger.profit)!==1500) throw new Error("прибыль лучшего блогера неверна: "+s.bestBlogger.profit);
+    if(Math.round(s.worstBlogger.profit)!==-1500) throw new Error("прибыль худшего блогера неверна: "+s.worstBlogger.profit);
+    if(!s.bestDeal || s.bestDeal.r.deal.id!==9941) throw new Error("лучшая интеграция определена неверно");
+    if(!s.worstDeal || s.worstDeal.r.deal.id!==9942) throw new Error("худшая интеграция определена неверно");
+    // "Безданных" интеграция не должна попадать в лучшие/худшие (иначе выглядела бы как чистый убыток).
+    if(s.bloggerAgg.some(a=>a.login==="@nodata")) throw new Error("интеграция без базы ROMI не должна попадать в рейтинг");
+  });
+  TestSuite.test("tplInfluencerBrandDashboard отрисовывает дашборд с реальными данными месяца", ()=>{
+    const savedDeals = DataManager.state.influencerDeals;
+    const savedDashMonth = UI.inflDashMonth;
+    try{
+      const dealBest = {id:9951, blogerLogin:"@best2", platform:"Reels", product:"P1", plannedDate:"2026-07-01", publishedDate:"2026-07-05", plannedReach:9000, plannedClicks:400, reach:10000, clicks:500, plannedCost:1000, cost:1000, status:"Опубликована"};
+      const dealWorst = {id:9952, blogerLogin:"@worst2", platform:"Stories", product:"P2", plannedDate:"2026-07-02", publishedDate:"2026-07-10", plannedReach:6000, plannedClicks:150, reach:5000, clicks:100, plannedCost:1800, cost:2000, status:"Закрыта"};
+      DataManager.state.influencerDeals = [dealBest, dealWorst];
+      UI.inflDashMonth = "";
+      const rows = [
+        {deal:dealBest,  netContribution:2500, romi:2.5,  hasBaseline:true},
+        {deal:dealWorst, netContribution:500,  romi:0.25, hasBaseline:true},
+      ];
+      const html = tplInfluencerBrandDashboard(rows);
+      if(!html.includes("Платный инфлюенс")) throw new Error("заголовок дашборда отсутствует");
+      if(!html.includes("infl-dash-month-tab")) throw new Error("вкладки месяцев не отрисованы");
+      if(!html.includes("@best2") || !html.includes("@worst2")) throw new Error("лучший/худший блогер не показаны");
+      if(!html.includes("3\u00a0000") && !html.includes("3 000")) throw new Error("суммарные расходы не отрисованы");
+      if(!html.includes(escapeHtml("Опубликована"))) throw new Error("воронка стадий не отрисована");
+    } finally {
+      DataManager.state.influencerDeals = savedDeals;
+      UI.inflDashMonth = savedDashMonth;
     }
   });
   TestSuite.test("reachInfo: оценка 15% только когда доставлено и опубликовано", ()=>{
