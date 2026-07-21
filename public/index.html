@@ -698,15 +698,28 @@ function decayWeight(daysSincePost){
 // Если ШК не указан — сверяем по текстовому названию продукта, как раньше (для старых записей).
 function dealMatchKey(d){ return (d.barcode||"").trim() || d.product; }
 function saleMatchKey(s){ return (s.barcode||"").trim() || s.product; }
-function computeInfluencerRomi(){
-  const {influencerDeals, salesByDay} = DataManager.state;
+// ВАЖНО: крупные и микро/средние интеграции считаются здесь ВМЕСТЕ, одним расчётом,
+// а не двумя независимыми (как было раньше). Причина: если по одному и тому же товару
+// в одно и то же время шла реклама и у крупного блогера, и у микро/среднего — то (а) "чистые"
+// дни без рекламы для базовой линии должны быть чистыми от ОБОИХ каналов сразу, иначе базовая
+// линия одного канала будет завышена из-за скрытой активности другого; и (б) прирост продаж в
+// такие дни нужно делить МЕЖДУ всеми активными интеграциями обоих каналов (по тому же
+// decay-весу), а не засчитывать полностью и туда, и туда — иначе один и тот же прирост
+// задвоится в сумме "Вклад в продажи" крупных + микро дашбордов.
+function computeUnifiedInfluencerRomi(){
+  const {influencerDeals, microInfluencerDeals, salesByDay} = DataManager.state;
+  const units = [
+    ...influencerDeals.map(d=>({key:'large:'+d.id, type:'large', matchKey:dealMatchKey(d), date:d.publishedDate, cost:d.cost||0, deal:d})),
+    ...microInfluencerDeals.map(d=>({key:'micro:'+d.id, type:'micro', matchKey:microDealMatchKey(d), date:d.publishDate, cost:d.cost||0, deal:d})),
+  ];
+
   const byProduct = {};
   salesByDay.forEach(s=>{ const key = saleMatchKey(s); (byProduct[key] = byProduct[key] || []).push(s); });
 
   function isCleanDay(matchKey, dateStr){
-    return !influencerDeals.some(d=>{
-      if(dealMatchKey(d)!==matchKey || !d.publishedDate) return false;
-      const diff = daysBetween(dateStr, d.publishedDate);
+    return !units.some(u=>{
+      if(u.matchKey!==matchKey || !u.date) return false;
+      const diff = daysBetween(dateStr, u.date);
       return diff>=0 && diff<=2;
     });
   }
@@ -717,7 +730,7 @@ function computeInfluencerRomi(){
   });
 
   const contribution = {};
-  influencerDeals.forEach(d=> contribution[d.id]=0);
+  units.forEach(u=> contribution[u.key]=0);
 
   Object.keys(byProduct).forEach(matchKey=>{
     const base = baselineByProduct[matchKey];
@@ -725,23 +738,26 @@ function computeInfluencerRomi(){
     byProduct[matchKey].forEach(s=>{
       const uplift = Math.max(0, s.revenue - base);
       if(uplift<=0) return;
-      const active = influencerDeals
-        .filter(d=>dealMatchKey(d)===matchKey && d.publishedDate)
-        .map(d=>({d, diff: daysBetween(s.date, d.publishedDate)}))
+      const active = units
+        .filter(u=>u.matchKey===matchKey && u.date)
+        .map(u=>({u, diff: daysBetween(s.date, u.date)}))
         .filter(x=>x.diff>=0 && x.diff<=2)
-        .map(x=>({d:x.d, w: decayWeight(x.diff)}));
+        .map(x=>({u:x.u, w: decayWeight(x.diff)}));
       const totalW = active.reduce((a,x)=>a+x.w,0);
       if(totalW<=0) return;
-      active.forEach(x=>{ contribution[x.d.id] += uplift * (x.w/totalW); });
+      active.forEach(x=>{ contribution[x.u.key] += uplift * (x.w/totalW); });
     });
   });
 
-  return influencerDeals.map(d=>{
-    const matchKey = dealMatchKey(d);
-    const netContribution = Math.round(contribution[d.id]||0);
-    const hasBaseline = baselineByProduct[matchKey]!=null;
-    const romi = (hasBaseline && d.cost>0) ? (netContribution / d.cost) : null;
-    return {deal:d, netContribution, romi, hasBaseline};
+  return {units, contribution, baselineByProduct};
+}
+function computeInfluencerRomi(){
+  const {units, contribution, baselineByProduct} = computeUnifiedInfluencerRomi();
+  return units.filter(u=>u.type==='large').map(u=>{
+    const netContribution = Math.round(contribution[u.key]||0);
+    const hasBaseline = baselineByProduct[u.matchKey]!=null;
+    const romi = (hasBaseline && u.cost>0) ? (netContribution / u.cost) : null;
+    return {deal:u.deal, netContribution, romi, hasBaseline};
   });
 }
 // from/to — тот же необязательный фильтр периода, что и в marketingSummary; фильтрует по
@@ -784,53 +800,16 @@ function microDealCpv(d){
 // (в отличие от крупных, тут нет отдельной план-даты).
 function microDealDate(d){ return d.publishDate || ""; }
 function microDealMatchKey(d){ return (d.barcode||"").trim() || d.product; }
-// Тот же decay-движок ROMI, что и computeInfluencerRomi (см. комментарий там), только
-// источник интеграций — microInfluencerDeals, и сопоставление с продажами идёт через
-// microDealMatchKey/microDealDate вместо dealMatchKey/inflDealDate.
+// Тот же decay-движок ROMI, что и computeInfluencerRomi, и считается ОДНИМ общим расчётом
+// вместе с крупными интеграциями (см. комментарий у computeUnifiedInfluencerRomi выше) — так
+// реклама у крупного блогера в те же даты не задваивает и не искажает вклад микро/средних.
 function computeMicroInfluencerRomi(){
-  const {microInfluencerDeals, salesByDay} = DataManager.state;
-  const byProduct = {};
-  salesByDay.forEach(s=>{ const key = saleMatchKey(s); (byProduct[key] = byProduct[key] || []).push(s); });
-
-  function isCleanDay(matchKey, dateStr){
-    return !microInfluencerDeals.some(d=>{
-      if(microDealMatchKey(d)!==matchKey || !d.publishDate) return false;
-      const diff = daysBetween(dateStr, d.publishDate);
-      return diff>=0 && diff<=2;
-    });
-  }
-  const baselineByProduct = {};
-  Object.keys(byProduct).forEach(matchKey=>{
-    const clean = byProduct[matchKey].filter(s=>isCleanDay(matchKey, s.date));
-    baselineByProduct[matchKey] = clean.length ? clean.reduce((a,s)=>a+s.revenue,0)/clean.length : null;
-  });
-
-  const contribution = {};
-  microInfluencerDeals.forEach(d=> contribution[d.id]=0);
-
-  Object.keys(byProduct).forEach(matchKey=>{
-    const base = baselineByProduct[matchKey];
-    if(base==null) return;
-    byProduct[matchKey].forEach(s=>{
-      const uplift = Math.max(0, s.revenue - base);
-      if(uplift<=0) return;
-      const active = microInfluencerDeals
-        .filter(d=>microDealMatchKey(d)===matchKey && d.publishDate)
-        .map(d=>({d, diff: daysBetween(s.date, d.publishDate)}))
-        .filter(x=>x.diff>=0 && x.diff<=2)
-        .map(x=>({d:x.d, w: decayWeight(x.diff)}));
-      const totalW = active.reduce((a,x)=>a+x.w,0);
-      if(totalW<=0) return;
-      active.forEach(x=>{ contribution[x.d.id] += uplift * (x.w/totalW); });
-    });
-  });
-
-  return microInfluencerDeals.map(d=>{
-    const matchKey = microDealMatchKey(d);
-    const netContribution = Math.round(contribution[d.id]||0);
-    const hasBaseline = baselineByProduct[matchKey]!=null;
-    const romi = (hasBaseline && d.cost>0) ? (netContribution / d.cost) : null;
-    return {deal:d, netContribution, romi, hasBaseline};
+  const {units, contribution, baselineByProduct} = computeUnifiedInfluencerRomi();
+  return units.filter(u=>u.type==='micro').map(u=>{
+    const netContribution = Math.round(contribution[u.key]||0);
+    const hasBaseline = baselineByProduct[u.matchKey]!=null;
+    const romi = (hasBaseline && u.cost>0) ? (netContribution / u.cost) : null;
+    return {deal:u.deal, netContribution, romi, hasBaseline};
   });
 }
 function microInfluencerSummary(from, to){
@@ -4081,11 +4060,13 @@ async function runSelfTests(){
   });
   TestSuite.test("computeInfluencerRomi делит прирост между активными интеграциями и обнуляет остаточный эффект", ()=>{
     const savedDeals = DataManager.state.influencerDeals;
+    const savedMicro = DataManager.state.microInfluencerDeals;
     const savedSales = DataManager.state.salesByDay;
     DataManager.state.influencerDeals = [
       {id:9001, blogerLogin:"@test_a", platform:"Instagram Reels", product:"ТестТовар", plannedDate:"2026-01-01", publishedDate:"2026-01-01", plannedReach:0, plannedClicks:0, reach:0, clicks:0, cost:1000, status:"Опубликована", notes:""},
       {id:9002, blogerLogin:"@test_b", platform:"Instagram Reels", product:"ТестТовар", plannedDate:"2026-01-02", publishedDate:"2026-01-02", plannedReach:0, plannedClicks:0, reach:0, clicks:0, cost:1000, status:"Опубликована", notes:""},
     ];
+    DataManager.state.microInfluencerDeals = []; // изолируем тест от unified-расчёта с микро/средними (см. computeUnifiedInfluencerRomi)
     DataManager.state.salesByDay = [
       {id:9101, date:"2025-12-30", product:"ТестТовар", revenue:100}, // чистый день (база)
       {id:9102, date:"2025-12-31", product:"ТестТовар", revenue:100}, // чистый день (база)
@@ -4102,6 +4083,40 @@ async function runSelfTests(){
       if(Math.abs(a.romi-0.05)>0.01) throw new Error("ROMI A рассчитан неверно: "+a.romi);
     } finally {
       DataManager.state.influencerDeals = savedDeals;
+      DataManager.state.microInfluencerDeals = savedMicro;
+      DataManager.state.salesByDay = savedSales;
+    }
+  });
+  TestSuite.test("computeUnifiedInfluencerRomi делит прирост МЕЖДУ крупным и микро блогером, если оба рекламировали товар в одни даты (не задваивает)", ()=>{
+    const savedDeals = DataManager.state.influencerDeals;
+    const savedMicro = DataManager.state.microInfluencerDeals;
+    const savedSales = DataManager.state.salesByDay;
+    try{
+      // Один и тот же товар: крупный блогер и микро блогер выходят в один день (значит вклад дня надо делить пополам, не считать дважды).
+      DataManager.state.influencerDeals = [
+        {id:9005, blogerLogin:"@large", platform:"Instagram Reels", product:"ОбщийТовар", publishedDate:"2026-02-01", cost:1000, status:"Опубликована"},
+      ];
+      DataManager.state.microInfluencerDeals = [
+        {id:9006, blogerName:"@small", product:"ОбщийТовар", barcode:"", publishDate:"2026-02-01", cost:1000},
+      ];
+      DataManager.state.salesByDay = [
+        {id:9201, date:"2026-01-29", product:"ОбщийТовар", revenue:100}, // чистый день (ни один блогер не активен)
+        {id:9202, date:"2026-01-30", product:"ОбщийТовар", revenue:100}, // чистый день (база)
+        {id:9203, date:"2026-02-01", product:"ОбщийТовар", revenue:300}, // оба блогера активны одновременно (diff=0, вес 1 у каждого)
+      ];
+      const largeRows = computeInfluencerRomi();
+      const microRows = computeMicroInfluencerRomi();
+      const large = largeRows.find(r=>r.deal.id===9005);
+      const micro = microRows.find(r=>r.deal.id===9006);
+      if(!large || !micro) throw new Error("тестовые интеграции не найдены");
+      // uplift = 300-100 = 200, делится поровну (оба вес 1) — по 100 на канал, а не по 200 каждому (что было бы задвоением)
+      if(Math.abs(large.netContribution-100)>1) throw new Error("вклад крупного блогера должен делиться пополам с микро: "+large.netContribution);
+      if(Math.abs(micro.netContribution-100)>1) throw new Error("вклад микро блогера должен делиться пополам с крупным: "+micro.netContribution);
+      const totalContribution = large.netContribution + micro.netContribution;
+      if(Math.abs(totalContribution-200)>1) throw new Error("суммарный вклад должен равняться приросту продаж (200), а не задваиваться: "+totalContribution);
+    } finally {
+      DataManager.state.influencerDeals = savedDeals;
+      DataManager.state.microInfluencerDeals = savedMicro;
       DataManager.state.salesByDay = savedSales;
     }
   });
@@ -4258,12 +4273,14 @@ async function runSelfTests(){
   });
   TestSuite.test("computeMicroInfluencerRomi делит прирост между активными интеграциями (тот же decay-движок, что и у крупных)", ()=>{
     const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedLarge = DataManager.state.influencerDeals;
     const savedSales = DataManager.state.salesByDay;
     try{
       DataManager.state.microInfluencerDeals = [
         {id:9070, blogerName:"@micro_a", product:"МикроТовар", barcode:"", cost:1000, publishDate:"2026-01-01"},
         {id:9071, blogerName:"@micro_b", product:"МикроТовар", barcode:"", cost:1000, publishDate:"2026-01-02"},
       ];
+      DataManager.state.influencerDeals = []; // изолируем тест от unified-расчёта с крупными (см. computeUnifiedInfluencerRomi)
       DataManager.state.salesByDay = [
         {id:9171, date:"2025-12-30", product:"МикроТовар", revenue:100},
         {id:9172, date:"2025-12-31", product:"МикроТовар", revenue:100},
@@ -4279,6 +4296,7 @@ async function runSelfTests(){
       if(Math.abs(a.romi-0.05)>0.01) throw new Error("ROMI A рассчитан неверно: "+a.romi);
     } finally {
       DataManager.state.microInfluencerDeals = savedDeals;
+      DataManager.state.influencerDeals = savedLarge;
       DataManager.state.salesByDay = savedSales;
     }
   });
