@@ -35,6 +35,14 @@ const CAMPAIGN_STAGES = [
 ];
 const RETURN_STATUSES = ["В офисе","Ожидает решения","Оформлен возврат","Принят на складе","Закрыт"];
 const DEAL_STATUSES = ["Запланирована","Опубликована","Оплачена","Закрыта"];
+// Инфлюенс интеграции микро/средние — платные размещения у мелких и средних блогеров
+// (обычно Instagram Reels + TikTok кросспостингом за одну сумму), ответственный — Нина.
+// Отдельная модель от "крупных" интеграций: нет ROMI по продажам (слишком много мелких
+// блогеров публикуется одновременно, атрибуция по товару была бы шумной) — вместо этого
+// считаем CPV = сумма / факт.охват (Reels+TikTok).
+const MICRO_PAYMENT_STATUSES = ["не оплачено","к оплате","оплачено"];
+const MICRO_PRODUCT_STATUSES = ["товар заказан","товар доставлен"];
+const MICRO_VIDEO_STATUSES = ["не опубликовано","опубликовано"];
 // Стоимость логистики за одну доставку — пока фиксированная для всех, проставляется
 // автоматически при создании заказа (вручную или через импорт CSV из UI).
 const LOGISTICS_COST_DEFAULT = 1500;
@@ -81,7 +89,7 @@ function findDriverByPhoneOrCode(input){
 /* =========================================================================
    1. ХРАНИЛИЩЕ: всё состояние — один объект в памяти, зеркалится в JSON-файл
    ========================================================================= */
-function emptyState(){ return {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[]}; }
+function emptyState(){ return {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[], microInfluencerDeals:[]}; }
 
 function seedState(){
   const drivers = [
@@ -184,7 +192,7 @@ function seedState(){
     salesByDay.push({id: salesByDay.length+1, date:d, product:"Уход премиум", revenue: revenue*3500});
   }
 
-  return {drivers, campaigns, orders, returns, publications, influencerDeals, salesByDay};
+  return {drivers, campaigns, orders, returns, publications, influencerDeals, salesByDay, microInfluencerDeals: []};
 }
 
 let state = loadState();
@@ -648,6 +656,89 @@ app.post("/api/influencer-deals/import", requireAuth, (req,res)=>{
       barcode: (r["шк"] || r["штрихкод"] || r["barcode"] || "").toString().trim(),
       likes:0, comments:0, saves:0, lastUpdatedFrom:"", lastUpdatedAt:"",
       status: r["статус"] || r["status"] || DEAL_STATUSES[0],
+      notes: r["комментарий"] || r["notes"] || "",
+    });
+    added++;
+  });
+  persist();
+  res.json({added});
+});
+
+// ---------- инфлюенс интеграции микро/средние (отв. Нина) ----------
+// Модель под реальный формат таблицы ("Платные микро июль"): один блогер размещается сразу
+// в Instagram Reels и TikTok кросспостингом за общую сумму; товар/статус/ссылки/факт.охват —
+// отдельно на каждую платформу. cpv (сумма/факт.охват) считается на фронтенде, не тут.
+app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
+  const b = req.body || {};
+  if(!b.blogerName) return res.status(400).json({error:"blogerName обязателен"});
+  const deal = {
+    id: nextId("microInfluencerDeals"),
+    responsible: b.responsible || "Нина",
+    blogerName: b.blogerName, phone: b.phone || "",
+    instagramAccount: b.instagramAccount || "", followers: b.followers || 0, er: b.er || 0, avgReach: b.avgReach || 0,
+    tiktokAccount: b.tiktokAccount || "", followersTT: b.followersTT || 0, erTT: b.erTT || 0, avgReachTT: b.avgReachTT || 0,
+    cost: b.cost || 0, paymentStatus: b.paymentStatus || MICRO_PAYMENT_STATUSES[0],
+    conditions: b.conditions || "", paymentMethod: b.paymentMethod || "", iin: b.iin || "",
+    city: b.city || "", address: b.address || "",
+    product: b.product || "", productCategory: b.productCategory || "",
+    productStatus: b.productStatus || "", videoStatus: b.videoStatus || "",
+    reelsLink: b.reelsLink || "", factReachReels: b.factReachReels || 0,
+    tiktokVideoLink: b.tiktokVideoLink || "", factReachTT: b.factReachTT || 0,
+    publishDate: b.publishDate || "", notes: b.notes || "",
+  };
+  state.microInfluencerDeals.push(deal);
+  persist();
+  res.json(deal);
+});
+app.patch("/api/micro-influencer-deals/:id", requireAuth, (req,res)=>{
+  const d = state.microInfluencerDeals.find(d=>d.id===+req.params.id);
+  if(!d) return res.status(404).json({error:"not found"});
+  Object.assign(d, req.body || {});
+  persist();
+  res.json(d);
+});
+app.delete("/api/micro-influencer-deals/:id", requireAuth, (req,res)=>{
+  const id = +req.params.id;
+  state.microInfluencerDeals = state.microInfluencerDeals.filter(d=>d.id!==id);
+  persist();
+  res.json({ok:true});
+});
+app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
+  const {rows} = req.body || {};
+  if(!Array.isArray(rows)) return res.status(400).json({error:"rows[] обязателен"});
+  let added = 0;
+  rows.forEach(r=>{
+    const blogerName = (r["блогер"] || r["blogger"] || "").trim();
+    if(!blogerName) return;
+    state.microInfluencerDeals.push({
+      id: nextId("microInfluencerDeals"),
+      responsible: r["ответственный"] || r["responsible"] || "Нина",
+      blogerName,
+      phone: (r["телефон"] || r["номер телефона"] || r["phone"] || "").toString().trim(),
+      instagramAccount: r["instagram"] || r["аккаунт instagram"] || "",
+      followers: parseInt(r["подписчики"] || r["followers"] || 0, 10) || 0,
+      er: parseFloat(r["er"] || 0) || 0,
+      avgReach: parseInt(r["ср. охваты"] || r["ср охваты"] || r["avg_reach"] || 0, 10) || 0,
+      tiktokAccount: r["tiktok"] || r["аккаунт tiktok"] || "",
+      followersTT: parseInt(r["подписчики tt"] || r["followers_tt"] || 0, 10) || 0,
+      erTT: parseFloat(r["er tt"] || 0) || 0,
+      avgReachTT: parseInt(r["ср. охваты tt"] || r["ср охваты tt"] || r["avg_reach_tt"] || 0, 10) || 0,
+      cost: parseInt(r["сумма"] || r["cost"] || 0, 10) || 0,
+      paymentStatus: r["статус оплаты"] || r["payment_status"] || MICRO_PAYMENT_STATUSES[0],
+      conditions: r["условия"] || r["conditions"] || "",
+      paymentMethod: r["способ оплаты"] || r["payment_method"] || "",
+      iin: (r["иин"] || r["iin"] || "").toString().trim(),
+      city: r["город"] || r["city"] || "",
+      address: r["адрес"] || r["address"] || "",
+      product: r["товар"] || r["product"] || "",
+      productCategory: r["категория товара"] || r["category"] || "",
+      productStatus: r["статус товара"] || "",
+      videoStatus: r["статус видео"] || "",
+      reelsLink: r["ссылка на reels"] || r["reels_link"] || "",
+      factReachReels: parseInt(r["факт охват reels"] || 0, 10) || 0,
+      tiktokVideoLink: r["ссылка на видео тт"] || r["tiktok_link"] || "",
+      factReachTT: parseInt(r["факт охват тт"] || 0, 10) || 0,
+      publishDate: r["дата выкладки"] || r["publish_date"] || "",
       notes: r["комментарий"] || r["notes"] || "",
     });
     added++;
