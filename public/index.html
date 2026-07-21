@@ -1120,9 +1120,15 @@ function microBloggerAgg(rows){
   return Object.values(map);
 }
 function microAvailableMonths(){
+  // В исходной таблице у части строк "Дата выкладки" — это текстовый диапазон вроде "14-15 июля"
+  // (не одна дата), а не ISO-дата. Такие значения не парсятся как месяц — пропускаем их здесь,
+  // чтобы не заводить фиктивные вкладки-месяцы; сама дата всё равно видна в таблице интеграций.
   const {microInfluencerDeals} = DataManager.state;
   const set = new Set();
-  microInfluencerDeals.forEach(d=>{ const dt = microDealDate(d); if(dt) set.add(dt.slice(0,7)); });
+  microInfluencerDeals.forEach(d=>{
+    const dt = microDealDate(d);
+    if(dt && /^\d{4}-\d{2}-\d{2}$/.test(dt)) set.add(dt.slice(0,7));
+  });
   return [...set].sort();
 }
 function microReachTrend(allRows){
