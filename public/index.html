@@ -2242,13 +2242,12 @@ function tplInfluencerCompare(rows){
   `;
 }
 
-function tplInfluencerDeals(){
+// Общая фильтрация/сортировка таблицы "Инфлюенс интеграции крупные" — вынесена в отдельную
+// функцию, чтобы и рендер таблицы, и кнопка "Экспорт CSV" показывали/выгружали ОДНИ И ТЕ ЖЕ
+// строки (с учётом текущего поиска/месяца/сортировки), а не расходились логикой в двух местах.
+function filteredInfluencerDealRows(){
   const s = influencerSummary();
-  const {salesByDay} = DataManager.state;
-  const salesSorted = salesByDay.slice().sort((a,b)=> a.date<b.date?1:-1).slice(0,30);
-
   const fi = UI.inflFilter;
-  const months = inflAvailableMonths();
   let rows = s.rows;
   if(fi.search){
     const q = fi.search.toLowerCase();
@@ -2270,6 +2269,16 @@ function tplInfluencerDeals(){
     romi_asc: (a,b)=> (a.romi==null?Infinity:a.romi)-(b.romi==null?Infinity:b.romi),
   };
   if(sorters[fi.sort]) rows = rows.slice().sort(sorters[fi.sort]);
+  return rows;
+}
+function tplInfluencerDeals(){
+  const s = influencerSummary();
+  const {salesByDay} = DataManager.state;
+  const salesSorted = salesByDay.slice().sort((a,b)=> a.date<b.date?1:-1).slice(0,30);
+
+  const fi = UI.inflFilter;
+  const months = inflAvailableMonths();
+  const rows = filteredInfluencerDealRows();
 
   return `
     ${tplInfluencerBrandDashboard(s.rows)}
@@ -2282,6 +2291,7 @@ function tplInfluencerDeals(){
           <button class="btn btn-ghost btn-sm" id="template-deal-csv-btn">Шаблон CSV</button>
           <button class="btn btn-ghost btn-sm" id="import-deal-csv-btn">Импорт CSV</button>
           <input type="file" id="import-deal-csv-input" accept=".csv" class="hide">
+          <button class="btn btn-ghost btn-sm" id="export-deal-csv-btn">Экспорт CSV</button>
           <button class="btn btn-primary btn-sm" id="new-deal-btn">+ Интеграция</button>
         </div>
       </div>
@@ -3661,6 +3671,29 @@ function wireDeskTab(){
       reader.readAsText(file, "UTF-8");
     };
 
+    // Выгружает ровно то, что сейчас видно в таблице (с учётом поиска/месяца/сортировки) —
+    // те же строки, что и filteredInfluencerDealRows() отдаёт для рендера, чтобы экспорт не
+    // расходился с тем, что маркетолог видит на экране.
+    document.getElementById("export-deal-csv-btn").onclick = ()=>{
+      const rows = filteredInfluencerDealRows();
+      const header = ["блогер","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","вклад_в_продажи","romi","статус"];
+      const lines = [header.map(csvEscape).join(",")];
+      rows.forEach(r=>{
+        const d = r.deal;
+        lines.push([
+          d.blogerLogin, d.platform, d.product, d.barcode||"",
+          d.plannedDate||"", d.publishedDate||"",
+          d.plannedReach||0, d.plannedClicks||0, d.reach||0, d.clicks||0,
+          d.plannedCost||0, d.cost||0,
+          r.hasBaseline ? r.netContribution : "нет данных",
+          r.romi==null ? "" : r.romi.toFixed(2),
+          d.status
+        ].map(csvEscape).join(","));
+      });
+      downloadFile("barter-box-influencer-deals-export.csv", "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
+      toast("Таблица выгружена");
+    };
+
     document.getElementById("template-sale-csv-btn").onclick = ()=>{
       const header = ["дата","продукт","шк","выручка"];
       const example = ["2026-07-01","Уход премиум","4650358455500","145000"];
@@ -4211,6 +4244,48 @@ async function runSelfTests(){
     } finally {
       DataManager.state.influencerDeals = saved;
       DataManager.state.salesByDay = savedSales;
+    }
+  });
+  TestSuite.test("filteredInfluencerDealRows фильтрует по логину/месяцу и сортирует так же, как таблица", ()=>{
+    const saved = DataManager.state.influencerDeals;
+    const savedSales = DataManager.state.salesByDay;
+    const savedFilter = JSON.stringify(UI.inflFilter);
+    try{
+      DataManager.state.influencerDeals = [
+        {id:9932, blogerLogin:"@big_x", product:"Товар А", cost:1000, reach:100, publishedDate:"2026-07-01", plannedDate:"2026-07-01"},
+        {id:9933, blogerLogin:"@big_y", product:"Товар Б", cost:2000, reach:500, publishedDate:"2026-08-01", plannedDate:"2026-08-01"},
+      ];
+      DataManager.state.salesByDay = [];
+      UI.inflFilter = {search:"big_x", sort:"default", month:""};
+      let rows = filteredInfluencerDealRows();
+      if(rows.length!==1 || rows[0].deal.blogerLogin!=="@big_x") throw new Error("поиск по логину должен оставить только @big_x: "+JSON.stringify(rows.map(r=>r.deal.blogerLogin)));
+
+      UI.inflFilter = {search:"", sort:"reach_desc", month:""};
+      rows = filteredInfluencerDealRows();
+      if(rows[0].deal.blogerLogin!=="@big_y") throw new Error("сортировка по охвату (сначала больше) должна поставить @big_y первым");
+    } finally {
+      DataManager.state.influencerDeals = saved;
+      DataManager.state.salesByDay = savedSales;
+      UI.inflFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("tplInfluencerDeals показывает кнопку 'Экспорт CSV' в таблице интеграций крупных", ()=>{
+    const saved = DataManager.state.influencerDeals;
+    const savedSales = DataManager.state.salesByDay;
+    const savedFilter = JSON.stringify(UI.inflFilter);
+    try{
+      DataManager.state.influencerDeals = [
+        {id:9934, blogerLogin:"@export_test", product:"Товар Э", cost:1000, reach:100, publishedDate:"2026-07-01", plannedDate:"2026-07-01"},
+      ];
+      DataManager.state.salesByDay = [];
+      UI.inflFilter = {search:"", sort:"default", month:""};
+      const html = tplInfluencerDeals();
+      if(!html.includes('id="export-deal-csv-btn"')) throw new Error("должна быть кнопка экспорта CSV рядом с таблицей интеграций крупных");
+      if(!html.includes("Экспорт CSV")) throw new Error("у кнопки экспорта должна быть подпись 'Экспорт CSV'");
+    } finally {
+      DataManager.state.influencerDeals = saved;
+      DataManager.state.salesByDay = savedSales;
+      UI.inflFilter = JSON.parse(savedFilter);
     }
   });
   TestSuite.test("weekRangeStr/monthRangeStr возвращают корректный диапазон, включающий сегодня", ()=>{
