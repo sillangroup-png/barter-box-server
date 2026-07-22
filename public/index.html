@@ -822,6 +822,13 @@ function microInfluencerSummary(from, to){
   const unpaidCount = deals.filter(d=>d.paymentStatus==="не оплачено").length;
   const toPayCount = deals.filter(d=>d.paymentStatus==="к оплате").length;
   const publishedCount = deals.filter(d=>d.videoStatus==="опубликовано").length;
+  // Ещё запланировано — интеграции, по которым пока вообще ничего не сделано (ни оплаты, ни публикации).
+  // Отдельно от paidCount/publishedCount, потому что те просто разбивают по одному статусу, а тут — обе
+  // стадии сразу, то есть по сути "план", который ещё только предстоит выполнить.
+  const pendingCount = deals.filter(d=>d.paymentStatus==="не оплачено" && d.videoStatus!=="опубликовано").length;
+  // Уникальных блогеров — не то же самое, что кол-во интеграций: один блогер может продавать
+  // пакетом несколько постов/товаров (3-4 интеграции сразу), поэтому считаем отдельно по имени.
+  const uniqueBloggerCount = new Set(deals.map(d=>d.blogerName||"—")).size;
   const avgCpv = (totalCost>0 && totalFactReach>0) ? totalCost/totalFactReach : null;
 
   let romiRows = computeMicroInfluencerRomi();
@@ -831,7 +838,7 @@ function microInfluencerSummary(from, to){
   const avgRomi = withRomi.length ? withRomi.reduce((a,r)=>a+r.romi,0)/withRomi.length : null;
   const topRomi = withRomi.slice().sort((a,b)=>b.romi-a.romi)[0] || null;
 
-  return {deals, totalCost, totalFactReach, totalAvgReach, paidCount, unpaidCount, toPayCount, publishedCount, avgCpv, count: deals.length,
+  return {deals, totalCost, totalFactReach, totalAvgReach, paidCount, unpaidCount, toPayCount, publishedCount, pendingCount, uniqueBloggerCount, avgCpv, count: deals.length,
     romiRows, totalSalesContribution, avgRomi, topRomi};
 }
 function influencerBloggerAgg(rows){
@@ -2406,10 +2413,12 @@ function tplMicroInfluencers(){
 
     <div class="grid-kpi">
       <div class="kpi"><div class="num">${s.count}</div><div class="lbl">Всего интеграций</div></div>
+      <div class="kpi"><div class="num">${s.uniqueBloggerCount}</div><div class="lbl">Уникальных блогеров (один может продавать пакетом несколько интеграций)</div></div>
       <div class="kpi bad"><div class="num">${fmtNum(s.totalCost)} ₸</div><div class="lbl">Сумма (${s.paidCount} оплачено, ${s.toPayCount} к оплате, ${s.unpaidCount} не оплачено)</div></div>
       <div class="kpi ok"><div class="num">${fmtNum(s.totalFactReach)}</div><div class="lbl">Факт.охват (Reels+TikTok)</div></div>
       <div class="kpi"><div class="num">${s.avgCpv==null?'—':s.avgCpv.toFixed(3)+' ₸'}</div><div class="lbl">Средний CPV (сумма/факт.охват)</div></div>
       <div class="kpi"><div class="num">${s.publishedCount}</div><div class="lbl">Опубликовано видео (план ${s.count})</div></div>
+      <div class="kpi warn"><div class="num">${s.pendingCount}</div><div class="lbl">Ещё запланировано (не оплачено и не опубликовано)</div></div>
     </div>
     <div class="panel">
       <div class="panel-title">
@@ -4237,13 +4246,16 @@ async function runSelfTests(){
       DataManager.state.microInfluencerDeals = [
         {id:9950, blogerName:"@micro1", cost:10000, factReachReels:2000, factReachTT:1000, avgReach:1500, avgReachTT:800, paymentStatus:"оплачено", videoStatus:"опубликовано", publishDate:"2026-07-01"},
         {id:9951, blogerName:"@micro2", cost:20000, factReachReels:0, factReachTT:0, avgReach:1000, avgReachTT:500, paymentStatus:"не оплачено", videoStatus:"не опубликовано", publishDate:"2026-07-15"},
+        {id:9952, blogerName:"@micro1", cost:5000, factReachReels:0, factReachTT:0, avgReach:500, avgReachTT:200, paymentStatus:"к оплате", videoStatus:"не опубликовано", publishDate:"2026-07-16"},
       ];
       const all = microInfluencerSummary();
-      if(all.count !== 2) throw new Error("без периода должны учитываться обе интеграции: "+all.count);
-      if(all.totalCost !== 30000) throw new Error("суммарный расход должен быть 30000: "+all.totalCost);
+      if(all.count !== 3) throw new Error("без периода должны учитываться все интеграции: "+all.count);
+      if(all.totalCost !== 35000) throw new Error("суммарный расход должен быть 35000: "+all.totalCost);
       if(all.totalFactReach !== 3000) throw new Error("суммарный факт.охват должен быть 3000: "+all.totalFactReach);
       if(all.paidCount !== 1 || all.unpaidCount !== 1) throw new Error("счётчики статусов оплаты неверны: "+JSON.stringify(all));
       if(all.publishedCount !== 1) throw new Error("счётчик опубликованных неверен: "+all.publishedCount);
+      if(all.pendingCount !== 1) throw new Error("ещё запланировано (не оплачено и не опубликовано) должно быть 1 (только @micro2): "+all.pendingCount);
+      if(all.uniqueBloggerCount !== 2) throw new Error("уникальных блогеров должно быть 2 (@micro1 продаёт пакетом 2 интеграции): "+all.uniqueBloggerCount);
       const july1 = microInfluencerSummary("2026-07-01","2026-07-01");
       if(july1.count !== 1 || july1.totalCost !== 10000) throw new Error("период 07-01 должен взять только первую интеграцию: "+JSON.stringify(july1));
     } finally {
@@ -4262,6 +4274,8 @@ async function runSelfTests(){
       if(!html.includes("Тестовый Блогер")) throw new Error("таблица должна показывать имя блогера");
       if(!html.includes("Питательный бальзам для губ")) throw new Error("таблица должна показывать товар");
       if(!html.includes("new-micro-btn")) throw new Error("должна быть кнопка добавления интеграции");
+      if(!html.includes("Уникальных блогеров")) throw new Error("должен быть KPI 'Уникальных блогеров'");
+      if(!html.includes("Ещё запланировано")) throw new Error("должен быть KPI 'Ещё запланировано'");
     } finally {
       DataManager.state.microInfluencerDeals = saved;
       UI.microFilter = JSON.parse(savedFilter);
