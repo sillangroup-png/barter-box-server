@@ -4582,7 +4582,16 @@ async function runSelfTests(){
       DataManager.state.campaigns = [{id:9931, name:"Тест-Э", city:"Астана", period:"Июнь", responsible:"Аяужан", boxType:"Уход премиум", plannedCount:42, stage:CAMPAIGN_STAGES[0], costPerBox:777, realizationNumber:"РЕАЛ-999"}];
       const html = tplCampaigns();
       if(!html.includes("edit-campaign-btn")) throw new Error("кнопка редактирования (карандашик) не отрисована");
-      document.body.innerHTML = '<div id="app"></div>';
+      // ВАЖНО: этот тест выполняется в РЕАЛЬНОМ браузере (не в изолированном jsdom), поэтому
+      // document.body — это тот же самый body, что и у настоящей страницы. Раньше здесь стояло
+      // document.body.innerHTML = '<div id="app"></div>' — это стирало вообще всё содержимое body,
+      // включая статический <div id="toast"></div> (см. начало <body> в разметке), который toast()
+      // ищет через getElementById. После первого прогона самотестов в браузере (а он идёт при
+      // каждой загрузке страницы, в том числе в проде) toast() начинал падать с "Cannot set
+      // properties of null" на любом действии — импорте, удалении, экспорте и т.д. — то есть
+      // все уведомления в приложении молча переставали показываться. Восстанавливаем #toast
+      // сразу же, чтобы это не всплывало наружу.
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
       modalEditCampaign(9931);
       const modal = document.getElementById("modal-back");
       if(!modal) throw new Error("модал редактирования не открылся");
@@ -4592,8 +4601,17 @@ async function runSelfTests(){
       closeModal();
     } finally {
       DataManager.state.campaigns = savedCampaigns;
-      document.body.innerHTML = '<div id="app"></div>';
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
+  });
+  TestSuite.test("toast() продолжает работать после самотестов (div#toast не удалён предыдущими тестами)", ()=>{
+    // Регрессия: если какой-то тест выше стирает document.body.innerHTML целиком (а не только
+    // '#app'), статический <div id="toast"></div> из разметки страницы пропадает навсегда, и
+    // toast() начинает падать с "Cannot set properties of null" на любом действии пользователя
+    // (импорт/экспорт/удаление и т.д.) до следующей полной перезагрузки страницы.
+    if(!document.getElementById("toast")) throw new Error("div#toast отсутствует — toast() будет падать на любом действии до перезагрузки страницы");
+    toast("проверка toast() из самотеста");
+    if(document.getElementById("toast").textContent !== "проверка toast() из самотеста") throw new Error("toast() не записал текст в #toast");
   });
   TestSuite.test("influencerBrandStats считает KPI и лучшего/худшего блогера и интеграцию за месяц", ()=>{
     // Строки уже "посчитаны" (как будто это выход computeInfluencerRomi) — так проще проверить
