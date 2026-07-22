@@ -1021,6 +1021,7 @@ function tplInfluencerBrandDashboard(allRows){
 
     <div class="grid-kpi">
       ${kpi("Расходы", fmtNum(s.totalCost)+" ₸")}
+      ${kpi("План затрат на конец месяца", fmtNum(s.plannedCost)+" ₸")}
       ${kpi("Выручка (вклад)", fmtNum(Math.round(s.totalContribution))+" ₸")}
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2))}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%")}
@@ -4659,6 +4660,8 @@ async function runSelfTests(){
       if(!html.includes("@best2") || !html.includes("@worst2")) throw new Error("лучший/худший блогер не показаны");
       if(!html.includes("3\u00a0000") && !html.includes("3 000")) throw new Error("суммарные расходы не отрисованы");
       if(!html.includes(escapeHtml("Опубликована"))) throw new Error("воронка стадий не отрисована");
+      if(!html.includes("План затрат на конец месяца")) throw new Error("должен быть KPI 'План затрат на конец месяца'");
+      if(!html.includes("2 800") && !html.includes("2 800")) throw new Error("план затрат на конец месяца посчитан неверно (ожидали 2 800 ₸, т.е. 1000+1800)");
     } finally {
       DataManager.state.influencerDeals = savedDeals;
       UI.inflDashMonth = savedDashMonth;
