@@ -114,6 +114,14 @@ tr:hover td{background:#fafcfe}
 td.wrap{white-space:normal;max-width:220px}
 .rowcheck{width:26px}
 
+/* Инлайн-редактирование ячеек таблицы "по-экселевски" (клик по значению — не по карандашу).
+   .inline-edit — обёртка над отображаемым значением; при клике превращается в input/select. */
+.inline-edit{cursor:text;border-radius:4px;padding:1px 4px;margin:-1px -4px;display:inline-block}
+.inline-edit:hover{background:#eef6ff;outline:1px dashed var(--action)}
+.inline-edit.editing{background:none;outline:none;padding:0;margin:0}
+.inline-edit-input{border:1px solid var(--action);border-radius:5px;padding:3px 6px;font:inherit;background:#fff;width:100%;min-width:70px}
+select.inline-edit-input{cursor:pointer}
+
 .badge{display:inline-flex;align-items:center;gap:4px;border-radius:20px;padding:3px 10px;font-size:11.5px;font-weight:700}
 .badge-progress{background:#e5eefb;color:var(--action)}
 .badge-success{background:var(--ok-bg);color:var(--ok)}
@@ -435,6 +443,79 @@ function mapsLink(address, city){
 function telLink(phone){
   return "tel:" + String(phone).replace(/[^\d+]/g,"");
 }
+// ---------- Инлайн-редактирование ячеек таблиц ("по-экселевски", без карандаша/модалки) ----------
+// inlineEditSpan оборачивает уже отформатированное для показа значение (displayHtml) в <span>,
+// который помнит id записи, поле и СЫРОЕ значение (rawValue — без форматирования, именно то,
+// что нужно подставить в input при начале редактирования). type — "text"/"number"/"date"/"select";
+// для "select" options — массив вариантов (как в <select> в модалках).
+function inlineEditSpan(displayHtml, id, field, rawValue, type, options){
+  const optAttr = options ? ` data-options="${escapeHtml(JSON.stringify(options))}"` : "";
+  return `<span class="inline-edit" data-id="${id}" data-field="${field}" data-type="${type||'text'}" data-value="${escapeHtml(String(rawValue==null?'':rawValue))}"${optAttr}>${displayHtml}</span>`;
+}
+// Вешается один раз на контейнер (обычно main) после каждого рендера таблицы — находит все
+// .inline-edit внутри и по клику подменяет их на input/select. onSave(id, field, value) должен
+// сам сохранить через API и перерисовать вкладку (как и остальные обработчики в приложении) —
+// сюда просто передаётся то же самое, что уже вызывается из модалок редактирования.
+function wireInlineEdit(container, onSave){
+  container.querySelectorAll(".inline-edit").forEach(el=>{
+    el.onclick = ()=>{
+      if(el.classList.contains("editing")) return;
+      const id = el.dataset.id, field = el.dataset.field, type = el.dataset.type;
+      const options = el.dataset.options ? JSON.parse(el.dataset.options) : null;
+      const rawValue = el.dataset.value;
+      el.classList.add("editing");
+      const originalHtml = el.innerHTML;
+
+      let input;
+      if(type==="select"){
+        input = document.createElement("select");
+        options.forEach(opt=>{
+          const o = document.createElement("option");
+          o.value = opt; o.textContent = opt;
+          if(opt===rawValue) o.selected = true;
+          input.appendChild(o);
+        });
+      } else {
+        input = document.createElement("input");
+        input.type = type==="number" ? "number" : (type==="date" ? "date" : "text");
+        input.value = rawValue;
+      }
+      input.className = "inline-edit-input";
+      el.innerHTML = "";
+      el.appendChild(input);
+      input.focus();
+      if(input.select) input.select();
+
+      let settled = false;
+      const revert = ()=>{ el.classList.remove("editing"); el.innerHTML = originalHtml; };
+      const commit = async ()=>{
+        if(settled) return; settled = true;
+        let newVal = input.value;
+        if(type==="number") newVal = newVal===""?0:Number(newVal);
+        const changed = type==="number" ? Number(newVal)!==Number(rawValue||0) : String(newVal)!==String(rawValue||"");
+        if(!changed){ revert(); return; }
+        try{
+          await onSave(parseInt(id,10), field, newVal);
+          el.classList.remove("editing");
+        }catch(err){
+          toast(err.message, true);
+          revert();
+        }
+      };
+
+      if(type==="select"){
+        input.onchange = commit;
+        input.onblur = ()=>{ if(!settled) revert(); };
+      } else {
+        input.onblur = commit;
+        input.onkeydown = (e)=>{
+          if(e.key==="Enter") input.blur();
+          else if(e.key==="Escape"){ settled = true; revert(); }
+        };
+      }
+    };
+  });
+}
 function downloadFile(filename, content, mime){
   const blob = new Blob([content], {type: mime||"text/plain;charset=utf-8"});
   const url = URL.createObjectURL(blob);
@@ -710,7 +791,9 @@ function computeUnifiedInfluencerRomi(){
   const {influencerDeals, microInfluencerDeals, salesByDay} = DataManager.state;
   const units = [
     ...influencerDeals.map(d=>({key:'large:'+d.id, type:'large', matchKey:dealMatchKey(d), date:d.publishedDate, cost:d.cost||0, deal:d})),
-    ...microInfluencerDeals.map(d=>({key:'micro:'+d.id, type:'micro', matchKey:microDealMatchKey(d), date:d.publishDate, cost:d.cost||0, deal:d})),
+    // cost для микро/средних — оплата + себестоимость товара (microDealTotalCost), см. её комментарий:
+    // бартерная выдача товара — тоже реальный расход, поэтому ROMI микро-интеграций считается по сумме.
+    ...microInfluencerDeals.map(d=>({key:'micro:'+d.id, type:'micro', matchKey:microDealMatchKey(d), date:d.publishDate, cost:microDealTotalCost(d), deal:d})),
   ];
 
   const byProduct = {};
@@ -792,9 +875,16 @@ function influencerSummary(from, to){
 // по дате выкладки (тот же паттерн, что и в marketingSummary/influencerSummary).
 function microDealFactReach(d){ return (d.factReachReels||0) + (d.factReachTT||0); }
 function microDealAvgReach(d){ return (d.avgReach||0) + (d.avgReachTT||0); }
+// Полная стоимость интеграции для расходов/CPV/ROMI — оплата блогеру (cost) + себестоимость
+// товара, отданного бартером (productCost). Раньше в расходы шла только оплата, но выдача
+// товара — тоже реальные деньги компании, поэтому считаем расход как сумму обоих полей.
+// Само поле "Сумма" в таблице/модалке при этом остаётся именно оплатой (отдельная колонка
+// "Стоимость товара" — отдельный ввод), просто итоги/CPV/ROMI считаются уже по сумме.
+function microDealTotalCost(d){ return (d.cost||0) + (d.productCost||0); }
 function microDealCpv(d){
   const reach = microDealFactReach(d);
-  return (d.cost>0 && reach>0) ? d.cost/reach : null;
+  const cost = microDealTotalCost(d);
+  return (cost>0 && reach>0) ? cost/reach : null;
 }
 // Дата интеграции для фильтров/сравнения периодов у микро/средних — просто дата выкладки
 // (в отличие от крупных, тут нет отдельной план-даты).
@@ -815,7 +905,8 @@ function computeMicroInfluencerRomi(){
 function microInfluencerSummary(from, to){
   let deals = DataManager.state.microInfluencerDeals;
   if(from || to) deals = deals.filter(d=>inDateRange(d.publishDate, from, to));
-  const totalCost = deals.reduce((s,d)=>s+(d.cost||0),0);
+  // totalCost = оплата блогерам + себестоимость подаренного товара (см. microDealTotalCost).
+  const totalCost = deals.reduce((s,d)=>s+microDealTotalCost(d),0);
   const totalFactReach = deals.reduce((s,d)=>s+microDealFactReach(d),0);
   const totalAvgReach = deals.reduce((s,d)=>s+microDealAvgReach(d),0);
   const paidCount = deals.filter(d=>d.paymentStatus==="оплачено").length;
@@ -2437,6 +2528,7 @@ function tplMicroInfluencers(){
         <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">отв. Нина</span>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-ghost btn-sm" id="template-micro-csv-btn">Шаблон CSV</button>
+          <button class="btn btn-ghost btn-sm" id="export-micro-csv-btn">Экспорт CSV</button>
           <button class="btn btn-ghost btn-sm" id="import-micro-csv-btn">Импорт CSV</button>
           <input type="file" id="import-micro-csv-input" accept=".csv" class="hide">
           <button class="btn btn-primary btn-sm" id="new-micro-btn">+ Интеграция</button>
@@ -2468,12 +2560,17 @@ function tplMicroInfluencers(){
           <option value="romi_asc" ${mf.sort==='romi_asc'?'selected':''}>ROMI: сначала меньше</option>
         </select>
       </div>
+      <div class="login-hint" style="margin-bottom:12px">
+        Кликните по значению в таблице, чтобы отредактировать его прямо на месте (как в Excel) —
+        Enter или клик вне поля сохраняет, Esc отменяет. Карандаш ✎ по-прежнему открывает полную форму,
+        если нужно поле, которого нет в таблице.
+      </div>
       <div class="table-wrap"><table>
         <thead><tr>
           <th>Блогер</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
-          <th>Сумма</th><th>Статус оплаты</th><th>Факт.охват</th><th>CPV</th>
+          <th>Сумма</th><th>Стоимость товара</th><th>Статус оплаты</th><th>Факт.охват</th><th>CPV</th>
           <th>Вклад в продажи</th><th>ROMI</th>
-          <th>Статус товара</th><th>Статус видео</th><th>Дата выкладки</th><th></th>
+          <th>Статус товара</th><th>Статус видео</th><th>Дата выкладки</th><th>Ссылка на Reels</th><th></th>
         </tr></thead>
         <tbody>
           ${deals.map(d=>{
@@ -2482,26 +2579,28 @@ function tplMicroInfluencers(){
             const r = romiById[d.id];
             const hasBaseline = r && r.hasBaseline;
             return `<tr>
-              <td><b>${escapeHtml(d.blogerName)}</b>${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
-              <td>${d.instagramAccount?`<a href="${escapeHtml(d.instagramAccount)}" target="_blank" rel="noopener">IG</a> ${fmtNum(d.followers)}`:"—"}</td>
-              <td>${d.tiktokAccount?`<a href="${escapeHtml(d.tiktokAccount)}" target="_blank" rel="noopener">TT</a> ${fmtNum(d.followersTT)}`:"—"}</td>
-              <td>${escapeHtml(d.product||"—")}${d.barcode?`<br><span style="color:var(--ink-mute);font-size:11px">ШК ${escapeHtml(d.barcode)}</span>`:d.productCategory?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.productCategory)}</span>`:""}</td>
-              <td>${escapeHtml(d.city||"—")}</td>
-              <td>${fmtNum(d.cost)} ₸</td>
-              <td>${escapeHtml(d.paymentStatus||"—")}</td>
+              <td>${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
+              <td>${d.instagramAccount?`<a href="${escapeHtml(d.instagramAccount)}" target="_blank" rel="noopener">IG</a> `:""}${inlineEditSpan(fmtNum(d.followers||0), d.id, 'followers', d.followers||0, 'number')}</td>
+              <td>${d.tiktokAccount?`<a href="${escapeHtml(d.tiktokAccount)}" target="_blank" rel="noopener">TT</a> `:""}${inlineEditSpan(fmtNum(d.followersTT||0), d.id, 'followersTT', d.followersTT||0, 'number')}</td>
+              <td>${inlineEditSpan(escapeHtml(d.product||"—"), d.id, 'product', d.product||'', 'text')}<br><span style="color:var(--ink-mute);font-size:11px">ШК ${inlineEditSpan(escapeHtml(d.barcode||"—"), d.id, 'barcode', d.barcode||'', 'text')}</span></td>
+              <td>${inlineEditSpan(escapeHtml(d.city||"—"), d.id, 'city', d.city||'', 'text')}</td>
+              <td>${inlineEditSpan(fmtNum(d.cost||0)+" ₸", d.id, 'cost', d.cost||0, 'number')}</td>
+              <td>${inlineEditSpan(fmtNum(d.productCost||0)+" ₸", d.id, 'productCost', d.productCost||0, 'number')}</td>
+              <td>${inlineEditSpan(escapeHtml(d.paymentStatus||"—"), d.id, 'paymentStatus', d.paymentStatus||'', 'select', MICRO_PAYMENT_STATUSES)}</td>
               <td>${fmtNum(factReach)}</td>
               <td>${cpv==null?"—":cpv.toFixed(3)+" ₸"}</td>
               <td>${!d.barcode ? '<span style="color:var(--ink-mute)">нет ШК</span>' : (hasBaseline ? fmtNum(r.netContribution)+" ₸" : '<span style="color:var(--ink-mute)">—</span>')}</td>
               <td>${(r && r.romi!=null) ? r.romi.toFixed(2) : "—"}</td>
-              <td>${escapeHtml(d.productStatus||"—")}</td>
-              <td>${escapeHtml(d.videoStatus||"—")}</td>
-              <td>${escapeHtml(d.publishDate||"—")}</td>
+              <td>${inlineEditSpan(escapeHtml(d.productStatus||"—"), d.id, 'productStatus', d.productStatus||'', 'select', MICRO_PRODUCT_STATUSES)}</td>
+              <td>${inlineEditSpan(escapeHtml(d.videoStatus||"—"), d.id, 'videoStatus', d.videoStatus||'', 'select', MICRO_VIDEO_STATUSES)}</td>
+              <td>${inlineEditSpan(escapeHtml(d.publishDate||"—"), d.id, 'publishDate', d.publishDate||'', 'date')}</td>
+              <td>${inlineEditSpan(d.reelsLink?escapeHtml(d.reelsLink):"—", d.id, 'reelsLink', d.reelsLink||'', 'text')}</td>
               <td>
                 <button class="btn btn-ghost btn-sm edit-micro-btn" data-id="${d.id}">✎</button>
                 <button class="btn btn-danger btn-sm del-micro-btn" data-id="${d.id}">✕</button>
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="15">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="17">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -3181,7 +3280,7 @@ function modalMicroDeal(existing){
     responsible:"Нина", blogerName:"", phone:"",
     instagramAccount:"", followers:0, er:0, avgReach:0,
     tiktokAccount:"", followersTT:0, erTT:0, avgReachTT:0,
-    cost:0, paymentStatus: MICRO_PAYMENT_STATUSES[0],
+    cost:0, productCost:0, paymentStatus: MICRO_PAYMENT_STATUSES[0],
     conditions:"", paymentMethod:"", iin:"",
     city:"", address:"",
     product:"", barcode:"", productCategory:"",
@@ -3211,10 +3310,12 @@ function modalMicroDeal(existing){
     </div>
     <div class="form-row">
       <div class="field"><label>Сумма, ₸</label><input id="mm-cost" type="number" value="${d.cost||0}"></div>
+      <div class="field"><label>Стоимость товара, ₸</label><input id="mm-product-cost" type="number" value="${d.productCost||0}"></div>
       <div class="field"><label>Статус оплаты</label><select id="mm-payment-status">${MICRO_PAYMENT_STATUSES.map(st=>`<option ${st===d.paymentStatus?'selected':''}>${st}</option>`).join("")}</select></div>
       <div class="field"><label>Способ оплаты</label><input id="mm-payment-method" value="${escapeHtml(d.paymentMethod||'')}"></div>
       <div class="field"><label>ИИН</label><input id="mm-iin" value="${escapeHtml(d.iin||'')}"></div>
     </div>
+    <div class="login-hint">Стоимость товара — себестоимость подарённого бартером товара; учитывается в расходах, CPV и ROMI вместе с суммой оплаты.</div>
     <div class="field"><label>Условия</label><input id="mm-conditions" value="${escapeHtml(d.conditions||'')}"></div>
     <div class="form-row">
       <div class="field"><label>Товар</label><input id="mm-product" list="product-suggestions" placeholder="Название товара как в 1С" value="${escapeHtml(d.product||'')}"></div>
@@ -3259,6 +3360,7 @@ function modalMicroDeal(existing){
       erTT: parseFloat(document.getElementById("mm-er-tt").value)||0,
       avgReachTT: parseInt(document.getElementById("mm-avg-reach-tt").value,10)||0,
       cost: parseInt(document.getElementById("mm-cost").value,10)||0,
+      productCost: parseInt(document.getElementById("mm-product-cost").value,10)||0,
       paymentStatus: document.getElementById("mm-payment-status").value,
       paymentMethod: document.getElementById("mm-payment-method").value.trim(),
       iin: document.getElementById("mm-iin").value.trim(),
@@ -3757,12 +3859,40 @@ function wireDeskTab(){
       };
     });
 
+    // Инлайн-редактирование "по-экселевски": клик по любому значению в таблице сразу превращает
+    // его в input/select (см. inlineEditSpan/wireInlineEdit) — без карандаша и модалки. Сохранение —
+    // частичный PATCH одного поля через Api.updateMicroDeal (сервер делает Object.assign, поэтому
+    // остальные поля не трогаются).
+    wireInlineEdit(document.getElementById("main"), async (id, field, value)=>{
+      await Api.updateMicroDeal(id, {[field]: value});
+      await DataManager.refresh(); render();
+    });
+
     document.getElementById("template-micro-csv-btn").onclick = ()=>{
-      const header = ["блогер","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","дата выкладки","комментарий"];
-      const example = ["@small_blogger","+77001234567","Алматы","","https://instagram.com/small_blogger","15000","3.2","2000","https://tiktok.com/@small_blogger","8000","4.1","1500","30000","не оплачено","Kaspi","000000000000","1 сторис + 1 reels","Питательный бальзам для губ","4620400203663","Уход","товар заказан","не опубликовано","","0","","0","2026-07-20",""];
+      const header = ["id","блогер","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","дата выкладки","комментарий"];
+      const example = ["","@small_blogger","+77001234567","Алматы","","https://instagram.com/small_blogger","15000","3.2","2000","https://tiktok.com/@small_blogger","8000","4.1","1500","30000","5000","не оплачено","Kaspi","000000000000","1 сторис + 1 reels","Питательный бальзам для губ","4620400203663","Уход","товар заказан","не опубликовано","","0","","0","2026-07-20",""];
       const csv = [header, example].map(row=>row.map(csvEscape).join(",")).join("\n");
       downloadFile("barter-box-micro-influencers-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
       toast("Шаблон скачан");
+    };
+    document.getElementById("export-micro-csv-btn").onclick = ()=>{
+      const header = ["id","блогер","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","дата выкладки","комментарий"];
+      const lines = [header.map(csvEscape).join(",")];
+      deals.forEach(d=>{
+        lines.push([
+          d.id, d.blogerName||"", d.phone||"", d.city||"", d.address||"",
+          d.instagramAccount||"", d.followers||0, d.er||0, d.avgReach||0,
+          d.tiktokAccount||"", d.followersTT||0, d.erTT||0, d.avgReachTT||0,
+          d.cost||0, d.productCost||0,
+          d.paymentStatus||"", d.paymentMethod||"", d.iin||"", d.conditions||"",
+          d.product||"", d.barcode||"", d.productCategory||"",
+          d.productStatus||"", d.videoStatus||"",
+          d.reelsLink||"", d.factReachReels||0, d.tiktokVideoLink||"", d.factReachTT||0,
+          d.publishDate||"", d.notes||"",
+        ].map(csvEscape).join(","));
+      });
+      downloadFile("barter-box-micro-influencers-export.csv", "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
+      toast("Таблица выгружена");
     };
     document.getElementById("import-micro-csv-btn").onclick = ()=> document.getElementById("import-micro-csv-input").click();
     document.getElementById("import-micro-csv-input").onchange = (e)=>{
@@ -3771,7 +3901,10 @@ function wireDeskTab(){
       const reader = new FileReader();
       reader.onload = async ()=>{
         const rows = parseCsv(String(reader.result));
-        try{ const res = await Api.importMicroDeals(rows); toast(`Импортировано интеграций: ${res.added}`); }
+        try{
+          const res = await Api.importMicroDeals(rows);
+          toast(`Импортировано: добавлено ${res.added||0}, обновлено ${res.updated||0}`);
+        }
         catch(e){ toast(e.message, true); }
         e.target.value = "";
         await DataManager.refresh(); render();
@@ -4380,6 +4513,94 @@ async function runSelfTests(){
       DataManager.state.microInfluencerDeals = savedDeals;
       DataManager.state.salesByDay = savedSales;
       UI.microFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("microDealTotalCost = оплата (cost) + себестоимость товара (productCost), учитывается в CPV", ()=>{
+    const d1 = {cost:10000, productCost:0};
+    if(microDealTotalCost(d1) !== 10000) throw new Error("без productCost итог должен быть равен cost: "+microDealTotalCost(d1));
+    const d2 = {cost:10000, productCost:5000};
+    if(microDealTotalCost(d2) !== 15000) throw new Error("итог должен суммировать cost и productCost: "+microDealTotalCost(d2));
+    const d3 = {cost:0, productCost:8000, factReachReels:4000, factReachTT:0};
+    if(microDealCpv(d3) !== 2) throw new Error("CPV должен считаться по totalCost, даже если cost=0, а productCost>0: "+microDealCpv(d3));
+  });
+  TestSuite.test("microInfluencerSummary().totalCost учитывает стоимость товара (productCost), а не только оплату (cost)", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9970, blogerName:"@barter1", cost:10000, productCost:3000, factReachReels:0, factReachTT:0, paymentStatus:"оплачено", videoStatus:"опубликовано", publishDate:"2026-07-01"},
+        {id:9971, blogerName:"@barter2", cost:0, productCost:2000, factReachReels:0, factReachTT:0, paymentStatus:"не оплачено", videoStatus:"не опубликовано", publishDate:"2026-07-02"},
+      ];
+      const s = microInfluencerSummary();
+      if(s.totalCost !== 15000) throw new Error("totalCost должен быть 10000+3000+0+2000=15000: "+s.totalCost);
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+    }
+  });
+  TestSuite.test("tplMicroInfluencers показывает колонки 'Стоимость товара' и 'Ссылка на Reels', оборачивает редактируемые ячейки в inline-edit", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9980, blogerName:"Инлайн Тест", cost:12000, productCost:4000, factReachReels:1000, factReachTT:0, product:"Товар", city:"Алматы", paymentStatus:"к оплате", productStatus:"товар заказан", videoStatus:"не опубликовано", publishDate:"2026-07-05", reelsLink:"https://instagram.com/reel/xyz"},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      const html = tplMicroInfluencers();
+      if(!html.includes("Стоимость товара")) throw new Error("должна быть колонка 'Стоимость товара'");
+      if(!html.includes("Ссылка на Reels")) throw new Error("должна быть колонка 'Ссылка на Reels'");
+      if(!html.includes('data-field="blogerName"')) throw new Error("имя блогера должно быть inline-editable");
+      if(!html.includes('data-field="cost"')) throw new Error("сумма должна быть inline-editable");
+      if(!html.includes('data-field="productCost"')) throw new Error("стоимость товара должна быть inline-editable");
+      if(!html.includes('data-field="paymentStatus"') || !html.includes('data-type="select"')) throw new Error("статус оплаты должен быть inline-editable select");
+      if(!html.includes('data-field="reelsLink"')) throw new Error("ссылка на reels должна быть inline-editable");
+      if(!html.includes('data-field="publishDate"') || !html.includes('data-type="date"')) throw new Error("дата выкладки должна быть inline-editable date");
+      if(!html.includes("export-micro-csv-btn")) throw new Error("должна быть кнопка 'Экспорт CSV'");
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+      UI.microFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("inlineEditSpan/wireInlineEdit: клик по ячейке создаёт input, Enter вызывает onSave с новым значением", ()=>{
+    const div = document.createElement("div");
+    div.innerHTML = inlineEditSpan("100", 42, "cost", 100, "number");
+    let saved = null;
+    wireInlineEdit(div, async (id, field, value)=>{ saved = {id, field, value}; });
+    const span = div.querySelector(".inline-edit");
+    span.click();
+    const input = span.querySelector("input");
+    if(!input) throw new Error("клик по ячейке должен создать input");
+    input.value = "250";
+    input.dispatchEvent(new Event("blur"));
+    if(!saved || saved.id !== 42 || saved.field !== "cost" || saved.value !== 250) throw new Error("onSave должен вызываться с (id, field, число): "+JSON.stringify(saved));
+  });
+  TestSuite.test("wireDeskTab(microInfluencers): экспорт/шаблон CSV содержат колонку id (для upsert) и стоимость товара, импорт показывает 'добавлено/обновлено'", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    const savedTab = UI.tab;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9990, blogerName:"Экспорт Тест", cost:1000, productCost:200, factReachReels:0, factReachTT:0, product:"Т", paymentStatus:"к оплате", productStatus:"товар заказан", videoStatus:"не опубликовано", publishDate:"2026-07-01"},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      UI.tab = "microInfluencers";
+      document.body.innerHTML = '<main id="main"></main><div id="toast"></div>';
+      document.getElementById("main").innerHTML = tplMicroInfluencers();
+      wireDeskTab();
+      const templateBtn = document.getElementById("template-micro-csv-btn");
+      const exportBtn = document.getElementById("export-micro-csv-btn");
+      if(!templateBtn || !exportBtn) throw new Error("кнопки 'Шаблон CSV'/'Экспорт CSV' должны быть в DOM после wireDeskTab()");
+      const templateSrc = templateBtn.onclick.toString();
+      if(!templateSrc.includes('"id"') || !(templateSrc.includes("стоимость товара"))) throw new Error("заголовок шаблона CSV должен включать id и стоимость товара");
+      const exportSrc = exportBtn.onclick.toString();
+      if(!exportSrc.includes('"id"') || !exportSrc.includes("productCost")) throw new Error("экспорт CSV должен включать id (для upsert-импорта) и productCost");
+      const importSrc = document.getElementById("import-micro-csv-input").onchange.toString();
+      if(!importSrc.includes("добавлено") || !importSrc.includes("обновлено")) throw new Error("после импорта тост должен показывать и добавлено, и обновлено");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+      UI.microFilter = JSON.parse(savedFilter);
+      UI.tab = savedTab;
+      // Как и в тесте tplCampaigns выше — восстанавливаем оба статических div'а шапки страницы,
+      // а не только #app, иначе toast() сломается после самотестов (см. комментарий там же).
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
   TestSuite.test("knownProductNames() включает товары из microInfluencerDeals", ()=>{
