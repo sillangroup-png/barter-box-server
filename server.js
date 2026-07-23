@@ -55,7 +55,14 @@ const AUTH = {
   manager:  {login: process.env.MANAGER_LOGIN  || null, password: process.env.MANAGER_PASSWORD  || null},
   marketer: {login: process.env.MARKETER_LOGIN || null, password: process.env.MARKETER_PASSWORD || null},
 };
-const authTokens = new Map(); // token -> {role, driverCode?}
+// Дополнительные логины маркетолога "только просмотр" — те же вкладки маркетолога, но
+// requireAuth блокирует для такой сессии любые запросы, кроме GET (см. ниже). Задаются
+// отдельными переменными окружения (та же логика, что и у основных ролей — реальные
+// логин/пароль не должны попадать в публичный репозиторий).
+const MARKETER_VIEWERS = [
+  {name:"Анна", login: process.env.ANNA_LOGIN || null, password: process.env.ANNA_PASSWORD || null},
+];
+const authTokens = new Map(); // token -> {role, driverCode?, readOnly?}
 
 // ---------- проверка сессии на сервере (никогда не доверяем localStorage/фронтенду) ----------
 // До этого места токен из /api/auth/login выдавался, но ни один маршрут его не
@@ -72,6 +79,12 @@ function requireAuth(req, res, next){
   const token = getToken(req);
   const session = token ? authTokens.get(token) : null;
   if(!session) return res.status(401).json({error:"Требуется авторизация"});
+  // "Только просмотр" (см. MARKETER_VIEWERS) — читать (GET) можно всё как обычному
+  // маркетологу, а любой другой метод (создание/правка/удаление/импорт) блокируется
+  // здесь же, централизованно, чтобы не забыть проверку на каком-то одном из маршрутов.
+  if(session.readOnly && req.method !== "GET"){
+    return res.status(403).json({error:"Доступ только для просмотра — изменения недоступны для этого логина"});
+  }
   req.session = session;
   next();
 }
@@ -268,6 +281,16 @@ app.post("/api/auth/login", (req,res)=>{
   const {role, login, password} = req.body || {};
   const cfg = AUTH[role];
   if(!cfg) return res.status(400).json({error:"Неизвестная роль"});
+  // Логин маркетолога "только просмотр" (см. MARKETER_VIEWERS) — отдельные учётки, которые
+  // проверяем ДО основного логина/пароля роли, чтобы не требовать заодно настройки основного.
+  if(role === "marketer"){
+    const viewer = MARKETER_VIEWERS.find(v=> v.login && v.password && v.login===login && v.password===password);
+    if(viewer){
+      const token = crypto.randomBytes(24).toString("hex");
+      authTokens.set(token, {role, readOnly:true, name: viewer.name});
+      return res.json({ok:true, token, readOnly:true});
+    }
+  }
   if(!cfg.login || !cfg.password){
     return res.status(503).json({error:"Логин для этой роли ещё не настроен на сервере (нужны переменные окружения)"});
   }
