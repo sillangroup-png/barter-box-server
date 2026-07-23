@@ -874,6 +874,14 @@ function influencerSummary(from, to){
 // в продажи и ROMI (computeMicroInfluencerRomi). from/to — необязательный фильтр периода
 // по дате выкладки (тот же паттерн, что и в marketingSummary/influencerSummary).
 function microDealFactReach(d){ return (d.factReachReels||0) + (d.factReachTT||0); }
+// Таблица показывает и редактирует ОДНУ общую ячейку "Факт.охват" (Reels+TikTok вместе), но
+// хранятся они как два отдельных поля (factReachReels/factReachTT — второе не выведено отдельной
+// колонкой). Чтобы клик по общей ячейке сохранял именно то число, что ввёл маркетолог, TikTok-часть
+// оставляем как есть и весь новый итог относим на factReachReels: reels = новый_итог − текущий TT.
+function microDealFactReachPatch(d, newTotal){
+  const tt = d.factReachTT || 0;
+  return { factReachReels: Math.max(0, (newTotal||0) - tt) };
+}
 function microDealAvgReach(d){ return (d.avgReach||0) + (d.avgReachTT||0); }
 // Полная стоимость интеграции для расходов/CPV/ROMI — оплата блогеру (cost) + себестоимость
 // товара, отданного бартером (productCost). Раньше в расходы шла только оплата, но выдача
@@ -2567,7 +2575,9 @@ function tplMicroInfluencers(){
       <div class="login-hint" style="margin-bottom:12px">
         Кликните по значению в таблице, чтобы отредактировать его прямо на месте (как в Excel) —
         Enter или клик вне поля сохраняет, Esc отменяет. Карандаш ✎ по-прежнему открывает полную форму,
-        если нужно поле, которого нет в таблице.
+        если нужно поле, которого нет в таблице. Колонки CPV, «Вклад в продажи» и ROMI считаются
+        автоматически (по сумме, стоимости товара, факт.охвату и продажам из 1С) и вручную не редактируются —
+        поменяются сами, если поправить факт.охват или сумму.
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
@@ -2591,10 +2601,10 @@ function tplMicroInfluencers(){
               <td>${inlineEditSpan(fmtNum(d.cost||0)+" ₸", d.id, 'cost', d.cost||0, 'number')}</td>
               <td>${inlineEditSpan(fmtNum(d.productCost||0)+" ₸", d.id, 'productCost', d.productCost||0, 'number')}</td>
               <td>${inlineEditSpan(escapeHtml(d.paymentStatus||"—"), d.id, 'paymentStatus', d.paymentStatus||'', 'select', MICRO_PAYMENT_STATUSES)}</td>
-              <td>${fmtNum(factReach)}</td>
-              <td>${cpv==null?"—":cpv.toFixed(3)+" ₸"}</td>
-              <td>${!d.barcode ? '<span style="color:var(--ink-mute)">нет ШК</span>' : (hasBaseline ? fmtNum(r.netContribution)+" ₸" : '<span style="color:var(--ink-mute)">—</span>')}</td>
-              <td>${(r && r.romi!=null) ? r.romi.toFixed(2) : "—"}</td>
+              <td>${inlineEditSpan(fmtNum(factReach), d.id, 'factReachTotal', factReach, 'number')}</td>
+              <td title="Считается автоматически: (сумма + стоимость товара) ÷ факт.охват">${cpv==null?"—":cpv.toFixed(3)+" ₸"}</td>
+              <td title="Считается автоматически из продаж по ШК (импорт по вторникам) — вручную не редактируется">${!d.barcode ? '<span style="color:var(--ink-mute)">нет ШК</span>' : (hasBaseline ? fmtNum(r.netContribution)+" ₸" : '<span style="color:var(--ink-mute)">—</span>')}</td>
+              <td title="Считается автоматически: вклад в продажи ÷ (сумма + стоимость товара)">${(r && r.romi!=null) ? r.romi.toFixed(2) : "—"}</td>
               <td>${inlineEditSpan(escapeHtml(d.productStatus||"—"), d.id, 'productStatus', d.productStatus||'', 'select', MICRO_PRODUCT_STATUSES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.videoStatus||"—"), d.id, 'videoStatus', d.videoStatus||'', 'select', MICRO_VIDEO_STATUSES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.publishDate||"—"), d.id, 'publishDate', d.publishDate||'', 'date')}</td>
@@ -3868,7 +3878,14 @@ function wireDeskTab(){
     // частичный PATCH одного поля через Api.updateMicroDeal (сервер делает Object.assign, поэтому
     // остальные поля не трогаются).
     wireInlineEdit(document.getElementById("main"), async (id, field, value)=>{
-      await Api.updateMicroDeal(id, {[field]: value});
+      // "Факт.охват" в таблице — общая цифра (Reels+TikTok), а не отдельное поле в базе (см.
+      // microDealFactReachPatch) — при сохранении переводим введённый итог в реальные поля.
+      if(field === "factReachTotal"){
+        const deal = DataManager.state.microInfluencerDeals.find(d=>d.id===id);
+        await Api.updateMicroDeal(id, microDealFactReachPatch(deal||{}, value));
+      } else {
+        await Api.updateMicroDeal(id, {[field]: value});
+      }
       await DataManager.refresh(); render();
     });
 
@@ -4517,6 +4534,30 @@ async function runSelfTests(){
     } finally {
       DataManager.state.microInfluencerDeals = savedDeals;
       DataManager.state.salesByDay = savedSales;
+      UI.microFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("microDealFactReachPatch переводит новый общий факт.охват в поле factReachReels, сохраняя factReachTT как есть", ()=>{
+    const d1 = {factReachReels:1000, factReachTT:0};
+    if(JSON.stringify(microDealFactReachPatch(d1, 5000)) !== JSON.stringify({factReachReels:5000})) throw new Error("без TikTok весь новый итог должен уйти в factReachReels: "+JSON.stringify(microDealFactReachPatch(d1,5000)));
+    const d2 = {factReachReels:1000, factReachTT:3000};
+    if(JSON.stringify(microDealFactReachPatch(d2, 5000)) !== JSON.stringify({factReachReels:2000})) throw new Error("TikTok-часть (3000) должна остаться нетронутой, Reels = 5000-3000=2000: "+JSON.stringify(microDealFactReachPatch(d2,5000)));
+    if(JSON.stringify(microDealFactReachPatch(d2, 1000)) !== JSON.stringify({factReachReels:0})) throw new Error("если новый итог меньше текущего TikTok-охвата, Reels не должен уйти в минус: "+JSON.stringify(microDealFactReachPatch(d2,1000)));
+  });
+  TestSuite.test("tplMicroInfluencers: 'Факт.охват' — inline-editable (factReachTotal), CPV/Вклад в продажи/ROMI остаются read-only с подсказкой", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9985, blogerName:"Факт Тест", cost:10000, productCost:0, factReachReels:2000, factReachTT:500, product:"Товар", publishDate:"2026-07-05"},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      const html = tplMicroInfluencers();
+      if(!html.includes('data-field="factReachTotal"')) throw new Error("'Факт.охват' должен быть inline-editable через поле factReachTotal");
+      if(!html.includes('data-type="number"') ) throw new Error("факт.охват должен редактироваться числовым полем");
+      if(!html.includes("Считается автоматически")) throw new Error("у вычисляемых колонок (CPV/Вклад/ROMI) должна быть подсказка, что они не редактируются вручную");
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
       UI.microFilter = JSON.parse(savedFilter);
     }
   });
