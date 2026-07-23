@@ -330,6 +330,7 @@ const Api = {
   createMicroDeal: (d)=> apiFetch("/api/micro-influencer-deals", {method:"POST", headers:jsonHeaders, body:JSON.stringify(d)}),
   updateMicroDeal: (id, changes)=> apiFetch("/api/micro-influencer-deals/"+id, {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
   deleteMicroDeal: (id)=> apiFetch("/api/micro-influencer-deals/"+id, {method:"DELETE"}),
+  bulkDeleteMicroDeals: (ids)=> apiFetch("/api/micro-influencer-deals/bulk-delete", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids})}),
   importMicroDeals: (rows)=> apiFetch("/api/micro-influencer-deals/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
 };
 
@@ -1547,6 +1548,7 @@ const UI = {
   dashPeriod: {from:"", to:""}, // фильтр по периоду на главном дашборде маркетолога (диапазон/неделя/конкретная дата)
   selectedOrderIds: new Set(),
   selectedPubIds: new Set(),
+  selectedMicroIds: new Set(),
   openOrderId: null, driverAwaiting: null, driverReasonCode: null,
 };
 function loadSession(){
@@ -2592,20 +2594,33 @@ function tplMicroInfluencers(){
         автоматически (по сумме, стоимости товара, факт.охвату и продажам из 1С) и вручную не редактируются —
         поменяются сами, если поправить факт.охват или сумму.
       </div>
+      ${(()=>{
+        const dealIds = deals.map(d=>d.id);
+        [...UI.selectedMicroIds].forEach(id=>{ if(!dealIds.includes(id)) UI.selectedMicroIds.delete(id); });
+        return deals.length ? `
+      <div class="toolbar" id="micro-bulk-bar" style="${UI.selectedMicroIds.size? '':'display:none'}">
+        <span>${UI.selectedMicroIds.size} выбрано</span>
+        <button class="btn btn-danger btn-sm" id="micro-bulk-delete-btn">Удалить выделенное</button>
+      </div>` : "";
+      })()}
       <div class="table-wrap"><table>
         <thead><tr>
+          <th class="rowcheck"><input type="checkbox" id="micro-check-all"></th>
+          <th>#</th>
           <th>Блогер</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
           <th>Сумма</th><th>Стоимость товара</th><th>Статус оплаты</th><th>Факт.охват</th><th>CPV</th>
           <th>Вклад в продажи</th><th>ROMI</th>
           <th>Статус товара</th><th>Статус видео</th><th>Дата выкладки</th><th>Ссылка на Reels</th><th></th>
         </tr></thead>
         <tbody>
-          ${deals.map(d=>{
+          ${deals.map((d,i)=>{
             const factReach = microDealFactReach(d);
             const cpv = microDealCpv(d);
             const r = romiById[d.id];
             const hasBaseline = r && r.hasBaseline;
             return `<tr>
+              <td class="rowcheck"><input type="checkbox" class="micro-row-check" data-id="${d.id}" ${UI.selectedMicroIds.has(d.id)?'checked':''}></td>
+              <td>${i+1}</td>
               <td>${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
               <td>${d.instagramAccount?`<a href="${escapeHtml(d.instagramAccount)}" target="_blank" rel="noopener">IG</a> `:""}${inlineEditSpan(fmtNum(d.followers||0), d.id, 'followers', d.followers||0, 'number')}</td>
               <td>${d.tiktokAccount?`<a href="${escapeHtml(d.tiktokAccount)}" target="_blank" rel="noopener">TT</a> `:""}${inlineEditSpan(fmtNum(d.followersTT||0), d.id, 'followersTT', d.followersTT||0, 'number')}</td>
@@ -2627,7 +2642,7 @@ function tplMicroInfluencers(){
                 <button class="btn btn-danger btn-sm del-micro-btn" data-id="${d.id}">✕</button>
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="17">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="19">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -3886,6 +3901,35 @@ function wireDeskTab(){
       };
     });
 
+    // Массовый выбор слева (чекбоксы) + удаление выделенных интеграций одним действием —
+    // тот же паттерн, что и в "Сводном отчёте" (UI.selectedPubIds/rep-check-all).
+    const microCheckAll = document.getElementById("micro-check-all");
+    if(microCheckAll) microCheckAll.onchange = e=>{
+      document.querySelectorAll(".micro-row-check").forEach(cb=>{
+        cb.checked = e.target.checked;
+        const id = parseInt(cb.dataset.id,10);
+        if(e.target.checked) UI.selectedMicroIds.add(id); else UI.selectedMicroIds.delete(id);
+      });
+      renderDeskTab();
+    };
+    document.querySelectorAll(".micro-row-check").forEach(cb=>{
+      cb.onchange = ()=>{
+        const id = parseInt(cb.dataset.id,10);
+        if(cb.checked) UI.selectedMicroIds.add(id); else UI.selectedMicroIds.delete(id);
+        renderDeskTab();
+      };
+    });
+    const microBulkDelete = document.getElementById("micro-bulk-delete-btn");
+    if(microBulkDelete) microBulkDelete.onclick = async ()=>{
+      if(!confirm(`Удалить ${UI.selectedMicroIds.size} интеграций?`)) return;
+      try{
+        await Api.bulkDeleteMicroDeals([...UI.selectedMicroIds]);
+        UI.selectedMicroIds.clear();
+        toast("Удалено");
+        await DataManager.refresh(); render();
+      }catch(e){ toast(e.message, true); }
+    };
+
     // Инлайн-редактирование "по-экселевски": клик по любому значению в таблице сразу превращает
     // его в input/select (см. inlineEditSpan/wireInlineEdit) — без карандаша и модалки. Сохранение —
     // частичный PATCH одного поля через Api.updateMicroDeal (сервер делает Object.assign, поэтому
@@ -4638,6 +4682,73 @@ async function runSelfTests(){
     } finally {
       DataManager.state.microInfluencerDeals = saved;
       UI.microFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("tplMicroInfluencers: колонка '#' нумерует строки с 1 в текущем порядке отображения, не совпадает с id", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9101, blogerName:"Первый", cost:1000},
+        {id:9202, blogerName:"Второй", cost:2000},
+        {id:9303, blogerName:"Третий", cost:3000},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      const html = tplMicroInfluencers();
+      if(!/<th>#<\/th>/.test(html)) throw new Error("должен быть заголовок колонки '#'");
+      // Порядковые номера 1/2/3 должны появиться как отдельные ячейки таблицы, а не только внутри чисел сумм/id.
+      const rows = html.split("<tr>").slice(1).filter(r=>r.includes("blogerName"));
+      if(!rows[0] || !/<td>1<\/td>/.test(rows[0])) throw new Error("первая строка должна быть пронумерована как 1 (не id 9101)");
+      if(!rows[1] || !/<td>2<\/td>/.test(rows[1])) throw new Error("вторая строка должна быть пронумерована как 2");
+      if(!rows[2] || !/<td>3<\/td>/.test(rows[2])) throw new Error("третья строка должна быть пронумерована как 3");
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+      UI.microFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("tplMicroInfluencers: слева есть чекбоксы массового выбора (check-all + построчные), панель массового удаления скрыта без выбора", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    const savedSel = UI.selectedMicroIds;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9401, blogerName:"Чек Первый", cost:1000},
+        {id:9402, blogerName:"Чек Второй", cost:2000},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      UI.selectedMicroIds = new Set();
+      let html = tplMicroInfluencers();
+      if(!html.includes('id="micro-check-all"')) throw new Error("должен быть чекбокс 'выбрать все' (micro-check-all)");
+      if(!html.includes('class="micro-row-check" data-id="9401"')) throw new Error("должен быть построчный чекбокс для интеграции 9401");
+      if(!html.includes('id="micro-bulk-delete-btn"')) throw new Error("панель массового удаления должна присутствовать в разметке (скрыта через style)");
+      if(!/id="micro-bulk-bar" style="display:none"/.test(html)) throw new Error("панель массового удаления должна быть скрыта, пока ничего не выбрано");
+
+      UI.selectedMicroIds = new Set([9401]);
+      html = tplMicroInfluencers();
+      if(html.includes('id="micro-bulk-bar" style="display:none"')) throw new Error("панель массового удаления должна показываться, когда выбрана хотя бы одна интеграция");
+      if(!html.includes("1 выбрано")) throw new Error("панель должна показывать количество выбранных");
+      if(!html.includes('class="micro-row-check" data-id="9401" checked')) throw new Error("выбранная строка должна отображать отмеченный чекбокс");
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+      UI.microFilter = JSON.parse(savedFilter);
+      UI.selectedMicroIds = savedSel;
+    }
+  });
+  TestSuite.test("Api.bulkDeleteMicroDeals вызывает правильный эндпоинт с телом {ids}", ()=>{
+    const origFetch = window.fetch;
+    let captured = null;
+    window.fetch = (url, opts)=>{
+      captured = {url, opts};
+      return Promise.resolve({ ok:true, status:200, json: ()=>Promise.resolve({ok:true, count:2}) });
+    };
+    try{
+      Api.bulkDeleteMicroDeals([1,2]);
+      if(!captured || !captured.url.includes("/api/micro-influencer-deals/bulk-delete")) throw new Error("должен вызвать /api/micro-influencer-deals/bulk-delete: "+JSON.stringify(captured));
+      if(captured.opts.method !== "POST") throw new Error("должен быть POST-запрос");
+      const body = JSON.parse(captured.opts.body);
+      if(!Array.isArray(body.ids) || body.ids.length !== 2) throw new Error("тело запроса должно содержать ids[]: "+captured.opts.body);
+    } finally {
+      window.fetch = origFetch;
     }
   });
   TestSuite.test("inlineEditSpan/wireInlineEdit: клик по ячейке создаёт input, Enter вызывает onSave с новым значением", ()=>{
