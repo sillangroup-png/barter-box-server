@@ -1569,6 +1569,10 @@ function forceLogout(reason){
   if(reason) toast(reason, true);
 }
 function modalOpen(){ return !!document.getElementById("modal-back"); }
+// Идёт ли сейчас инлайн-редактирование ячейки таблицы (см. wireInlineEdit) — фоновый опрос
+// (см. startPolling) должен пропускать перерисовку, пока пользователь редактирует значение,
+// иначе render() каждые 12 секунд стирает открытый input вместе с ещё не сохранённым текстом.
+function inlineEditOpen(){ return !!document.querySelector(".inline-edit.editing"); }
 
 /* =========================================================================
    6. ЭКРАН ВХОДА
@@ -4193,6 +4197,7 @@ function startPolling(){
   setInterval(async ()=>{
     if(!UI.role) return; // не залогинены — /api/state всё равно ответит 401
     if(modalOpen()) return; // не мешаем открытой форме
+    if(inlineEditOpen()) return; // не мешаем инлайн-редактированию ячейки в таблице
     try{
       await DataManager.refresh();
       setConnStatus(true);
@@ -4571,6 +4576,24 @@ async function runSelfTests(){
     input.value = "250";
     input.dispatchEvent(new Event("blur"));
     if(!saved || saved.id !== 42 || saved.field !== "cost" || saved.value !== 250) throw new Error("onSave должен вызываться с (id, field, число): "+JSON.stringify(saved));
+  });
+  TestSuite.test("inlineEditOpen() определяет открытое инлайн-редактирование — фоновый опрос (startPolling) не должен стирать открытый input", ()=>{
+    // Регрессия: фоновый опрос вызывает render() каждые 12 сек и раньше проверял только
+    // modalOpen(), поэтому если пользователь кликнул по ячейке таблицы (открылся input), но
+    // ещё не успел сохранить, ближайший тик опроса стирал весь #main вместе с открытым полем
+    // и введённым (но не сохранённым) текстом — правки терялись без единого сообщения об ошибке.
+    const div = document.createElement("div");
+    div.id = "inline-edit-poll-test";
+    document.body.appendChild(div);
+    try{
+      div.innerHTML = inlineEditSpan("100", 42, "cost", 100, "number");
+      if(inlineEditOpen()) throw new Error("до клика по ячейке inlineEditOpen() должен быть false");
+      wireInlineEdit(div, async ()=>{});
+      div.querySelector(".inline-edit").click();
+      if(!inlineEditOpen()) throw new Error("после клика по ячейке (открыт input) inlineEditOpen() должен быть true");
+    } finally {
+      div.remove();
+    }
   });
   TestSuite.test("wireDeskTab(microInfluencers): экспорт/шаблон CSV содержат колонку id (для upsert) и стоимость товара, импорт показывает 'добавлено/обновлено'", ()=>{
     const savedDeals = DataManager.state.microInfluencerDeals;
