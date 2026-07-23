@@ -726,6 +726,15 @@ app.delete("/api/micro-influencer-deals/:id", requireAuth, (req,res)=>{
   persist();
   res.json({ok:true});
 });
+app.post("/api/micro-influencer-deals/bulk-delete", requireAuth, (req,res)=>{
+  const {ids} = req.body || {};
+  if(!Array.isArray(ids)) return res.status(400).json({error:"ids[] обязателен"});
+  const idSet = new Set(ids.map(Number));
+  const before = state.microInfluencerDeals.length;
+  state.microInfluencerDeals = state.microInfluencerDeals.filter(d=>!idSet.has(d.id));
+  persist();
+  res.json({ok:true, count: before - state.microInfluencerDeals.length});
+});
 app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
   const {rows} = req.body || {};
   if(!Array.isArray(rows)) return res.status(400).json({error:"rows[] обязателен"});
