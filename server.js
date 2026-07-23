@@ -677,7 +677,7 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
     blogerName: b.blogerName, phone: b.phone || "",
     instagramAccount: b.instagramAccount || "", followers: b.followers || 0, er: b.er || 0, avgReach: b.avgReach || 0,
     tiktokAccount: b.tiktokAccount || "", followersTT: b.followersTT || 0, erTT: b.erTT || 0, avgReachTT: b.avgReachTT || 0,
-    cost: b.cost || 0, paymentStatus: b.paymentStatus || MICRO_PAYMENT_STATUSES[0],
+    cost: b.cost || 0, productCost: b.productCost || 0, paymentStatus: b.paymentStatus || MICRO_PAYMENT_STATUSES[0],
     conditions: b.conditions || "", paymentMethod: b.paymentMethod || "", iin: b.iin || "",
     city: b.city || "", address: b.address || "",
     product: b.product || "", barcode: b.barcode || "", productCategory: b.productCategory || "",
@@ -706,12 +706,17 @@ app.delete("/api/micro-influencer-deals/:id", requireAuth, (req,res)=>{
 app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
   const {rows} = req.body || {};
   if(!Array.isArray(rows)) return res.status(400).json({error:"rows[] обязателен"});
-  let added = 0;
+  let added = 0, updated = 0;
   rows.forEach(r=>{
     const blogerName = (r["блогер"] || r["blogger"] || "").trim();
     if(!blogerName) return;
-    state.microInfluencerDeals.push({
-      id: nextId("microInfluencerDeals"),
+    // Если в строке указан id (колонка появляется в экспортированном CSV) и он совпадает с
+    // существующей интеграцией — обновляем её (upsert), а не создаём дубликат. Так работает
+    // цикл "экспорт → правки в Excel → импорт обратно": для новых строк id оставляют пустым.
+    const rawId = (r["id"] || r["ид"] || "").toString().trim();
+    const existingId = rawId ? parseInt(rawId, 10) : null;
+    const existing = existingId ? state.microInfluencerDeals.find(d=>d.id===existingId) : null;
+    const fields = {
       responsible: r["ответственный"] || r["responsible"] || "Нина",
       blogerName,
       phone: (r["телефон"] || r["номер телефона"] || r["phone"] || "").toString().trim(),
@@ -724,6 +729,7 @@ app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
       erTT: parseFloat(r["er tt"] || 0) || 0,
       avgReachTT: parseInt(r["ср. охваты tt"] || r["ср охваты tt"] || r["avg_reach_tt"] || 0, 10) || 0,
       cost: parseInt(r["сумма"] || r["cost"] || 0, 10) || 0,
+      productCost: parseInt(r["стоимость товара"] || r["себестоимость товара"] || r["product_cost"] || 0, 10) || 0,
       paymentStatus: r["статус оплаты"] || r["payment_status"] || MICRO_PAYMENT_STATUSES[0],
       conditions: r["условия"] || r["conditions"] || "",
       paymentMethod: r["способ оплаты"] || r["payment_method"] || "",
@@ -741,11 +747,17 @@ app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
       factReachTT: parseInt(r["факт охват тт"] || 0, 10) || 0,
       publishDate: r["дата выкладки"] || r["publish_date"] || "",
       notes: r["комментарий"] || r["notes"] || "",
-    });
-    added++;
+    };
+    if(existing){
+      Object.assign(existing, fields);
+      updated++;
+    } else {
+      state.microInfluencerDeals.push({ id: nextId("microInfluencerDeals"), ...fields });
+      added++;
+    }
   });
   persist();
-  res.json({added});
+  res.json({added, updated});
 });
 
 // ---------- продажи по дням (вручную из 1С) — нужны для расчёта ROMI блогеров ----------
