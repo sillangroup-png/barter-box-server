@@ -2497,7 +2497,15 @@ function tplMicroInfluencers(){
   let deals = s.deals;
   if(mf.search){
     const q = mf.search.toLowerCase();
-    deals = deals.filter(d=> (d.blogerName||"").toLowerCase().includes(q) || (d.product||"").toLowerCase().includes(q));
+    // Ищем не только по имени блогера и товару, но и по логину/ссылке Instagram и TikTok —
+    // в эти поля обычно вбита ссылка на страничку блогера (https://instagram.com/username),
+    // и маркетологу удобнее найти интеграцию по её видимому @логину, чем по внутреннему имени.
+    deals = deals.filter(d=>
+      (d.blogerName||"").toLowerCase().includes(q) ||
+      (d.product||"").toLowerCase().includes(q) ||
+      (d.instagramAccount||"").toLowerCase().includes(q) ||
+      (d.tiktokAccount||"").toLowerCase().includes(q)
+    );
   }
   if(mf.paymentStatus){
     deals = deals.filter(d=> d.paymentStatus===mf.paymentStatus);
@@ -2558,7 +2566,7 @@ function tplMicroInfluencers(){
         (Reels + TikTok кросспостинг).
       </div>
       <div class="toolbar" style="margin-bottom:12px">
-        <input type="search" class="fill" id="micro-search" placeholder="Поиск по блогеру / товару" value="${escapeHtml(mf.search)}">
+        <input type="search" class="fill" id="micro-search" placeholder="Поиск по блогеру / товару / логину IG или TikTok" value="${escapeHtml(mf.search)}">
         <select id="micro-payment-filter">
           <option value="">Все статусы оплаты</option>
           ${MICRO_PAYMENT_STATUSES.map(st=>`<option value="${st}" ${mf.paymentStatus===st?'selected':''}>${st}</option>`).join("")}
@@ -4512,6 +4520,28 @@ async function runSelfTests(){
       if(!html.includes("new-micro-btn")) throw new Error("должна быть кнопка добавления интеграции");
       if(!html.includes("Уникальных блогеров")) throw new Error("должен быть KPI 'Уникальных блогеров'");
       if(!html.includes("Ещё запланировано")) throw new Error("должен быть KPI 'Ещё запланировано'");
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+      UI.microFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("tplMicroInfluencers: поиск находит интеграцию по логину/ссылке Instagram и TikTok, а не только по имени/товару", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9965, blogerName:"Аружан", product:"Черри", instagramAccount:"https://instagram.com/aruzhan_beauty", tiktokAccount:"https://tiktok.com/@aruzhan_tt"},
+        {id:9966, blogerName:"Другой Блогер", product:"Пудра", instagramAccount:"https://instagram.com/other_blogger", tiktokAccount:""},
+      ];
+      // Поиск по части логина Instagram (без @, как обычно ищут глазами по ссылке).
+      UI.microFilter = {search:"aruzhan_beauty", sort:"default", paymentStatus:""};
+      let html = tplMicroInfluencers();
+      if(!html.includes("Аружан")) throw new Error("поиск по логину Instagram должен найти блогера 'Аружан'");
+      if(html.includes("Другой Блогер")) throw new Error("поиск по логину Instagram не должен показывать других блогеров");
+      // Поиск по логину TikTok.
+      UI.microFilter = {search:"aruzhan_tt", sort:"default", paymentStatus:""};
+      html = tplMicroInfluencers();
+      if(!html.includes("Аружан")) throw new Error("поиск по логину TikTok должен найти блогера 'Аружан'");
     } finally {
       DataManager.state.microInfluencerDeals = saved;
       UI.microFilter = JSON.parse(savedFilter);
