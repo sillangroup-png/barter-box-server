@@ -1534,7 +1534,7 @@ async function withBusy(button, fn){
    ========================================================================= */
 const SESSION_KEY = "barterBoxApp_session"; // роль/код водителя — только для ЭТОГО браузера
 const UI = {
-  role: null, driverCode: null, authToken: null, tab: "dashboard",
+  role: null, driverCode: null, authToken: null, readOnly: false, tab: "dashboard",
   filters: {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""},
   topSort: "views",
   inflFilter: {search:"", sort:"default", month:""},
@@ -1555,23 +1555,24 @@ function loadSession(){
     if(raw){
       const s = JSON.parse(raw);
       UI.role = s.role || null; UI.driverCode = s.driverCode || null; UI.authToken = s.authToken || null;
+      UI.readOnly = !!s.readOnly;
     }
   }catch(e){}
 }
 function saveSession(){
-  try{ localStorage.setItem(SESSION_KEY, JSON.stringify({role:UI.role, driverCode:UI.driverCode, authToken:UI.authToken})); }catch(e){}
+  try{ localStorage.setItem(SESSION_KEY, JSON.stringify({role:UI.role, driverCode:UI.driverCode, authToken:UI.authToken, readOnly:UI.readOnly})); }catch(e){}
 }
 function logout(){
   // сообщаем серверу, что токен больше не нужен (сессия реально живёт на сервере,
   // а не только в localStorage) — но даже если запрос не пройдёт, разлогиниваемся
   // локально в любом случае.
   if(UI.authToken) Api.logout().catch(()=>{});
-  UI.role = null; UI.driverCode = null; UI.authToken = null; UI.tab = "dashboard"; saveSession(); render();
+  UI.role = null; UI.driverCode = null; UI.authToken = null; UI.readOnly = false; UI.tab = "dashboard"; saveSession(); render();
 }
 // Используется, когда сервер сам сообщил, что сессия недействительна (401 на
 // запросе, где мы считали себя залогиненными) — например, после рестарта сервера.
 function forceLogout(reason){
-  UI.role = null; UI.driverCode = null; UI.authToken = null; UI.tab = "dashboard";
+  UI.role = null; UI.driverCode = null; UI.authToken = null; UI.readOnly = false; UI.tab = "dashboard";
   saveSession();
   render();
   if(reason) toast(reason, true);
@@ -1626,7 +1627,7 @@ function renderLogin(){
       const btn = document.getElementById("staff-login-btn");
       try{
         const data = await withBusy(btn, ()=> Api.login(role, login, password));
-        UI.role = role; UI.authToken = data.token; saveSession(); UI.tab = "dashboard";
+        UI.role = role; UI.authToken = data.token; UI.readOnly = !!data.readOnly; saveSession(); UI.tab = "dashboard";
         await DataManager.load(); // токена не было до этого момента — предыдущая попытка загрузки данных 401'ится
         render();
       }catch(e){ toast(e.message, true); }
@@ -1688,7 +1689,10 @@ const MARKETER_TABS = [
   {id:"report",           label:"Сводный отчёт"},
 ];
 function tabsForRole(){ return UI.role==="marketer" ? MARKETER_TABS : MANAGER_TABS; }
-function roleLabel(){ return UI.role==="marketer" ? "📊 Маркетолог" : "👤 Менеджер / логист"; }
+function roleLabel(){
+  const base = UI.role==="marketer" ? "📊 Маркетолог" : "👤 Менеджер / логист";
+  return UI.readOnly ? base + ' <span style="color:var(--warn);font-weight:600">· только просмотр</span>' : base;
+}
 
 function renderDeskShell(){
   const app = document.getElementById("app");
@@ -1712,6 +1716,7 @@ function renderDeskShell(){
         return `<button class="tab ${UI.tab===t.id?'active':''}" data-tab="${t.id}">${t.label}${cnt}</button>`;
       }).join("")}
     </div>
+    ${UI.readOnly ? `<div class="login-hint" style="margin:10px 16px 0">Доступ только для просмотра — редактирование, импорт и удаление недоступны для этого логина.</div>` : ""}
     <main id="main"></main>
   `;
   setConnStatus(isOnline);
@@ -4989,6 +4994,45 @@ async function runSelfTests(){
     if(notDelivered.value!==0) throw new Error("оценка не должна считаться до статуса «доставлено»");
     const notPublished = reachInfo({status:"delivered", followers:20000}, null, null);
     if(notPublished.value!==0) throw new Error("оценка не должна считаться без публикации");
+  });
+
+  TestSuite.test("roleLabel() показывает пометку 'только просмотр' для UI.readOnly, и не показывает её иначе", ()=>{
+    const savedRole = UI.role, savedReadOnly = UI.readOnly;
+    try{
+      UI.role = "marketer"; UI.readOnly = false;
+      if(roleLabel().includes("только просмотр")) throw new Error("для полного доступа не должно быть пометки 'только просмотр'");
+      UI.readOnly = true;
+      if(!roleLabel().includes("только просмотр")) throw new Error("для readOnly-сессии должна быть пометка 'только просмотр'");
+    } finally {
+      UI.role = savedRole; UI.readOnly = savedReadOnly;
+    }
+  });
+  TestSuite.test("saveSession()/loadSession() сохраняют и восстанавливают UI.readOnly вместе с токеном", ()=>{
+    const saved = {role:UI.role, driverCode:UI.driverCode, authToken:UI.authToken, readOnly:UI.readOnly};
+    try{
+      UI.role = "marketer"; UI.driverCode = null; UI.authToken = "test-token-ro"; UI.readOnly = true;
+      saveSession();
+      UI.role = null; UI.authToken = null; UI.readOnly = false; // сброс, как будто страницу перезагрузили
+      loadSession();
+      if(UI.readOnly !== true) throw new Error("loadSession() должен восстановить readOnly:true из localStorage");
+      if(UI.authToken !== "test-token-ro") throw new Error("loadSession() должен восстановить токен вместе с readOnly");
+    } finally {
+      UI.role = saved.role; UI.driverCode = saved.driverCode; UI.authToken = saved.authToken; UI.readOnly = saved.readOnly;
+      saveSession();
+    }
+  });
+  TestSuite.test("renderDeskShell() показывает баннер про 'только просмотр', когда UI.readOnly=true", ()=>{
+    const savedRole = UI.role, savedReadOnly = UI.readOnly, savedTab = UI.tab;
+    try{
+      UI.role = "marketer"; UI.readOnly = true; UI.tab = "dashboard";
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+      renderDeskShell();
+      const app = document.getElementById("app");
+      if(!app.innerHTML.includes("Доступ только для просмотра")) throw new Error("должен быть виден баннер про режим только просмотра");
+    } finally {
+      UI.role = savedRole; UI.readOnly = savedReadOnly; UI.tab = savedTab;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
   });
 
   // единственная сетевая проверка — health-check, только чтение, ничего не создаёт в базе
