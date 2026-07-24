@@ -1494,6 +1494,64 @@ function microPeriodStats(rows, from, to){
   const avgRomi = withRomi.length ? withRomi.reduce((a,r)=>a+r.romi,0)/withRomi.length : null;
   return {dealsCount, reach, cost, contribution, avgRomi};
 }
+// Сводка "по блогерам" для панели над таблицей интеграций микро/средних (по просьбе Нины): сколько
+// постов вышло у блогера за выбранный месяц, суммарный факт.охват, суммарные затраты (оплата +
+// себестоимость подаренного товара — та же формула, что и в остальных итогах, см. microDealTotalCost)
+// и суммарный вклад в продажи. Вклад берём из того же ROMI-движка, что и вся остальная страница
+// (computeMicroInfluencerRomi/computeUnifiedInfluencerRomi), чтобы не задваивать прирост с крупными
+// блогерами и не придумывать вторую логику подсчёта. Если ни у одной интеграции блогера нет ШК/базы
+// для расчёта — вклад показываем как "—" (не 0 ₸), чтобы не путать "нет данных" с "продаж не было".
+function microBloggerSummary(month){
+  let deals = DataManager.state.microInfluencerDeals;
+  if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
+  const romiById = {};
+  computeMicroInfluencerRomi().forEach(r=>{ romiById[r.deal.id] = r; });
+  const map = {};
+  deals.forEach(d=>{
+    const name = d.blogerName || "—";
+    if(!map[name]) map[name] = {blogerName:name, dealsCount:0, totalReach:0, totalCost:0, totalContribution:0, hasAnyBaseline:false};
+    const a = map[name];
+    a.dealsCount++;
+    a.totalReach += microDealFactReach(d);
+    a.totalCost += microDealTotalCost(d);
+    const r = romiById[d.id];
+    if(r && r.hasBaseline){ a.totalContribution += (r.netContribution||0); a.hasAnyBaseline = true; }
+  });
+  return Object.values(map).sort((a,b)=> b.totalReach - a.totalReach);
+}
+function tplMicroBloggerSummary(){
+  const months = microAvailableMonths();
+  const month = UI.microSummaryMonth;
+  const rows = microBloggerSummary(month);
+  return `
+    <div class="panel">
+      <div class="panel-title">
+        Сводка по блогерам
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">постов, суммарный охват, затраты и вклад в продажи — по каждому блогеру за период</span>
+      </div>
+      <div class="toolbar" style="margin-bottom:12px">
+        <select id="micro-summary-month">
+          <option value="">Все месяцы</option>
+          ${months.map(m=>`<option value="${m}" ${month===m?'selected':''}>${escapeHtml(monthLabel(m))}</option>`).join("")}
+        </select>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Блогер</th><th>Постов</th><th>Сумма охватов</th><th>Затраты</th><th>Вклад в продажи</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r=>`<tr>
+            <td><b>${escapeHtml(r.blogerName)}</b></td>
+            <td>${r.dealsCount}</td>
+            <td>${fmtNum(r.totalReach)}</td>
+            <td>${fmtNum(r.totalCost)} ₸</td>
+            <td>${r.hasAnyBaseline ? fmtNum(r.totalContribution)+" ₸" : '<span style="color:var(--ink-mute)">—</span>'}</td>
+          </tr>`).join("") || `<tr><td class="empty" colspan="5">${month ? "Нет интеграций за выбранный месяц" : "Интеграций пока нет"}</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+  `;
+}
 function tplMicroInfluencerCompare(rows){
   const months = microAvailableMonths();
   if(!months.length) return "";
@@ -1561,6 +1619,7 @@ const UI = {
   inflCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
   microDashMonth: "", // выбранный месяц в дашборде "Микро/средние" (см. tplMicroInfluencerBrandDashboard)
   microCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
+  microSummaryMonth: "", // выбранный месяц в сводке "по блогерам" перед таблицей интеграций (см. tplMicroBloggerSummary)
   inflTopFilter: {from:"", to:""},
   dashPeriod: {from:"", to:""}, // фильтр по периоду на главном дашборде маркетолога (диапазон/неделя/конкретная дата)
   selectedOrderIds: new Set(),
@@ -2558,6 +2617,7 @@ function tplMicroInfluencers(){
   return `
     ${tplMicroInfluencerBrandDashboard(s.romiRows)}
     ${tplMicroInfluencerCompare(s.romiRows)}
+    ${tplMicroBloggerSummary()}
 
     <div class="grid-kpi">
       <div class="kpi"><div class="num">${s.count}</div><div class="lbl">Всего интеграций</div></div>
@@ -3908,6 +3968,8 @@ function wireDeskTab(){
     if(microDashMonthSelect) microDashMonthSelect.onchange = ()=>{
       if(microDashMonthSelect.value){ UI.microDashMonth = microDashMonthSelect.value; renderDeskTab(); }
     };
+    const microSummaryMonthSelect = document.getElementById("micro-summary-month");
+    if(microSummaryMonthSelect) microSummaryMonthSelect.onchange = e=>{ UI.microSummaryMonth = e.target.value; renderDeskTab(); };
     ["micro-cmp-a-from","micro-cmp-a-to","micro-cmp-b-from","micro-cmp-b-to"].forEach(id=>{
       const el = document.getElementById(id);
       if(!el) return;
@@ -4613,15 +4675,19 @@ async function runSelfTests(){
         {id:9965, blogerName:"Аружан", product:"Черри", instagramAccount:"https://instagram.com/aruzhan_beauty", tiktokAccount:"https://tiktok.com/@aruzhan_tt"},
         {id:9966, blogerName:"Другой Блогер", product:"Пудра", instagramAccount:"https://instagram.com/other_blogger", tiktokAccount:""},
       ];
-      // Поиск по части логина Instagram (без @, как обычно ищут глазами по ссылке).
+      // Поиск по части логина Instagram (без @, как обычно ищут глазами по ссылке). Ищем только в
+      // ТАБЛИЦЕ ДЕТАЛИЗАЦИИ (после "micro-search" в разметке) — сводка по блогерам выше неё не
+      // зависит от текстового поиска (у неё свой фильтр по месяцу), поэтому там оба блогера видны.
       UI.microFilter = {search:"aruzhan_beauty", sort:"default", paymentStatus:""};
       let html = tplMicroInfluencers();
-      if(!html.includes("Аружан")) throw new Error("поиск по логину Instagram должен найти блогера 'Аружан'");
-      if(html.includes("Другой Блогер")) throw new Error("поиск по логину Instagram не должен показывать других блогеров");
+      let detailHtml = html.slice(html.indexOf('id="micro-search"'));
+      if(!detailHtml.includes("Аружан")) throw new Error("поиск по логину Instagram должен найти блогера 'Аружан'");
+      if(detailHtml.includes("Другой Блогер")) throw new Error("поиск по логину Instagram не должен показывать других блогеров в таблице детализации");
       // Поиск по логину TikTok.
       UI.microFilter = {search:"aruzhan_tt", sort:"default", paymentStatus:""};
       html = tplMicroInfluencers();
-      if(!html.includes("Аружан")) throw new Error("поиск по логину TikTok должен найти блогера 'Аружан'");
+      detailHtml = html.slice(html.indexOf('id="micro-search"'));
+      if(!detailHtml.includes("Аружан")) throw new Error("поиск по логину TikTok должен найти блогера 'Аружан'");
     } finally {
       DataManager.state.microInfluencerDeals = saved;
       UI.microFilter = JSON.parse(savedFilter);
@@ -4650,6 +4716,106 @@ async function runSelfTests(){
       DataManager.state.microInfluencerDeals = savedDeals;
       DataManager.state.salesByDay = savedSales;
       UI.microFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("microBloggerSummary: считает постов/охват/затраты/вклад по блогеру и фильтрует по месяцу", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedSales = DataManager.state.salesByDay;
+    try{
+      // Без ШК у Дарины — matchKey сопоставления с продажами уходит по названию товара (см.
+      // microDealMatchKey/saleMatchKey), как и у записей в salesByDay ниже (там тоже нет barcode).
+      DataManager.state.microInfluencerDeals = [
+        {id:9701, blogerName:"Дарина", cost:10000, productCost:2000, factReachReels:3000, factReachTT:0, product:"Черри", barcode:"", publishDate:"2026-07-10"},
+        {id:9702, blogerName:"Дарина", cost:8000, productCost:0, factReachReels:2000, factReachTT:500, product:"Черри", barcode:"", publishDate:"2026-07-15"},
+        // Другой месяц — не должен попасть в фильтр по июлю.
+        {id:9703, blogerName:"Дарина", cost:5000, productCost:0, factReachReels:1000, factReachTT:0, product:"Черри", barcode:"", publishDate:"2026-08-01"},
+        // Другой блогер, другой товар без истории продаж — считается отдельной строкой сводки, вклад не считается.
+        {id:9704, blogerName:"Аружан", cost:7000, productCost:0, factReachReels:1500, factReachTT:0, product:"Пудра", barcode:"", publishDate:"2026-07-12"},
+      ];
+      DataManager.state.salesByDay = [
+        {date:"2026-07-01", product:"Черри", revenue:1000},
+        {date:"2026-07-02", product:"Черри", revenue:1000},
+        {date:"2026-07-10", product:"Черри", revenue:5000},
+        {date:"2026-07-15", product:"Черри", revenue:4000},
+      ];
+      const julyRows = microBloggerSummary("2026-07");
+      const darina = julyRows.find(r=>r.blogerName==="Дарина");
+      if(!darina) throw new Error("должна быть строка сводки для 'Дарина'");
+      if(darina.dealsCount !== 2) throw new Error("за июль у Дарины должно быть 2 поста (август не считается): "+darina.dealsCount);
+      if(darina.totalReach !== 3000+2500) throw new Error("сумма охватов должна быть 3000+2500=5500: "+darina.totalReach);
+      if(darina.totalCost !== (10000+2000)+(8000+0)) throw new Error("затраты должны включать себестоимость товара (cost+productCost): "+darina.totalCost);
+      if(!darina.hasAnyBaseline) throw new Error("у Дарины есть ШК с историей продаж — вклад должен считаться (hasAnyBaseline=true)");
+
+      const aruzhan = julyRows.find(r=>r.blogerName==="Аружан");
+      if(!aruzhan) throw new Error("должна быть отдельная строка для 'Аружан'");
+      if(aruzhan.hasAnyBaseline) throw new Error("у Аружан нет ШК — вклад не должен считаться (hasAnyBaseline=false)");
+
+      const allRows = microBloggerSummary("");
+      const darinaAll = allRows.find(r=>r.blogerName==="Дарина");
+      if(darinaAll.dealsCount !== 3) throw new Error("без фильтра по месяцу должны учитываться все 3 поста Дарины: "+darinaAll.dealsCount);
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+      DataManager.state.salesByDay = savedSales;
+    }
+  });
+  TestSuite.test("tplMicroBloggerSummary(): рисует сводную панель по блогерам с фильтром по месяцу перед таблицей интеграций", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    const savedSummaryMonth = UI.microSummaryMonth;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9711, blogerName:"Дарина", cost:10000, productCost:0, factReachReels:3000, factReachTT:0, product:"Товар", barcode:"", publishDate:"2026-07-10"},
+        {id:9712, blogerName:"Дарина", cost:8000, productCost:0, factReachReels:2000, factReachTT:0, product:"Товар", barcode:"", publishDate:"2026-07-15"},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      UI.microSummaryMonth = "";
+      const summaryHtml = tplMicroBloggerSummary();
+      if(!summaryHtml.includes("Сводка по блогерам")) throw new Error("должен быть заголовок 'Сводка по блогерам'");
+      if(!summaryHtml.includes('id="micro-summary-month"')) throw new Error("должен быть select для фильтра по месяцу (micro-summary-month)");
+      if(!summaryHtml.includes("Дарина")) throw new Error("должна показывать блогера 'Дарина'");
+      if(!summaryHtml.includes("<td>2</td>")) throw new Error("у Дарины должно быть 2 поста в сводке: "+summaryHtml);
+      if(!summaryHtml.includes(">5 000<") && !summaryHtml.includes("5 000")) {
+        // сумма охватов 3000+2000=5000 — форматируется через fmtNum (разделитель тысяч)
+        if(!/5[\s ]000/.test(summaryHtml)) throw new Error("сумма охватов Дарины должна быть 5000 (3000+2000): "+summaryHtml);
+      }
+      // Сводка должна идти в разметке ДО основной таблицы интеграций (перед деталкой).
+      const fullHtml = tplMicroInfluencers();
+      const summaryPos = fullHtml.indexOf("Сводка по блогерам");
+      const detailPos = fullHtml.indexOf('id="micro-check-all"');
+      if(summaryPos === -1 || detailPos === -1 || summaryPos >= detailPos) throw new Error("сводная таблица по блогерам должна быть выше основной таблицы интеграций в разметке");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+      UI.microFilter = JSON.parse(savedFilter);
+      UI.microSummaryMonth = savedSummaryMonth;
+    }
+  });
+  TestSuite.test("wireDeskTab(microInfluencers): выбор месяца в 'Сводке по блогерам' обновляет UI.microSummaryMonth", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    const savedTab = UI.tab;
+    const savedSummaryMonth = UI.microSummaryMonth;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9721, blogerName:"Дарина", cost:1000, factReachReels:1000, factReachTT:0, product:"Товар", publishDate:"2026-07-10"},
+        {id:9722, blogerName:"Дарина", cost:1000, factReachReels:1000, factReachTT:0, product:"Товар", publishDate:"2026-08-10"},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      UI.microSummaryMonth = "";
+      UI.tab = "microInfluencers";
+      document.body.innerHTML = '<main id="main"></main><div id="toast"></div>';
+      document.getElementById("main").innerHTML = tplMicroInfluencers();
+      wireDeskTab();
+      const select = document.getElementById("micro-summary-month");
+      if(!select) throw new Error("select 'micro-summary-month' должен быть в DOM после wireDeskTab()");
+      select.value = "2026-07";
+      select.dispatchEvent(new Event("change"));
+      if(UI.microSummaryMonth !== "2026-07") throw new Error("выбор месяца должен обновить UI.microSummaryMonth: "+UI.microSummaryMonth);
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+      UI.microFilter = JSON.parse(savedFilter);
+      UI.tab = savedTab;
+      UI.microSummaryMonth = savedSummaryMonth;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
   TestSuite.test("microDealFactReachPatch переводит новый общий факт.охват в поле factReachReels, сохраняя factReachTT как есть", ()=>{
@@ -4818,13 +4984,15 @@ async function runSelfTests(){
       if(!reachTh) throw new Error("заголовок 'Факт.охват' должен быть в DOM после wireDeskTab()");
       reachTh.onclick();
       if(UI.microFilter.sort !== "reach_desc") throw new Error("первый клик по заголовку должен ставить сортировку '_desc': "+UI.microFilter.sort);
-      let names = [...document.querySelectorAll("tbody tr")].map(tr=>tr.children[2].textContent);
+      // Строки берём именно из таблицы ДЕТАЛИЗАЦИИ — по чекбоксу .micro-row-check, который есть
+      // только там (в новой сводке по блогерам выше своя таблица со своим набором <tr>, без чекбоксов).
+      let names = [...document.querySelectorAll(".micro-row-check")].map(cb=>cb.closest("tr").children[2].textContent);
       if(!(names[0].includes("Большой") && names[2].includes("Малый"))) throw new Error("после клика (desc) первым должен идти 'Большой', последним — 'Малый': "+JSON.stringify(names));
 
       // Повторный клик по той же колонке — переключение на "сначала меньше".
       document.querySelector('.th-sort[data-sort-key="reach"]').onclick();
       if(UI.microFilter.sort !== "reach_asc") throw new Error("повторный клик по той же колонке должен переключать на '_asc': "+UI.microFilter.sort);
-      names = [...document.querySelectorAll("tbody tr")].map(tr=>tr.children[2].textContent);
+      names = [...document.querySelectorAll(".micro-row-check")].map(cb=>cb.closest("tr").children[2].textContent);
       if(!(names[0].includes("Малый") && names[2].includes("Большой"))) throw new Error("после повторного клика (asc) первым должен идти 'Малый', последним — 'Большой': "+JSON.stringify(names));
 
       // Третий клик по той же колонке — снова "сначала больше" (двухпозиционный тумблер).
