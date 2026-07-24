@@ -2690,7 +2690,9 @@ function tplMicroInfluencers(){
               <td>${inlineEditSpan(escapeHtml(d.productStatus||"—"), d.id, 'productStatus', d.productStatus||'', 'select', MICRO_PRODUCT_STATUSES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.videoStatus||"—"), d.id, 'videoStatus', d.videoStatus||'', 'select', MICRO_VIDEO_STATUSES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.publishDate||"—"), d.id, 'publishDate', d.publishDate||'', 'date')}</td>
-              <td>${inlineEditSpan(d.reelsLink?escapeHtml(d.reelsLink):"—", d.id, 'reelsLink', d.reelsLink||'', 'text')}</td>
+              <td>${d.reelsLink
+                ? `<a href="${escapeHtml(d.reelsLink)}" target="_blank" rel="noopener">${escapeHtml(d.reelsLink)}</a> ${inlineEditSpan("✎", d.id, 'reelsLink', d.reelsLink, 'text')}`
+                : inlineEditSpan("—", d.id, 'reelsLink', '', 'text')}</td>
               <td>
                 <button class="btn btn-ghost btn-sm edit-micro-btn" data-id="${d.id}">✎</button>
                 <button class="btn btn-danger btn-sm del-micro-btn" data-id="${d.id}">✕</button>
@@ -4932,6 +4934,26 @@ async function runSelfTests(){
       if(!html.includes('data-field="reelsLink"')) throw new Error("ссылка на reels должна быть inline-editable");
       if(!html.includes('data-field="publishDate"') || !html.includes('data-type="date"')) throw new Error("дата выкладки должна быть inline-editable date");
       if(!html.includes("export-micro-csv-btn")) throw new Error("должна быть кнопка 'Экспорт CSV'");
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+      UI.microFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("tplMicroInfluencers: 'Ссылка на Reels' с заполненным значением — кликабельная ссылка (открывается в новой вкладке), а не только inline-edit текст", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9985, blogerName:"Ссылка Тест", cost:1000, reelsLink:"https://www.instagram.com/reel/Da47nRxuYBG/"},
+        {id:9986, blogerName:"Без Ссылки", cost:1000, reelsLink:""},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      const html = tplMicroInfluencers();
+      if(!html.includes('<a href="https://www.instagram.com/reel/Da47nRxuYBG/" target="_blank" rel="noopener">https://www.instagram.com/reel/Da47nRxuYBG/</a>')) throw new Error("заполненная ссылка должна рендериться как <a target=\"_blank\">, открывающая её в браузере: "+html);
+      // Рядом со ссылкой должен остаться способ её отредактировать (карандаш inline-edit), не заменяя клик по самой ссылке переходом в редактирование.
+      if(!html.includes('data-field="reelsLink" data-type="text" data-value="https://www.instagram.com/reel/Da47nRxuYBG/"')) throw new Error("рядом со ссылкой должен быть inline-edit для её изменения");
+      // Пустая ссылка — просто "—" как раньше, кликабельно для добавления значения.
+      if(!/data-field="reelsLink" data-type="text" data-value=""[^>]*>—</.test(html)) throw new Error("пустая ссылка должна показываться как '—' (inline-edit для добавления): "+html);
     } finally {
       DataManager.state.microInfluencerDeals = saved;
       UI.microFilter = JSON.parse(savedFilter);
