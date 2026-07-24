@@ -114,6 +114,12 @@ tr:hover td{background:#fafcfe}
 td.wrap{white-space:normal;max-width:220px}
 .rowcheck{width:26px}
 
+/* Закреплённая при горизонтальном скролле колонка (напр. "Блогер" в таблице микро/средних
+   интеграций) — остаётся видимой в области экрана, пока скроллятся остальные колонки. */
+.sticky-col{position:sticky;left:0;z-index:1;background:#fff;box-shadow:2px 0 4px -2px rgba(0,0,0,.15)}
+th.sticky-col{z-index:2;background:#f7f9fb}
+tr:hover td.sticky-col{background:#fafcfe}
+
 /* Заголовки таблиц с сортировкой по клику (как в Excel) — см. sortableTh(). Клик по заголовку
    ставит сортировку "сначала больше" по этой колонке, повторный клик по той же — переключает
    на "сначала меньше"; клик по другой колонке снова начинает с "сначала больше". */
@@ -1430,7 +1436,10 @@ function microBloggerSummary(month){
     const r = romiById[d.id];
     if(r && r.hasBaseline){ a.totalContribution += (r.netContribution||0); a.hasAnyBaseline = true; }
   });
-  return Object.values(map).sort((a,b)=> b.totalReach - a.totalReach);
+  return Object.values(map).map(a=>({
+    ...a,
+    cpv: a.totalReach>0 ? (a.totalCost/a.totalReach) : null, // СPV = затраты ÷ сумма охватов, как и в остальных местах приложения
+  })).sort((a,b)=> b.totalReach - a.totalReach);
 }
 const MICRO_SUMMARY_COLLAPSE_LIMIT = 10;
 function tplMicroBloggerSummary(){
@@ -1453,7 +1462,7 @@ function tplMicroBloggerSummary(){
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
-          <th>Блогер</th><th>Постов</th><th>Сумма охватов</th><th>Затраты</th><th>Вклад в продажи</th>
+          <th>Блогер</th><th>Постов</th><th>Сумма охватов</th><th>Затраты</th><th>CPV</th><th>Вклад в продажи</th>
         </tr></thead>
         <tbody>
           ${visibleRows.map(r=>`<tr>
@@ -1461,8 +1470,9 @@ function tplMicroBloggerSummary(){
             <td>${r.dealsCount}</td>
             <td>${fmtNum(r.totalReach)}</td>
             <td>${fmtNum(r.totalCost)} ₸</td>
+            <td>${r.cpv==null ? '<span style="color:var(--ink-mute)">—</span>' : (Math.round(r.cpv*100)/100)+" ₸"}</td>
             <td>${r.hasAnyBaseline ? fmtNum(r.totalContribution)+" ₸" : '<span style="color:var(--ink-mute)">—</span>'}</td>
-          </tr>`).join("") || `<tr><td class="empty" colspan="5">${month ? "Нет интеграций за выбранный месяц" : "Интеграций пока нет"}</td></tr>`}
+          </tr>`).join("") || `<tr><td class="empty" colspan="6">${month ? "Нет интеграций за выбранный месяц" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
       ${(!expanded && rows.length>MICRO_SUMMARY_COLLAPSE_LIMIT) ? `<div style="margin-top:10px"><button class="btn btn-sm" id="micro-summary-show-all">Показать все (${rows.length})</button></div>` : ""}
@@ -2606,7 +2616,7 @@ function tplMicroInfluencers(){
         <thead><tr>
           <th class="rowcheck"><input type="checkbox" id="micro-check-all"></th>
           <th>#</th>
-          <th>Блогер</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
+          <th class="sticky-col">Блогер</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
           ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
           ${sortableTh("Вклад в продажи","sales",mf.sort)}${sortableTh("ROMI","romi",mf.sort)}
           <th>Статус товара</th><th>Статус видео</th><th>Дата выкладки</th><th>Ссылка на Reels</th><th></th>
@@ -2620,7 +2630,7 @@ function tplMicroInfluencers(){
             return `<tr>
               <td class="rowcheck"><input type="checkbox" class="micro-row-check" data-id="${d.id}" ${UI.selectedMicroIds.has(d.id)?'checked':''}></td>
               <td>${i+1}</td>
-              <td>${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
+              <td class="sticky-col">${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
               <td>${d.instagramAccount?`<a href="${escapeHtml(d.instagramAccount)}" target="_blank" rel="noopener">IG</a> `:""}${inlineEditSpan(fmtNum(d.followers||0), d.id, 'followers', d.followers||0, 'number')}</td>
               <td>${d.tiktokAccount?`<a href="${escapeHtml(d.tiktokAccount)}" target="_blank" rel="noopener">TT</a> `:""}${inlineEditSpan(fmtNum(d.followersTT||0), d.id, 'followersTT', d.followersTT||0, 'number')}</td>
               <td>${inlineEditSpan(escapeHtml(d.product||"—"), d.id, 'product', d.product||'', 'text')}<br><span style="color:var(--ink-mute);font-size:11px">ШК ${inlineEditSpan(escapeHtml(d.barcode||"—"), d.id, 'barcode', d.barcode||'', 'text')}</span></td>
@@ -4738,6 +4748,33 @@ async function runSelfTests(){
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
+  TestSuite.test("microBloggerSummary()/tplMicroBloggerSummary(): считает CPV (затраты ÷ сумма охватов) по каждому блогеру и рисует колонку CPV", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedSummaryMonth = UI.microSummaryMonth;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9741, blogerName:"Дарина", cost:8000, productCost:2000, factReachReels:4000, factReachTT:1000, product:"Товар", barcode:"", publishDate:"2026-07-10"},
+        {id:9742, blogerName:"Дарина", cost:2000, productCost:0, factReachReels:0, factReachTT:0, product:"Товар", barcode:"", publishDate:"2026-07-15"},
+        // Охват = 0 у блогера без единой интеграции с охватом — CPV не считается (hasReach=false, null, а не деление на 0).
+        {id:9743, blogerName:"БезОхвата", cost:5000, productCost:0, factReachReels:0, factReachTT:0, product:"Товар2", barcode:"", publishDate:"2026-07-12"},
+      ];
+      UI.microSummaryMonth = "2026-07";
+      const rows = microBloggerSummary("2026-07");
+      const darina = rows.find(r=>r.blogerName==="Дарина");
+      // Затраты = (8000+2000)+(2000+0) = 12000, охват = (4000+1000)+0 = 5000 → CPV = 12000/5000 = 2.4
+      if(Math.abs(darina.cpv - 2.4) > 1e-9) throw new Error("CPV у Дарины должен быть 12000/5000=2.4: "+darina.cpv);
+
+      const bezOhvata = rows.find(r=>r.blogerName==="БезОхвата");
+      if(bezOhvata.cpv !== null) throw new Error("при нулевом охвате CPV должен быть null (не деление на 0): "+bezOhvata.cpv);
+
+      const html = tplMicroBloggerSummary();
+      if(!html.includes(">CPV<")) throw new Error("в сводке должна быть колонка CPV");
+      if(!html.includes("2.4")) throw new Error("CPV Дарины (2.4) должен отображаться в таблице: "+html);
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+      UI.microSummaryMonth = savedSummaryMonth;
+    }
+  });
   TestSuite.test("tplMicroBloggerSummary(): сводка сворачивается до 10 строк с кнопкой 'Показать все', которая разворачивает таблицу", ()=>{
     const savedDeals = DataManager.state.microInfluencerDeals;
     const savedFilter = JSON.stringify(UI.microFilter);
@@ -4867,6 +4904,22 @@ async function runSelfTests(){
       if(!rows[0] || !/<td>1<\/td>/.test(rows[0])) throw new Error("первая строка должна быть пронумерована как 1 (не id 9101)");
       if(!rows[1] || !/<td>2<\/td>/.test(rows[1])) throw new Error("вторая строка должна быть пронумерована как 2");
       if(!rows[2] || !/<td>3<\/td>/.test(rows[2])) throw new Error("третья строка должна быть пронумерована как 3");
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+      UI.microFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("tplMicroInfluencers: колонка 'Блогер' закреплена (sticky-col) при горизонтальном скролле таблицы", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9111, blogerName:"Закреплённый", cost:1000},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      const html = tplMicroInfluencers();
+      if(!/<th class="sticky-col">Блогер<\/th>/.test(html)) throw new Error("заголовок 'Блогер' должен иметь класс sticky-col");
+      if(!/<td class="sticky-col">/.test(html)) throw new Error("ячейка с именем блогера должна иметь класс sticky-col");
     } finally {
       DataManager.state.microInfluencerDeals = saved;
       UI.microFilter = JSON.parse(savedFilter);
