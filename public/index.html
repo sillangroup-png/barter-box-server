@@ -114,6 +114,13 @@ tr:hover td{background:#fafcfe}
 td.wrap{white-space:normal;max-width:220px}
 .rowcheck{width:26px}
 
+/* Заголовки таблиц с сортировкой по клику (как в Excel) — см. sortableTh(). Клик по заголовку
+   ставит сортировку "сначала больше" по этой колонке, повторный клик по той же — переключает
+   на "сначала меньше"; клик по другой колонке снова начинает с "сначала больше". */
+th.th-sort{cursor:pointer;user-select:none}
+th.th-sort:hover{color:var(--action)}
+th.th-sort-active{color:var(--action)}
+
 /* Инлайн-редактирование ячеек таблицы "по-экселевски" (клик по значению — не по карандашу).
    .inline-edit — обёртка над отображаемым значением; при клике превращается в input/select. */
 .inline-edit{cursor:text;border-radius:4px;padding:1px 4px;margin:-1px -4px;display:inline-block}
@@ -579,6 +586,16 @@ function parseCsv(text){
   });
 }
 function fmtNum(v){ return (v===null || v===undefined || v==="") ? "—" : Number(v).toLocaleString("ru-RU"); }
+// Заголовок таблицы с сортировкой по клику ("как в Excel"): клик по колонке, у которой ещё нет
+// активной сортировки (или активна сортировка другой колонки), ставит "сначала больше" (key_desc);
+// повторный клик по уже отсортированной колонке переключает на "сначала меньше" (key_asc).
+// currentSort — это то же значение, что лежит в UI.*Filter.sort и используется в <select> сортировки,
+// так что клик по заголовку и выбор в выпадающем списке остаются полностью синхронизированы.
+function sortableTh(label, key, currentSort){
+  const active = currentSort === key+"_desc" || currentSort === key+"_asc";
+  const arrow = !active ? "" : (currentSort === key+"_desc" ? " ▼" : " ▲");
+  return `<th class="th-sort${active?' th-sort-active':''}" data-sort-key="${escapeHtml(key)}">${label}${arrow}</th>`;
+}
 function pubOf(orderId){ return DataManager.state.publications.find(p=>p.orderId===orderId); }
 // Проверяет, попадает ли дата (в формате YYYY-MM-DD или ISO-строка) в диапазон [from, to].
 // Пустая dateStr при заданном диапазоне считается непопаданием (строка просто не пройдёт фильтр).
@@ -2519,6 +2536,8 @@ function tplMicroInfluencers(){
   const sorters = {
     cost_desc: (a,b)=> (b.cost||0)-(a.cost||0),
     cost_asc: (a,b)=> (a.cost||0)-(b.cost||0),
+    productCost_desc: (a,b)=> (b.productCost||0)-(a.productCost||0),
+    productCost_asc: (a,b)=> (a.productCost||0)-(b.productCost||0),
     reach_desc: (a,b)=> microDealFactReach(b)-microDealFactReach(a),
     reach_asc: (a,b)=> microDealFactReach(a)-microDealFactReach(b),
     cpv_desc: (a,b)=> (microDealCpv(b)==null?-Infinity:microDealCpv(b))-(microDealCpv(a)==null?-Infinity:microDealCpv(a)),
@@ -2577,6 +2596,8 @@ function tplMicroInfluencers(){
           <option value="default" ${mf.sort==='default'?'selected':''}>Без сортировки</option>
           <option value="cost_desc" ${mf.sort==='cost_desc'?'selected':''}>Сумма: сначала больше</option>
           <option value="cost_asc" ${mf.sort==='cost_asc'?'selected':''}>Сумма: сначала меньше</option>
+          <option value="productCost_desc" ${mf.sort==='productCost_desc'?'selected':''}>Стоимость товара: сначала больше</option>
+          <option value="productCost_asc" ${mf.sort==='productCost_asc'?'selected':''}>Стоимость товара: сначала меньше</option>
           <option value="reach_desc" ${mf.sort==='reach_desc'?'selected':''}>Факт.охват: сначала больше</option>
           <option value="reach_asc" ${mf.sort==='reach_asc'?'selected':''}>Факт.охват: сначала меньше</option>
           <option value="cpv_desc" ${mf.sort==='cpv_desc'?'selected':''}>CPV: сначала больше</option>
@@ -2608,8 +2629,8 @@ function tplMicroInfluencers(){
           <th class="rowcheck"><input type="checkbox" id="micro-check-all"></th>
           <th>#</th>
           <th>Блогер</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
-          <th>Сумма</th><th>Стоимость товара</th><th>Статус оплаты</th><th>Факт.охват</th><th>CPV</th>
-          <th>Вклад в продажи</th><th>ROMI</th>
+          ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
+          ${sortableTh("Вклад в продажи","sales",mf.sort)}${sortableTh("ROMI","romi",mf.sort)}
           <th>Статус товара</th><th>Статус видео</th><th>Дата выкладки</th><th>Ссылка на Reels</th><th></th>
         </tr></thead>
         <tbody>
@@ -3869,6 +3890,16 @@ function wireDeskTab(){
     microSearch.oninput = debounce(()=>{ UI.microFilter.search = microSearch.value; renderDeskTab(); }, 250);
     document.getElementById("micro-payment-filter").onchange = e=>{ UI.microFilter.paymentStatus = e.target.value; renderDeskTab(); };
     document.getElementById("micro-sort").onchange = e=>{ UI.microFilter.sort = e.target.value; renderDeskTab(); };
+    // Сортировка кликом по заголовку колонки ("как в Excel") — см. sortableTh(). Первый клик по
+    // колонке ставит "сначала больше", повторный клик по той же колонке — переключает на
+    // "сначала меньше"; это тот же UI.microFilter.sort, что и выпадающий список сортировки выше.
+    document.querySelectorAll(".th-sort").forEach(th=>{
+      th.onclick = ()=>{
+        const key = th.dataset.sortKey;
+        UI.microFilter.sort = (UI.microFilter.sort === key+"_desc") ? key+"_asc" : key+"_desc";
+        renderDeskTab();
+      };
+    });
 
     document.querySelectorAll(".micro-dash-month-tab").forEach(btn=>{
       btn.onclick = ()=>{ UI.microDashMonth = btn.dataset.month; renderDeskTab(); };
@@ -4737,6 +4768,77 @@ async function runSelfTests(){
       DataManager.state.microInfluencerDeals = saved;
       UI.microFilter = JSON.parse(savedFilter);
       UI.selectedMicroIds = savedSel;
+    }
+  });
+  TestSuite.test("sortableTh()/tplMicroInfluencers: заголовки Сумма/Стоимость товара/Факт.охват/CPV/Вклад в продажи/ROMI кликабельны и показывают стрелку только у активной сортировки", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9501, blogerName:"Сорт Тест", cost:1000, productCost:200},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      let html = tplMicroInfluencers();
+      ["cost","productCost","reach","cpv","sales","romi"].forEach(key=>{
+        if(!html.includes(`class="th-sort" data-sort-key="${key}"`)) throw new Error(`заголовок с data-sort-key="${key}" должен быть кликабельным (класс th-sort) без активной сортировки: `+key);
+      });
+      if(html.includes("▼") || html.includes("▲")) throw new Error("без выбранной сортировки стрелок быть не должно");
+
+      UI.microFilter = {search:"", sort:"reach_desc", paymentStatus:""};
+      html = tplMicroInfluencers();
+      if(!html.includes('class="th-sort th-sort-active" data-sort-key="reach">Факт.охват ▼')) throw new Error("при sort=reach_desc заголовок 'Факт.охват' должен быть активным со стрелкой вниз (сначала больше)");
+      if(html.includes('data-sort-key="cost">Сумма ▼') || html.includes('data-sort-key="cost">Сумма ▲')) throw new Error("другие колонки не должны показывать стрелку, когда активна сортировка по факт.охвату");
+
+      UI.microFilter = {search:"", sort:"cpv_asc", paymentStatus:""};
+      html = tplMicroInfluencers();
+      if(!html.includes('class="th-sort th-sort-active" data-sort-key="cpv">CPV ▲')) throw new Error("при sort=cpv_asc заголовок 'CPV' должен быть активным со стрелкой вверх (сначала меньше)");
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+      UI.microFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("wireDeskTab(microInfluencers): клик по заголовку колонки сортирует таблицу и переключает направление при повторном клике (как в Excel)", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    const savedTab = UI.tab;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9601, blogerName:"Малый", cost:1000, factReachReels:1000, factReachTT:0},
+        {id:9602, blogerName:"Большой", cost:5000, factReachReels:5000, factReachTT:0},
+        {id:9603, blogerName:"Средний", cost:3000, factReachReels:3000, factReachTT:0},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      UI.tab = "microInfluencers";
+      document.body.innerHTML = '<main id="main"></main><div id="toast"></div>';
+      document.getElementById("main").innerHTML = tplMicroInfluencers();
+      wireDeskTab();
+
+      // Первый клик по "Факт.охват" — сортировка "сначала больше" (Большой → Средний → Малый).
+      const reachTh = document.querySelector('.th-sort[data-sort-key="reach"]');
+      if(!reachTh) throw new Error("заголовок 'Факт.охват' должен быть в DOM после wireDeskTab()");
+      reachTh.onclick();
+      if(UI.microFilter.sort !== "reach_desc") throw new Error("первый клик по заголовку должен ставить сортировку '_desc': "+UI.microFilter.sort);
+      let names = [...document.querySelectorAll("tbody tr")].map(tr=>tr.children[2].textContent);
+      if(!(names[0].includes("Большой") && names[2].includes("Малый"))) throw new Error("после клика (desc) первым должен идти 'Большой', последним — 'Малый': "+JSON.stringify(names));
+
+      // Повторный клик по той же колонке — переключение на "сначала меньше".
+      document.querySelector('.th-sort[data-sort-key="reach"]').onclick();
+      if(UI.microFilter.sort !== "reach_asc") throw new Error("повторный клик по той же колонке должен переключать на '_asc': "+UI.microFilter.sort);
+      names = [...document.querySelectorAll("tbody tr")].map(tr=>tr.children[2].textContent);
+      if(!(names[0].includes("Малый") && names[2].includes("Большой"))) throw new Error("после повторного клика (asc) первым должен идти 'Малый', последним — 'Большой': "+JSON.stringify(names));
+
+      // Третий клик по той же колонке — снова "сначала больше" (двухпозиционный тумблер).
+      document.querySelector('.th-sort[data-sort-key="reach"]').onclick();
+      if(UI.microFilter.sort !== "reach_desc") throw new Error("третий клик по той же колонке должен вернуть '_desc': "+UI.microFilter.sort);
+
+      // Клик по другой колонке ("Сумма") начинает сортировку заново с '_desc'.
+      document.querySelector('.th-sort[data-sort-key="cost"]').onclick();
+      if(UI.microFilter.sort !== "cost_desc") throw new Error("клик по другой колонке должен начинать сортировку с '_desc': "+UI.microFilter.sort);
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+      UI.microFilter = JSON.parse(savedFilter);
+      UI.tab = savedTab;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
   TestSuite.test("Api.bulkDeleteMicroDeals вызывает правильный эндпоинт с телом {ids}", ()=>{
