@@ -1548,6 +1548,7 @@ const UI = {
   microCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
   microSummaryMonth: "", // выбранный месяц в сводке "по блогерам" перед таблицей интеграций (см. tplMicroBloggerSummary)
   microSummaryExpanded: false, // "Сводка по блогерам" свёрнута до 10 строк, пока не нажата "Показать все"
+  dashExpenseCampaign: "", // фильтр проекта в панели "Расходы на бартер" дашборда менеджера: "" = все проекты (с разрезом по каждому)
   inflTopFilter: {from:"", to:""},
   dashPeriod: {from:"", to:""}, // фильтр по периоду на главном дашборде маркетолога (диапазон/неделя/конкретная дата)
   selectedOrderIds: new Set(),
@@ -1749,6 +1750,48 @@ function renderDeskTab(){
 }
 
 /* ---------- Дашборд менеджера ---------- */
+// Панель "Расходы на бартер" с фильтром по проекту: без выбора — общая сумма плюс разрез по
+// каждому проекту таблицей; с выбором конкретного проекта — три карточки только по нему.
+function tplDashExpenseBreakdown(){
+  const {campaigns} = DataManager.state;
+  const selectedId = UI.dashExpenseCampaign;
+  const rows = campaigns.map(c=>({campaign:c, exp:campaignExpense(c)}));
+  const scoped = selectedId ? rows.filter(r=>String(r.campaign.id)===String(selectedId)) : rows;
+  const total = scoped.reduce((s,r)=>s+r.exp.total, 0);
+  const logisticsCost = scoped.reduce((s,r)=>s+r.exp.logisticsCost, 0);
+  const boxesCost = scoped.reduce((s,r)=>s+r.exp.boxesCost, 0);
+  return `
+    <div class="panel">
+      <div class="panel-title">
+        Расходы на бартер
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">по всем проектам с разрезом по каждому, либо по одному выбранному проекту</span>
+      </div>
+      <div class="toolbar" style="margin-bottom:12px">
+        <select id="dash-expense-campaign">
+          <option value="">Все проекты</option>
+          ${campaigns.map(c=>`<option value="${c.id}" ${String(selectedId)===String(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join("")}
+        </select>
+      </div>
+      <div class="grid-kpi" style="margin-bottom:${selectedId?'0':'12px'}">
+        <div class="kpi bad"><div class="num">${fmtNum(total)} ₸</div><div class="lbl">Расходы общие</div></div>
+        <div class="kpi warn"><div class="num">${fmtNum(logisticsCost)} ₸</div><div class="lbl">Расходы на логистику${selectedId?' выбранного проекта':''}</div></div>
+        <div class="kpi"><div class="num">${fmtNum(boxesCost)} ₸</div><div class="lbl">Расходы на товар и упаковку</div></div>
+      </div>
+      ${!selectedId ? `
+      <div class="table-wrap"><table>
+        <thead><tr><th>Проект</th><th>Расходы общие</th><th>Логистика</th><th>Товар и упаковка</th></tr></thead>
+        <tbody>
+          ${rows.map(r=>`<tr>
+            <td><b>${escapeHtml(r.campaign.name)}</b></td>
+            <td>${fmtNum(r.exp.total)} ₸</td>
+            <td>${fmtNum(r.exp.logisticsCost)} ₸</td>
+            <td>${fmtNum(r.exp.boxesCost)} ₸</td>
+          </tr>`).join("") || `<tr><td class="empty" colspan="4">Пока нет ни одного проекта</td></tr>`}
+        </tbody>
+      </table></div>` : ""}
+    </div>
+  `;
+}
 function tplDashboard(){
   const {orders, drivers, campaigns} = DataManager.state;
   const total = orders.length;
@@ -1785,6 +1828,8 @@ function tplDashboard(){
         <div class="kpi bad"><div class="num">${fmtNum(totalExpense())} ₸</div><div class="lbl">Расходы на бартер</div></div>
       </div>
     </div>
+
+    ${tplDashExpenseBreakdown()}
 
     <div class="panel">
       <div class="panel-title">Бартер-проекты</div>
@@ -3452,6 +3497,11 @@ function wireDeskTab(){
     if(dpMonth) dpMonth.onclick = ()=>{ UI.dashPeriod = monthRangeStr(); renderDeskTab(); };
     const dpClear = document.getElementById("dash-period-clear");
     if(dpClear) dpClear.onclick = ()=>{ UI.dashPeriod = {from:"", to:""}; renderDeskTab(); };
+  }
+
+  else if(UI.tab==="dashboard" && UI.role==="manager"){
+    const dashExpenseCampaignSelect = document.getElementById("dash-expense-campaign");
+    if(dashExpenseCampaignSelect) dashExpenseCampaignSelect.onchange = e=>{ UI.dashExpenseCampaign = e.target.value; renderDeskTab(); };
   }
 
   else if(UI.tab==="campaigns"){
@@ -5324,6 +5374,71 @@ async function runSelfTests(){
     } finally {
       DataManager.state.campaigns = savedCampaigns;
       DataManager.state.orders = savedOrders;
+    }
+  });
+  TestSuite.test("tplDashExpenseBreakdown(): без выбора проекта — сумма по всем + разрез по каждому таблицей; с выбором — только по нему", ()=>{
+    const savedCampaigns = DataManager.state.campaigns;
+    const savedOrders = DataManager.state.orders;
+    const savedSel = UI.dashExpenseCampaign;
+    try{
+      DataManager.state.campaigns = [
+        {id:9931, name:"Проект А", costPerBox:1000},
+        {id:9932, name:"Проект Б", costPerBox:500},
+      ];
+      DataManager.state.orders = [
+        {id:9841, campaignId:9931, logisticsCost:1500},
+        {id:9842, campaignId:9931, logisticsCost:1500},
+        {id:9843, campaignId:9932, logisticsCost:1500},
+      ];
+      // Проект А: боксы 1000×2=2000 + логистика 3000 = 5000; Проект Б: боксы 500×1=500 + логистика 1500 = 2000; итого 7000
+      UI.dashExpenseCampaign = "";
+      let html = tplDashExpenseBreakdown();
+      if(!html.includes('id="dash-expense-campaign"')) throw new Error("должен быть select фильтра проекта (dash-expense-campaign)");
+      if(!html.includes("Расходы общие") || !html.includes("Расходы на логистику") || !html.includes("Расходы на товар и упаковку")) throw new Error("должны быть 3 карточки: общие/логистика/товар и упаковка");
+      if(!/7[\s ]000/.test(html)) throw new Error("без выбора должна показываться сумма по всем проектам (7000): "+html);
+      if(!html.includes("Проект А") || !html.includes("Проект Б")) throw new Error("без выбора должна быть таблица с разрезом по каждому проекту");
+
+      UI.dashExpenseCampaign = "9931";
+      html = tplDashExpenseBreakdown();
+      if(!/5[\s ]000/.test(html)) throw new Error("при выборе 'Проект А' общие расходы должны быть 5000: "+html);
+      if(!/3[\s ]000/.test(html)) throw new Error("при выборе 'Проект А' логистика должна быть 3000: "+html);
+      if(!/2[\s ]000/.test(html)) throw new Error("при выборе 'Проект А' товар/упаковка должны быть 2000: "+html);
+      // "Проект Б" всё ещё встречается один раз — как <option> в самом select-фильтре, но не в
+      // таблице разреза (её при выборе конкретного проекта быть не должно, т.е. <table> отсутствует).
+      if(html.includes("<table>")) throw new Error("при выборе конкретного проекта таблица разреза по всем проектам не должна показываться");
+    } finally {
+      DataManager.state.campaigns = savedCampaigns;
+      DataManager.state.orders = savedOrders;
+      UI.dashExpenseCampaign = savedSel;
+    }
+  });
+  TestSuite.test("wireDeskTab(dashboard, менеджер): выбор проекта в фильтре 'Расходы на бартер' обновляет UI.dashExpenseCampaign", ()=>{
+    const savedCampaigns = DataManager.state.campaigns;
+    const savedOrders = DataManager.state.orders;
+    const savedSel = UI.dashExpenseCampaign;
+    const savedTab = UI.tab;
+    const savedRole = UI.role;
+    try{
+      DataManager.state.campaigns = [{id:9951, name:"Проект В", costPerBox:100}];
+      DataManager.state.orders = [];
+      UI.dashExpenseCampaign = "";
+      UI.tab = "dashboard";
+      UI.role = "manager";
+      document.body.innerHTML = '<main id="main"></main><div id="toast"></div>';
+      document.getElementById("main").innerHTML = tplDashboard();
+      wireDeskTab();
+      const select = document.getElementById("dash-expense-campaign");
+      if(!select) throw new Error("select 'dash-expense-campaign' должен быть в DOM после wireDeskTab()");
+      select.value = "9951";
+      select.dispatchEvent(new Event("change"));
+      if(UI.dashExpenseCampaign !== "9951") throw new Error("выбор проекта должен обновить UI.dashExpenseCampaign: "+UI.dashExpenseCampaign);
+    } finally {
+      DataManager.state.campaigns = savedCampaigns;
+      DataManager.state.orders = savedOrders;
+      UI.dashExpenseCampaign = savedSel;
+      UI.tab = savedTab;
+      UI.role = savedRole;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
   TestSuite.test("tplCampaigns отображает номер реализации проекта (для сверки с 1С, не в отчёте)", ()=>{
