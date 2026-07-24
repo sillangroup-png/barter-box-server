@@ -1432,10 +1432,13 @@ function microBloggerSummary(month){
   });
   return Object.values(map).sort((a,b)=> b.totalReach - a.totalReach);
 }
+const MICRO_SUMMARY_COLLAPSE_LIMIT = 10;
 function tplMicroBloggerSummary(){
   const months = microAvailableMonths();
   const month = UI.microSummaryMonth;
   const rows = microBloggerSummary(month);
+  const expanded = UI.microSummaryExpanded || rows.length<=MICRO_SUMMARY_COLLAPSE_LIMIT;
+  const visibleRows = expanded ? rows : rows.slice(0, MICRO_SUMMARY_COLLAPSE_LIMIT);
   return `
     <div class="panel">
       <div class="panel-title">
@@ -1453,7 +1456,7 @@ function tplMicroBloggerSummary(){
           <th>Блогер</th><th>Постов</th><th>Сумма охватов</th><th>Затраты</th><th>Вклад в продажи</th>
         </tr></thead>
         <tbody>
-          ${rows.map(r=>`<tr>
+          ${visibleRows.map(r=>`<tr>
             <td><b>${escapeHtml(r.blogerName)}</b></td>
             <td>${r.dealsCount}</td>
             <td>${fmtNum(r.totalReach)}</td>
@@ -1462,6 +1465,7 @@ function tplMicroBloggerSummary(){
           </tr>`).join("") || `<tr><td class="empty" colspan="5">${month ? "Нет интеграций за выбранный месяц" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
+      ${(!expanded && rows.length>MICRO_SUMMARY_COLLAPSE_LIMIT) ? `<div style="margin-top:10px"><button class="btn btn-sm" id="micro-summary-show-all">Показать все (${rows.length})</button></div>` : ""}
     </div>
   `;
 }
@@ -1533,6 +1537,7 @@ const UI = {
   microDashMonth: "", // выбранный месяц в дашборде "Микро/средние" (см. tplMicroInfluencerBrandDashboard)
   microCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
   microSummaryMonth: "", // выбранный месяц в сводке "по блогерам" перед таблицей интеграций (см. tplMicroBloggerSummary)
+  microSummaryExpanded: false, // "Сводка по блогерам" свёрнута до 10 строк, пока не нажата "Показать все"
   inflTopFilter: {from:"", to:""},
   dashPeriod: {from:"", to:""}, // фильтр по периоду на главном дашборде маркетолога (диапазон/неделя/конкретная дата)
   selectedOrderIds: new Set(),
@@ -3882,7 +3887,9 @@ function wireDeskTab(){
       if(microDashMonthSelect.value){ UI.microDashMonth = microDashMonthSelect.value; renderDeskTab(); }
     };
     const microSummaryMonthSelect = document.getElementById("micro-summary-month");
-    if(microSummaryMonthSelect) microSummaryMonthSelect.onchange = e=>{ UI.microSummaryMonth = e.target.value; renderDeskTab(); };
+    if(microSummaryMonthSelect) microSummaryMonthSelect.onchange = e=>{ UI.microSummaryMonth = e.target.value; UI.microSummaryExpanded = false; renderDeskTab(); };
+    const microSummaryShowAllBtn = document.getElementById("micro-summary-show-all");
+    if(microSummaryShowAllBtn) microSummaryShowAllBtn.onclick = ()=>{ UI.microSummaryExpanded = true; renderDeskTab(); };
     ["micro-cmp-a-from","micro-cmp-a-to","micro-cmp-b-from","micro-cmp-b-to"].forEach(id=>{
       const el = document.getElementById(id);
       if(!el) return;
@@ -4728,6 +4735,50 @@ async function runSelfTests(){
       UI.microFilter = JSON.parse(savedFilter);
       UI.tab = savedTab;
       UI.microSummaryMonth = savedSummaryMonth;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("tplMicroBloggerSummary(): сводка сворачивается до 10 строк с кнопкой 'Показать все', которая разворачивает таблицу", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    const savedTab = UI.tab;
+    const savedSummaryMonth = UI.microSummaryMonth;
+    const savedExpanded = UI.microSummaryExpanded;
+    try{
+      // 12 разных блогеров — должно свернуться до 10 строк с кнопкой "Показать все".
+      DataManager.state.microInfluencerDeals = Array.from({length:12}, (_,i)=>({
+        id: 9800+i, blogerName: "Блогер"+i, cost:1000, productCost:0,
+        factReachReels: 1000+i, factReachTT:0, product:"Товар", publishDate:"2026-07-10",
+      }));
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      UI.microSummaryMonth = "";
+      UI.microSummaryExpanded = false;
+      UI.tab = "microInfluencers";
+
+      let html = tplMicroBloggerSummary();
+      const rowCountCollapsed = (html.match(/<td><b>Блогер/g)||[]).length;
+      if(rowCountCollapsed !== 10) throw new Error("свёрнутая сводка должна показывать 10 строк: "+rowCountCollapsed);
+      if(!html.includes('id="micro-summary-show-all"')) throw new Error("должна быть кнопка 'Показать все' (micro-summary-show-all)");
+      if(!html.includes("Показать все (12)")) throw new Error("кнопка должна показывать полное число строк (12): "+html);
+
+      document.body.innerHTML = '<main id="main"></main><div id="toast"></div>';
+      document.getElementById("main").innerHTML = tplMicroInfluencers();
+      wireDeskTab();
+      const btn = document.getElementById("micro-summary-show-all");
+      if(!btn) throw new Error("кнопка 'Показать все' должна быть в DOM после wireDeskTab()");
+      btn.onclick();
+      if(UI.microSummaryExpanded !== true) throw new Error("клик по 'Показать все' должен установить UI.microSummaryExpanded=true");
+
+      const htmlExpanded = tplMicroBloggerSummary();
+      const rowCountExpanded = (htmlExpanded.match(/<td><b>Блогер/g)||[]).length;
+      if(rowCountExpanded !== 12) throw new Error("после разворота должны показываться все 12 строк: "+rowCountExpanded);
+      if(htmlExpanded.includes('id="micro-summary-show-all"')) throw new Error("кнопка 'Показать все' не должна отображаться после разворота таблицы");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+      UI.microFilter = JSON.parse(savedFilter);
+      UI.tab = savedTab;
+      UI.microSummaryMonth = savedSummaryMonth;
+      UI.microSummaryExpanded = savedExpanded;
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
