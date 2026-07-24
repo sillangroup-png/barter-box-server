@@ -3956,7 +3956,12 @@ function wireDeskTab(){
     document.getElementById("export-micro-csv-btn").onclick = ()=>{
       const header = ["id","блогер","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","дата выкладки","комментарий"];
       const lines = [header.map(csvEscape).join(",")];
-      deals.forEach(d=>{
+      // "deals" — переменная из tplMicroInfluencers() (учитывает поиск/фильтр), а этот обработчик
+      // живёт в wireDeskTab() — отдельной функции, где такой переменной нет. Раньше это падало
+      // с ReferenceError при клике (кнопка визуально работала, но ничего не скачивалось и не было
+      // видимой ошибки). Экспортируем полный список интеграций — так же, как это уже сделано для
+      // "Сводного отчёта" (там тоже выгружаются все заказы, а не только видимые на экране).
+      DataManager.state.microInfluencerDeals.forEach(d=>{
         lines.push([
           d.id, d.blogerName||"", d.phone||"", d.city||"", d.address||"",
           d.instagramAccount||"", d.followers||0, d.er||0, d.avgReach||0,
@@ -4810,6 +4815,46 @@ async function runSelfTests(){
       UI.tab = savedTab;
       // Как и в тесте tplCampaigns выше — восстанавливаем оба статических div'а шапки страницы,
       // а не только #app, иначе toast() сломается после самотестов (см. комментарий там же).
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("wireDeskTab(microInfluencers): клик по 'Экспорт CSV' и 'Шаблон CSV' реально скачивает файл, а не падает молча (регрессия: 'deals' не существовало в области видимости wireDeskTab)", ()=>{
+    // Раньше обработчик export-micro-csv-btn ссылался на переменную "deals" — она существует
+    // только внутри tplMicroInfluencers() (с учётом поиска/фильтра), а не в wireDeskTab(), где
+    // живёт сам обработчик. Клик по кнопке падал с ReferenceError прямо в onclick — без всплытия
+    // ошибки в интерфейс (toast не срабатывает, потому что catch не оборачивал этот код), поэтому
+    // кнопка выглядела рабочей, но ничего не скачивала. Прошлый тест проверял только текст функции
+    // (что там упомянуты нужные поля), но не то, что клик реально выполняется без ошибки — этот
+    // тест кликает по-настоящему и ловит именно такие регрессии.
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    const savedTab = UI.tab;
+    // downloadFile — top-level "function" объявление в этом же скрипте, поэтому подменять её
+    // нужно переприсваиванием самого идентификатора (не window.downloadFile — в тестовой обвязке
+    // скрипт выполняется через eval в строгом режиме, и там это два разных, не связанных места).
+    const origDownload = downloadFile;
+    const calls = [];
+    downloadFile = (filename, content, mime)=>{ calls.push({filename, content, mime}); };
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9991, blogerName:"Экспорт Клик Тест", cost:5000, productCost:0, factReachReels:0, factReachTT:0, product:"Т", paymentStatus:"к оплате", productStatus:"товар заказан", videoStatus:"не опубликовано", publishDate:"2026-07-01"},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      UI.tab = "microInfluencers";
+      document.body.innerHTML = '<main id="main"></main><div id="toast"></div>';
+      document.getElementById("main").innerHTML = tplMicroInfluencers();
+      wireDeskTab();
+      // Вызываем обработчики напрямую (а не .click()), чтобы исключения (как было раньше с
+      // ReferenceError на "deals") долетали до теста, а не тихо глотались диспетчером DOM-событий.
+      document.getElementById("export-micro-csv-btn").onclick();
+      document.getElementById("template-micro-csv-btn").onclick();
+      if(calls.length !== 2) throw new Error("оба клика должны вызвать downloadFile без ошибок, получили вызовов: "+calls.length);
+      if(!calls[0].content.includes("Экспорт Клик Тест")) throw new Error("экспорт CSV должен содержать реальные данные из DataManager.state.microInfluencerDeals: "+calls[0].content.slice(0,200));
+    } finally {
+      downloadFile = origDownload;
+      DataManager.state.microInfluencerDeals = savedDeals;
+      UI.microFilter = JSON.parse(savedFilter);
+      UI.tab = savedTab;
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
