@@ -4194,8 +4194,11 @@ function renderDriverShell(){
 
 function renderDriverList(){
   const list = document.getElementById("driver-list");
-  const own = driverOrders().slice().sort((a,b)=>{
-    const rank = s => s==="delivered" ? 2 : ((STATUS_META[s]||{}).group==="problem" ? 1 : 0);
+  const all = driverOrders();
+  // Доставленные заказы убираются из списка сразу после подтверждения — водителю
+  // незачем листать уже закрытые доставки, актуальны только те, что ещё в работе.
+  const own = all.filter(o=>o.status!=="delivered").slice().sort((a,b)=>{
+    const rank = s => (STATUS_META[s]||{}).group==="problem" ? 1 : 0;
     return rank(a.status)-rank(b.status);
   });
   list.innerHTML = own.map(o=>`
@@ -4213,7 +4216,7 @@ function renderDriverList(){
         <button class="icon-btn open-order-btn" data-id="${o.id}">Открыть</button>
       </div>
     </div>
-  `).join("") || `<div class="empty">Вам пока не назначено ни одной доставки</div>`;
+  `).join("") || (all.length ? `<div class="empty">Все доставки выполнены 🎉</div>` : `<div class="empty">Вам пока не назначено ни одной доставки</div>`);
 
   document.querySelectorAll(".open-order-btn").forEach(btn=>{
     btn.onclick = ()=>{ UI.openOrderId = parseInt(btn.dataset.id,10); UI.driverAwaiting=null; UI.driverReasonCode=null; renderDriverOrderModal(); };
@@ -4426,6 +4429,35 @@ async function runSelfTests(){
     const own = driverOrders();
     if(own.some(o=>o.driverCode!==UI.driverCode)) throw new Error("leak of foreign orders");
     UI.driverCode = before;
+  });
+  TestSuite.test("renderDriverList(): доставленный заказ пропадает из списка водителя сразу после подтверждения", ()=>{
+    const savedOrders = DataManager.state.orders;
+    const savedCode = UI.driverCode;
+    const div = document.createElement("div");
+    div.id = "driver-list";
+    document.body.appendChild(div);
+    try{
+      UI.driverCode = "DRV-TEST";
+      DataManager.state.orders = [
+        {id:9801, driverCode:"DRV-TEST", blogger:"Ещё в пути", city:"Алматы", address:"ул. Тест 1", phone:"+77001112233", box:"Бокс", status:"assigned"},
+        {id:9802, driverCode:"DRV-TEST", blogger:"Уже доставлено", city:"Алматы", address:"ул. Тест 2", phone:"+77001112233", box:"Бокс", status:"delivered"},
+      ];
+      renderDriverList();
+      const html = document.getElementById("driver-list").innerHTML;
+      if(!html.includes("Ещё в пути")) throw new Error("недоставленный заказ должен остаться в списке");
+      if(html.includes("Уже доставлено")) throw new Error("доставленный заказ должен исчезать из списка водителя");
+      // если ВСЕ заказы доставлены — список пуст, но сообщение должно отличаться от 'нет назначенных'
+      DataManager.state.orders = [
+        {id:9803, driverCode:"DRV-TEST", blogger:"Финал", city:"Алматы", address:"ул. Тест 3", phone:"+77001112233", box:"Бокс", status:"delivered"},
+      ];
+      renderDriverList();
+      const html2 = document.getElementById("driver-list").innerHTML;
+      if(!html2.includes("Все доставки выполнены")) throw new Error("когда все доставки закрыты, должно быть отдельное сообщение об этом: "+html2);
+    } finally {
+      DataManager.state.orders = savedOrders;
+      UI.driverCode = savedCode;
+      div.remove();
+    }
   });
   TestSuite.test("computeInfluencerRomi делит прирост между активными интеграциями и обнуляет остаточный эффект", ()=>{
     const savedDeals = DataManager.state.influencerDeals;
