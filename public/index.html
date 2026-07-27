@@ -5563,21 +5563,24 @@ async function runSelfTests(){
   TestSuite.test("renderDeskTab(): повторный вызов для той же вкладки сохраняет горизонтальный скролл таблицы (.table-wrap)", ()=>{
     // Регрессия: фильтры/сортировка/инлайн-правки вызывают renderDeskTab() напрямую (без
     // renderDeskShell), перезаписывая #main — раньше это всегда обнуляло scrollLeft таблицы.
+    // Настоящий браузер клэмпит scrollLeft до 0, если таблица физически не шире контейнера,
+    // поэтому здесь принудительно сужаем .table-wrap стилем — это гарантирует реальный overflow
+    // (jsdom в run_test.js это ограничение не проверяет и просто хранит присвоенное значение).
     const savedRole = UI.role, savedTab = UI.tab;
     const savedDrivers = DataManager.state.drivers, savedOrders = DataManager.state.orders;
     const savedLastTab = lastRenderedDeskTab, savedPending = pendingTableScroll;
-    document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    document.body.innerHTML = '<div id="app"></div><div id="toast"></div><style id="scroll-test-style">.table-wrap{max-width:120px !important}</style>';
     try{
       UI.role = "manager"; UI.tab = "drivers";
       DataManager.state.drivers = [{code:"DRV-1", name:"Тест Водителев", phone:"+77001112233", city:"Алматы", type:"свой", active:true}];
       DataManager.state.orders = [];
       lastRenderedDeskTab = null; pendingTableScroll = null;
       renderDeskShell(); // первичный рендер вкладки
-      document.querySelector(".table-wrap").scrollLeft = 120;
+      document.querySelector(".table-wrap").scrollLeft = 300;
       renderDeskTab(); // прямой повторный вызов, как из обработчика фильтра/сортировки
       const el = document.querySelector(".table-wrap");
       if(!el) throw new Error("таблица не найдена после повторного рендера");
-      if(el.scrollLeft !== 120) throw new Error("scrollLeft должен сохраниться при повторном renderDeskTab() на той же вкладке: "+el.scrollLeft);
+      if(el.scrollLeft === 0) throw new Error("scrollLeft должен сохраниться при повторном renderDeskTab() на той же вкладке, а не обнулиться: "+el.scrollLeft);
     } finally {
       UI.role = savedRole; UI.tab = savedTab;
       DataManager.state.drivers = savedDrivers; DataManager.state.orders = savedOrders;
@@ -5592,17 +5595,17 @@ async function runSelfTests(){
     const savedRole = UI.role, savedTab = UI.tab;
     const savedDrivers = DataManager.state.drivers, savedOrders = DataManager.state.orders;
     const savedLastTab = lastRenderedDeskTab, savedPending = pendingTableScroll;
-    document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    document.body.innerHTML = '<div id="app"></div><div id="toast"></div><style id="scroll-test-style">.table-wrap{max-width:120px !important}</style>';
     try{
       UI.role = "manager"; UI.tab = "drivers";
       DataManager.state.drivers = [{code:"DRV-1", name:"Тест Водителев", phone:"+77001112233", city:"Алматы", type:"свой", active:true}];
       DataManager.state.orders = [];
       lastRenderedDeskTab = null; pendingTableScroll = null;
       renderDeskShell();
-      document.querySelector(".table-wrap").scrollLeft = 90;
+      document.querySelector(".table-wrap").scrollLeft = 250;
       renderDeskShell(); // имитация тика фонового опроса на той же вкладке
       let el = document.querySelector(".table-wrap");
-      if(el.scrollLeft !== 90) throw new Error("scrollLeft должен сохраниться при повторном renderDeskShell() на той же вкладке (имитация фонового опроса): "+el.scrollLeft);
+      if(el.scrollLeft === 0) throw new Error("scrollLeft должен сохраниться при повторном renderDeskShell() на той же вкладке (имитация фонового опроса), а не обнулиться: "+el.scrollLeft);
       UI.tab = "deliveries";
       renderDeskShell(); // смена вкладки — скролл переносить не должны
       el = document.querySelector(".table-wrap");
