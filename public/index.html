@@ -1701,12 +1701,23 @@ function roleLabel(){
   return UI.readOnly ? base + ' <span style="color:var(--warn);font-weight:600">· только просмотр</span>' : base;
 }
 
+// Скролл таблиц (.table-wrap) между перерисовками — см. renderDeskTab() ниже: без этого
+// каждые 12 сек фоновый опрос (startPolling) стирает #main целиком и обнуляет прокрутку,
+// из-за чего на мобильной версии таблица "отскакивает" обратно влево во время просмотра.
+let lastRenderedDeskTab = null;
+let pendingTableScroll = null;
 function renderDeskShell(){
   const app = document.getElementById("app");
   const tabs = tabsForRole();
   const orders = DataManager.state.orders;
   const problemCount = orders.filter(o=> (STATUS_META[o.status]||{}).group==="problem").length;
   const gapCount = marketingSummary().gap.length;
+  const oldMain = document.getElementById("main");
+  // renderDeskShell() полностью пересоздаёт #main через innerHTML, поэтому скролл нужно снять
+  // именно здесь — до перезаписи, пока элементы ещё старые (внутри renderDeskTab() main уже пуст).
+  pendingTableScroll = (oldMain && lastRenderedDeskTab===UI.tab)
+    ? Array.from(oldMain.querySelectorAll(".table-wrap")).map(el=>el.scrollLeft)
+    : null;
   app.innerHTML = `
     <div class="topbar">
       <div class="logo"><span class="mark">BB</span> Barter Box</div>
@@ -1736,6 +1747,15 @@ function renderDeskShell(){
 
 function renderDeskTab(){
   const main = document.getElementById("main");
+  // Если нас вызвал renderDeskShell() — он уже снял скролл со старого #main до его пересоздания
+  // (pendingTableScroll). Если renderDeskTab() вызван напрямую (фильтры/сортировка/инлайн-правки —
+  // такие обработчики не трогают renderDeskShell, #main остаётся тем же элементом), снимаем скролл
+  // прямо сейчас, пока main ещё хранит старую разметку. При смене вкладки скролл не переносим.
+  const scrollPositions = pendingTableScroll !== null
+    ? pendingTableScroll
+    : (lastRenderedDeskTab===UI.tab ? Array.from(main.querySelectorAll(".table-wrap")).map(el=>el.scrollLeft) : []);
+  pendingTableScroll = null;
+  lastRenderedDeskTab = UI.tab;
   if(UI.tab==="dashboard") main.innerHTML = UI.role==="marketer" ? tplMarketerDashboard() : tplDashboard();
   else if(UI.tab==="campaigns") main.innerHTML = tplCampaigns();
   else if(UI.tab==="deliveries") main.innerHTML = tplDeliveries();
@@ -1747,6 +1767,9 @@ function renderDeskTab(){
   else if(UI.tab==="microInfluencers") main.innerHTML = tplMicroInfluencers();
   else if(UI.tab==="report") main.innerHTML = tplReport();
   wireDeskTab();
+  if(scrollPositions.length){
+    main.querySelectorAll(".table-wrap").forEach((el,i)=>{ if(scrollPositions[i]) el.scrollLeft = scrollPositions[i]; });
+  }
 }
 
 /* ---------- Дашборд менеджера ---------- */
@@ -5534,6 +5557,60 @@ async function runSelfTests(){
       closeModal();
     } finally {
       DataManager.state.campaigns = savedCampaigns;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("renderDeskTab(): повторный вызов для той же вкладки сохраняет горизонтальный скролл таблицы (.table-wrap)", ()=>{
+    // Регрессия: фильтры/сортировка/инлайн-правки вызывают renderDeskTab() напрямую (без
+    // renderDeskShell), перезаписывая #main — раньше это всегда обнуляло scrollLeft таблицы.
+    const savedRole = UI.role, savedTab = UI.tab;
+    const savedDrivers = DataManager.state.drivers, savedOrders = DataManager.state.orders;
+    const savedLastTab = lastRenderedDeskTab, savedPending = pendingTableScroll;
+    document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    try{
+      UI.role = "manager"; UI.tab = "drivers";
+      DataManager.state.drivers = [{code:"DRV-1", name:"Тест Водителев", phone:"+77001112233", city:"Алматы", type:"свой", active:true}];
+      DataManager.state.orders = [];
+      lastRenderedDeskTab = null; pendingTableScroll = null;
+      renderDeskShell(); // первичный рендер вкладки
+      document.querySelector(".table-wrap").scrollLeft = 120;
+      renderDeskTab(); // прямой повторный вызов, как из обработчика фильтра/сортировки
+      const el = document.querySelector(".table-wrap");
+      if(!el) throw new Error("таблица не найдена после повторного рендера");
+      if(el.scrollLeft !== 120) throw new Error("scrollLeft должен сохраниться при повторном renderDeskTab() на той же вкладке: "+el.scrollLeft);
+    } finally {
+      UI.role = savedRole; UI.tab = savedTab;
+      DataManager.state.drivers = savedDrivers; DataManager.state.orders = savedOrders;
+      lastRenderedDeskTab = savedLastTab; pendingTableScroll = savedPending;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("renderDeskShell(): фоновый опрос (полный ре-рендер) не сбрасывает скролл таблицы на той же вкладке, но сбрасывает при смене вкладки", ()=>{
+    // Именно это чинит 'отскок' таблицы вправо на мобильной версии: startPolling() вызывает
+    // render()→renderDeskShell() каждые 12 сек, а он раньше пересоздавал #main через innerHTML,
+    // теряя scrollLeft ещё до того, как renderDeskTab() успевал его подхватить.
+    const savedRole = UI.role, savedTab = UI.tab;
+    const savedDrivers = DataManager.state.drivers, savedOrders = DataManager.state.orders;
+    const savedLastTab = lastRenderedDeskTab, savedPending = pendingTableScroll;
+    document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    try{
+      UI.role = "manager"; UI.tab = "drivers";
+      DataManager.state.drivers = [{code:"DRV-1", name:"Тест Водителев", phone:"+77001112233", city:"Алматы", type:"свой", active:true}];
+      DataManager.state.orders = [];
+      lastRenderedDeskTab = null; pendingTableScroll = null;
+      renderDeskShell();
+      document.querySelector(".table-wrap").scrollLeft = 90;
+      renderDeskShell(); // имитация тика фонового опроса на той же вкладке
+      let el = document.querySelector(".table-wrap");
+      if(el.scrollLeft !== 90) throw new Error("scrollLeft должен сохраниться при повторном renderDeskShell() на той же вкладке (имитация фонового опроса): "+el.scrollLeft);
+      UI.tab = "deliveries";
+      renderDeskShell(); // смена вкладки — скролл переносить не должны
+      el = document.querySelector(".table-wrap");
+      if(el && el.scrollLeft !== 0) throw new Error("при смене вкладки scrollLeft новой таблицы должен начинаться с 0, а не наследоваться от прошлой вкладки: "+el.scrollLeft);
+    } finally {
+      UI.role = savedRole; UI.tab = savedTab;
+      DataManager.state.drivers = savedDrivers; DataManager.state.orders = savedOrders;
+      lastRenderedDeskTab = savedLastTab; pendingTableScroll = savedPending;
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
