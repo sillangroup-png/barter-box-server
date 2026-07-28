@@ -3134,7 +3134,6 @@ function modalAddPublication(orderId){
       <div class="field"><label>Платформа</label><select id="m-platform">${PLATFORMS.map(p=>`<option>${p}</option>`).join("")}</select></div>
       <div class="field"><label>Ссылка (необязательно для сторис)</label><input id="m-link" placeholder="https://instagram.com/..."></div>
       <div class="field"><label>Дата публикации</label><input id="m-date" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
-      <div class="field"><label>Категория блогера</label><select id="m-tier">${BLOGGER_TIERS.map(t=>`<option>${t}</option>`).join("")}</select></div>
       <div class="field"><label>Промокод</label><input id="m-promo" placeholder="Например NAME15"></div>
       <div class="field"><label>Подписчики блогера</label><input id="m-followers" type="number" value="${o.followers||0}"></div>
     </div>
@@ -3157,7 +3156,6 @@ function modalAddPublication(orderId){
         await Api.createPublication({
           orderId, platform: document.getElementById("m-platform").value,
           link, publishedAt: document.getElementById("m-date").value,
-          tier: document.getElementById("m-tier").value,
           promoCode: document.getElementById("m-promo").value.trim(),
         });
         if(followers !== (o.followers||0)) await Api.updateOrder(orderId, {followers});
@@ -3197,7 +3195,6 @@ function modalBulkMarkPosted(orderIds){
     <div class="form-row">
       <div class="field"><label>Платформа</label><select id="m-platform">${PLATFORMS.map(p=>`<option>${p}</option>`).join("")}</select></div>
       <div class="field"><label>Дата публикации</label><input id="m-date" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
-      <div class="field"><label>Категория блогера</label><select id="m-tier">${BLOGGER_TIERS.map(t=>`<option>${t}</option>`).join("")}</select></div>
     </div>
     <div class="login-hint" style="margin-top:6px">
       Эти значения применятся ко всем выбранным. Ссылку и точные охваты/клики/продажи для отдельных публикаций
@@ -3213,11 +3210,10 @@ function modalBulkMarkPosted(orderIds){
     const btn = document.getElementById("m-save");
     const platform = document.getElementById("m-platform").value;
     const publishedAt = document.getElementById("m-date").value;
-    const tier = document.getElementById("m-tier").value;
     try{
       await withBusy(btn, async ()=>{
         for(const o of eligible){
-          await Api.createPublication({ orderId: o.id, platform, link: "", publishedAt, tier, promoCode: "" });
+          await Api.createPublication({ orderId: o.id, platform, link: "", publishedAt, promoCode: "" });
         }
       });
       closeModal();
