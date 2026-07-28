@@ -3574,7 +3574,7 @@ function wireDeskTab(){
     const buildRouteBtn = document.getElementById("build-route-btn");
     if(buildRouteBtn) buildRouteBtn.onclick = ()=> modalBuildRoute(UI.filters.driver);
     const fSearch = document.getElementById("f-search");
-    fSearch.oninput = debounce(()=>{ UI.filters.search = fSearch.value; renderDeskTab(); }, 250);
+    wireSearchOnEnter(fSearch, v=>{ UI.filters.search = v; renderDeskTab(); });
     document.getElementById("f-campaign").onchange = e=>{ UI.filters.campaign = e.target.value; renderDeskTab(); };
     document.getElementById("f-driver").onchange = e=>{ UI.filters.driver = e.target.value; renderDeskTab(); };
     document.getElementById("f-city").onchange = e=>{ UI.filters.city = e.target.value; renderDeskTab(); };
@@ -3749,7 +3749,7 @@ function wireDeskTab(){
 
   else if(UI.tab==="publications"){
     const fpSearch = document.getElementById("fp-search");
-    fpSearch.oninput = debounce(()=>{ UI.filters.search = fpSearch.value; renderDeskTab(); }, 250);
+    wireSearchOnEnter(fpSearch, v=>{ UI.filters.search = v; renderDeskTab(); });
     document.getElementById("fp-campaign").onchange = e=>{ UI.filters.campaign = e.target.value; renderDeskTab(); };
     document.getElementById("fp-date-from").onchange = e=>{ UI.filters.dateFrom = e.target.value; renderDeskTab(); };
     document.getElementById("fp-date-to").onchange = e=>{ UI.filters.dateTo = e.target.value; renderDeskTab(); };
@@ -3820,7 +3820,7 @@ function wireDeskTab(){
     document.getElementById("new-sale-btn").onclick = ()=> modalSale();
 
     const inflSearch = document.getElementById("infl-search");
-    inflSearch.oninput = debounce(()=>{ UI.inflFilter.search = inflSearch.value; renderDeskTab(); }, 250);
+    wireSearchOnEnter(inflSearch, v=>{ UI.inflFilter.search = v; renderDeskTab(); });
     document.getElementById("infl-sort").onchange = e=>{ UI.inflFilter.sort = e.target.value; renderDeskTab(); };
     document.getElementById("infl-month").onchange = e=>{ UI.inflFilter.month = e.target.value; renderDeskTab(); };
     document.querySelectorAll(".infl-dash-month-tab").forEach(btn=>{
@@ -3946,7 +3946,7 @@ function wireDeskTab(){
     document.getElementById("new-micro-btn").onclick = ()=> modalMicroDeal(null);
 
     const microSearch = document.getElementById("micro-search");
-    microSearch.oninput = debounce(()=>{ UI.microFilter.search = microSearch.value; renderDeskTab(); }, 250);
+    wireSearchOnEnter(microSearch, v=>{ UI.microFilter.search = v; renderDeskTab(); });
     document.getElementById("micro-payment-filter").onchange = e=>{ UI.microFilter.paymentStatus = e.target.value; renderDeskTab(); };
     document.getElementById("micro-sort").onchange = e=>{ UI.microFilter.sort = e.target.value; renderDeskTab(); };
     // Сортировка кликом по заголовку колонки ("как в Excel") — см. sortableTh(). Первый клик по
@@ -4092,7 +4092,7 @@ function wireDeskTab(){
 
   else if(UI.tab==="report"){
     const frSearch = document.getElementById("fr-search");
-    frSearch.oninput = debounce(()=>{ UI.filters.search = frSearch.value; renderDeskTab(); }, 250);
+    wireSearchOnEnter(frSearch, v=>{ UI.filters.search = v; renderDeskTab(); });
     document.getElementById("fr-campaign").onchange = e=>{ UI.filters.campaign = e.target.value; renderDeskTab(); };
     document.getElementById("fr-date-from").onchange = e=>{ UI.filters.dateFrom = e.target.value; renderDeskTab(); };
     document.getElementById("fr-date-to").onchange = e=>{ UI.filters.dateTo = e.target.value; renderDeskTab(); };
@@ -4165,6 +4165,16 @@ function wireDeskTab(){
 function debounce(fn, ms){
   let t;
   return (...args)=>{ clearTimeout(t); t = setTimeout(()=>fn(...args), ms); };
+}
+// Поиск применяется по Enter, а не при каждом нажатии клавиши: раньше oninput+debounce
+// перерисовывал всю вкладку после каждого символа (renderDeskTab() пересобирает #main целиком),
+// из-за чего само поле поиска пересоздавалось и теряло фокус — приходилось кликать в него заново
+// после каждой буквы. Теперь фильтр применяется только по Enter, ввод текста не трогает DOM.
+function wireSearchOnEnter(input, onCommit){
+  if(!input) return;
+  input.onkeydown = e=>{
+    if(e.key==="Enter"){ e.preventDefault(); onCommit(input.value); }
+  };
 }
 
 /* =========================================================================
@@ -5610,6 +5620,45 @@ async function runSelfTests(){
       UI.role = savedRole; UI.tab = savedTab;
       DataManager.state.drivers = savedDrivers; DataManager.state.orders = savedOrders;
       lastRenderedDeskTab = savedLastTab; pendingTableScroll = savedPending;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("wireSearchOnEnter(): callback срабатывает только по Enter, не при обычном вводе символа", ()=>{
+    // Регрессия: раньше поиск был oninput+debounce и перерисовывал всю вкладку после каждого
+    // символа (renderDeskTab() пересобирает #main целиком), из-за чего само поле поиска
+    // пересоздавалось и теряло фокус — пользователю приходилось кликать в поле заново после
+    // каждой буквы. Теперь фильтр применяется только по Enter.
+    const input = document.createElement("input");
+    let calls = [];
+    wireSearchOnEnter(input, v=>calls.push(v));
+    input.value = "а";
+    input.dispatchEvent(new KeyboardEvent("keydown", {key:"a"}));
+    if(calls.length) throw new Error("обычный символ не должен вызывать onCommit: "+JSON.stringify(calls));
+    input.value = "блогер";
+    input.dispatchEvent(new KeyboardEvent("keydown", {key:"Enter"}));
+    if(calls.length!==1 || calls[0]!=="блогер") throw new Error("Enter должен вызвать onCommit с текущим значением поля: "+JSON.stringify(calls));
+  });
+  TestSuite.test("wireDeskTab(deliveries): поиск в поле '#f-search' применяется по Enter, а не при каждом нажатии клавиши", ()=>{
+    const savedTab = UI.tab, savedRole = UI.role;
+    const savedFilters = JSON.stringify(UI.filters);
+    const savedOrders = DataManager.state.orders, savedDrivers = DataManager.state.drivers, savedCampaigns = DataManager.state.campaigns;
+    document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    try{
+      UI.role = "manager"; UI.tab = "deliveries";
+      UI.filters = {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""};
+      DataManager.state.orders = []; DataManager.state.drivers = []; DataManager.state.campaigns = [];
+      renderDeskShell();
+      const fSearch = document.getElementById("f-search");
+      if(!fSearch) throw new Error("поле поиска #f-search не найдено на вкладке 'Доставки'");
+      fSearch.value = "Аружан";
+      fSearch.dispatchEvent(new KeyboardEvent("keydown", {key:"n"}));
+      if(UI.filters.search) throw new Error("обычный ввод не должен сразу применять фильтр (UI.filters.search должен остаться пустым): "+UI.filters.search);
+      fSearch.dispatchEvent(new KeyboardEvent("keydown", {key:"Enter"}));
+      if(UI.filters.search!=="Аружан") throw new Error("после Enter UI.filters.search должен обновиться значением поля: "+UI.filters.search);
+    } finally {
+      UI.tab = savedTab; UI.role = savedRole;
+      UI.filters = JSON.parse(savedFilters);
+      DataManager.state.orders = savedOrders; DataManager.state.drivers = savedDrivers; DataManager.state.campaigns = savedCampaigns;
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
