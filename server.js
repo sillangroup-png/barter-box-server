@@ -554,9 +554,22 @@ app.post("/api/publications", requireAuth, (req,res)=>{
   const pub = {
     id: nextId("publications"), orderId: b.orderId, platform: b.platform||PLATFORMS[0],
     link: b.link||"", publishedAt: b.publishedAt||"", tier: b.tier||BLOGGER_TIERS[0],
-    promoCode: b.promoCode||"", measurements: [],
+    promoCode: b.promoCode||"", paidAmount: parseInt(b.paidAmount,10)||0, measurements: [],
   };
   state.publications.push(pub);
+  persist();
+  res.json(pub);
+});
+// Частичное обновление публикации — используется инлайн-редактированием в "Сводном отчёте"
+// (платформа/ссылка/сумма оплаты за интеграцию), см. inlineEditSpan/wireInlineEdit на клиенте.
+app.patch("/api/publications/:id", requireAuth, (req,res)=>{
+  const pub = state.publications.find(p=>p.id===+req.params.id);
+  if(!pub) return res.status(404).json({error:"publication not found"});
+  const b = req.body || {};
+  if(b.platform!==undefined) pub.platform = b.platform;
+  if(b.link!==undefined) pub.link = b.link;
+  if(b.publishedAt!==undefined) pub.publishedAt = b.publishedAt;
+  if(b.paidAmount!==undefined) pub.paidAmount = parseInt(b.paidAmount,10)||0;
   persist();
   res.json(pub);
 });
