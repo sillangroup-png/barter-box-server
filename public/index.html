@@ -94,6 +94,10 @@ main{flex:1;padding:18px;max-width:1400px;width:100%;margin:0 auto}
 .kpi.ok .num{color:var(--ok)}
 .kpi.warn .num{color:var(--warn)}
 .kpi.bad .num{color:var(--bad)}
+/* Кликабельные KPI-карточки дашборда менеджера: клик по числу пробрасывает на вкладку
+   "Отправка блогерам" с уже применённым фильтром (см. wireDeskTab, tab==="dashboard" && role==="manager") */
+.kpi-clickable{cursor:pointer;transition:box-shadow .15s,border-color .15s}
+.kpi-clickable:hover{box-shadow:0 2px 8px rgba(0,0,0,.08);border-color:var(--brand,#3b82f6)}
 
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
 .toolbar input[type=text],.toolbar input[type=search],.toolbar select{
@@ -1832,11 +1836,11 @@ function tplDashboard(){
 
   return `
     <div class="grid-kpi">
-      <div class="kpi"><div class="num">${total}</div><div class="lbl">Всего доставок</div></div>
-      <div class="kpi ok"><div class="num">${delivered}</div><div class="lbl">Доставлено</div></div>
-      <div class="kpi warn"><div class="num">${problem}</div><div class="lbl">Требуют реакции</div></div>
-      <div class="kpi"><div class="num">${unassigned}</div><div class="lbl">Не назначены</div></div>
-      <div class="kpi bad"><div class="num">${noPhoto}</div><div class="lbl">Доставлено без фото</div></div>
+      <div class="kpi kpi-clickable" id="kpi-total" title="Показать все доставки"><div class="num">${total}</div><div class="lbl">Всего доставок</div></div>
+      <div class="kpi ok kpi-clickable" id="kpi-delivered" title="Показать доставленные"><div class="num">${delivered}</div><div class="lbl">Доставлено</div></div>
+      <div class="kpi warn kpi-clickable" id="kpi-problem" title="Показать доставки, которые требуют реакции"><div class="num">${problem}</div><div class="lbl">Требуют реакции</div></div>
+      <div class="kpi kpi-clickable" id="kpi-unassigned" title="Показать доставки без водителя"><div class="num">${unassigned}</div><div class="lbl">Не назначены</div></div>
+      <div class="kpi bad kpi-clickable" id="kpi-nophoto" title="Показать доставленные без фото"><div class="num">${noPhoto}</div><div class="lbl">Доставлено без фото</div></div>
     </div>
 
     <div class="panel">
@@ -2033,7 +2037,8 @@ function tplDeliveries(){
     if(f.city && o.city!==f.city) return false;
     if(f.status){
       if(f.status==="__problem__" && (STATUS_META[o.status]||{}).group!=="problem") return false;
-      else if(f.status!=="__problem__" && o.status!==f.status) return false;
+      else if(f.status==="__no_photo__" && !(o.status==="delivered" && !o.photo)) return false;
+      else if(f.status!=="__problem__" && f.status!=="__no_photo__" && o.status!==f.status) return false;
     }
     if(f.search){
       const s = f.search.toLowerCase();
@@ -2073,6 +2078,7 @@ function tplDeliveries(){
         <select id="f-status">
           <option value="">Все статусы</option>
           <option value="__problem__" ${f.status==='__problem__'?'selected':''}>⚠️ Требует реакции</option>
+          <option value="__no_photo__" ${f.status==='__no_photo__'?'selected':''}>📷 Доставлено без фото</option>
           ${Object.entries(STATUS_META).map(([k,m])=>`<option value="${k}" ${f.status===k?'selected':''}>${escapeHtml(m.label)}</option>`).join("")}
         </select>
         <span style="align-self:center;color:var(--ink-mute);font-size:12px">дата с</span>
@@ -3523,6 +3529,25 @@ function wireDeskTab(){
   else if(UI.tab==="dashboard" && UI.role==="manager"){
     const dashExpenseCampaignSelect = document.getElementById("dash-expense-campaign");
     if(dashExpenseCampaignSelect) dashExpenseCampaignSelect.onchange = e=>{ UI.dashExpenseCampaign = e.target.value; renderDeskTab(); };
+    // Клик по KPI-карточке дашборда пробрасывает на вкладку "Отправка блогерам" с уже
+    // применённым фильтром — чтобы сразу увидеть конкретный список, а не просто цифру.
+    // Остальные фильтры (проект/город/поиск/даты) сбрасываются, чтобы список точно
+    // соответствовал тому, что посчитано в карточке.
+    const goToDeliveries = patch=>{
+      UI.filters = Object.assign({campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""}, patch);
+      UI.tab = "deliveries";
+      render();
+    };
+    const kpiTotal = document.getElementById("kpi-total");
+    if(kpiTotal) kpiTotal.onclick = ()=> goToDeliveries({});
+    const kpiDelivered = document.getElementById("kpi-delivered");
+    if(kpiDelivered) kpiDelivered.onclick = ()=> goToDeliveries({status:"delivered"});
+    const kpiProblem = document.getElementById("kpi-problem");
+    if(kpiProblem) kpiProblem.onclick = ()=> goToDeliveries({status:"__problem__"});
+    const kpiUnassigned = document.getElementById("kpi-unassigned");
+    if(kpiUnassigned) kpiUnassigned.onclick = ()=> goToDeliveries({driver:"__none__"});
+    const kpiNoPhoto = document.getElementById("kpi-nophoto");
+    if(kpiNoPhoto) kpiNoPhoto.onclick = ()=> goToDeliveries({status:"__no_photo__"});
   }
 
   else if(UI.tab==="campaigns"){
@@ -5521,6 +5546,68 @@ async function runSelfTests(){
       UI.dashExpenseCampaign = savedSel;
       UI.tab = savedTab;
       UI.role = savedRole;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("tplDeliveries: фильтр '__no_photo__' показывает только доставленные заказы без фото", ()=>{
+    const savedOrders = DataManager.state.orders, savedDrivers = DataManager.state.drivers, savedCampaigns = DataManager.state.campaigns;
+    const savedFilters = JSON.stringify(UI.filters);
+    try{
+      DataManager.state.orders = [
+        {id:9871, blogger:"С фото", status:"delivered", photo:"x.jpg", address:"", phone:"", city:"Алматы", box:"Бокс"},
+        {id:9872, blogger:"Без фото", status:"delivered", photo:null, address:"", phone:"", city:"Алматы", box:"Бокс"},
+        {id:9873, blogger:"Не доставлен", status:"assigned", photo:null, address:"", phone:"", city:"Алматы", box:"Бокс"},
+      ];
+      DataManager.state.drivers = []; DataManager.state.campaigns = [];
+      UI.filters = {campaign:"", driver:"", city:"", status:"__no_photo__", search:"", dateFrom:"", dateTo:""};
+      const html = tplDeliveries();
+      if(!html.includes("Без фото")) throw new Error("доставленный без фото должен остаться в списке");
+      if(html.includes("С фото")) throw new Error("доставленный с фото не должен попадать под фильтр 'без фото'");
+      if(html.includes("Не доставлен")) throw new Error("недоставленный заказ не должен попадать под фильтр 'доставлено без фото'");
+    } finally {
+      DataManager.state.orders = savedOrders; DataManager.state.drivers = savedDrivers; DataManager.state.campaigns = savedCampaigns;
+      UI.filters = JSON.parse(savedFilters);
+    }
+  });
+  TestSuite.test("wireDeskTab(dashboard, менеджер): клик по KPI-карточкам переносит на вкладку 'Отправка блогерам' с нужным фильтром", ()=>{
+    // Запрос пользователя: "при клике на значение меня должно пробрасывать на расшифровку" —
+    // числа на дашборде (Всего/Доставлено/Требуют реакции/Не назначены/Без фото) должны
+    // открывать вкладку "Отправка блогерам" с уже применённым фильтром, а не быть просто цифрой.
+    const savedTab = UI.tab, savedRole = UI.role;
+    const savedFilters = JSON.stringify(UI.filters);
+    const savedOrders = DataManager.state.orders, savedDrivers = DataManager.state.drivers, savedCampaigns = DataManager.state.campaigns;
+    const cases = [
+      {id:"kpi-total", expect:{}},
+      {id:"kpi-delivered", expect:{status:"delivered"}},
+      {id:"kpi-problem", expect:{status:"__problem__"}},
+      {id:"kpi-unassigned", expect:{driver:"__none__"}},
+      {id:"kpi-nophoto", expect:{status:"__no_photo__"}},
+    ];
+    try{
+      DataManager.state.orders = [
+        {id:9861, status:"delivered", photo:"x.jpg", driverCode:"D1", city:"Алматы"},
+        {id:9862, status:"no_answer", driverCode:"D1", city:"Алматы"},
+        {id:9863, status:"created", driverCode:null, city:"Алматы"},
+        {id:9864, status:"delivered", photo:null, driverCode:"D1", city:"Алматы"},
+      ];
+      DataManager.state.drivers = [{code:"D1", name:"Тест", phone:"", city:"Алматы", type:"свой", active:true}];
+      DataManager.state.campaigns = [];
+      cases.forEach(c=>{
+        UI.role = "manager"; UI.tab = "dashboard";
+        UI.filters = {campaign:"старое", driver:"старое", city:"старое", status:"старое", search:"старое", dateFrom:"2020-01-01", dateTo:"2020-01-02"};
+        document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+        renderDeskShell();
+        const el = document.getElementById(c.id);
+        if(!el) throw new Error("KPI-карточка #"+c.id+" не найдена на дашборде менеджера");
+        el.click();
+        if(UI.tab!=="deliveries") throw new Error("клик по #"+c.id+" должен переключить на вкладку 'Отправка блогерам' (deliveries): "+UI.tab);
+        const expected = Object.assign({campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""}, c.expect);
+        if(JSON.stringify(UI.filters)!==JSON.stringify(expected)) throw new Error("для #"+c.id+" ожидались фильтры "+JSON.stringify(expected)+", получили "+JSON.stringify(UI.filters));
+      });
+    } finally {
+      UI.tab = savedTab; UI.role = savedRole;
+      UI.filters = JSON.parse(savedFilters);
+      DataManager.state.orders = savedOrders; DataManager.state.drivers = savedDrivers; DataManager.state.campaigns = savedCampaigns;
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
