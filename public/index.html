@@ -744,6 +744,56 @@ function publicationComplianceSummary(){
   return {deliveredCount: delivered.length, postedCount: posted.length, waitingCount, pct,
     withLink, withoutLink, avgLagDays, ageBuckets, byCampaign};
 }
+// Сводка по публикациям за произвольный период (для менеджера/логиста и маркетолога, вкладка
+// "Сводный отчёт"): сколько реально выложили (по дате публикации, попавшей в период) — с разбивкой
+// на посты/сторис и по площадкам/блогерам, плюс отдельно "запланировано" — то, что уже доставлено,
+// но ещё не выложено (у таких заказов даты публикации попросту нет, поэтому их берём по дате
+// доставки, если период задан). Данные — те же orders+publications, что заполняют логисты и
+// маркетологи в остальных вкладках, здесь просто другой срез.
+function reportPeriodSummary(from, to){
+  const {orders} = DataManager.state;
+  const orderIds = new Set(orders.map(o=>o.id));
+  const pubsInPeriod = DataManager.state.publications.filter(p=> orderIds.has(p.orderId) && inDateRange(p.publishedAt, from, to));
+
+  const byPlatformMap = {}, byBloggerMap = {};
+  let totalReach = 0, storiesCount = 0, postsCount = 0;
+  pubsInPeriod.forEach(p=>{
+    const o = DataManager.find("orders", p.orderId);
+    if(!o) return;
+    const m = latestMeasurement(p);
+    const reach = reachInfo(o, p, m).value;
+    totalReach += reach;
+    if(p.platform==="Instagram Stories") storiesCount++; else postsCount++;
+
+    const pk = p.platform || "—";
+    if(!byPlatformMap[pk]) byPlatformMap[pk] = {platform:pk, count:0, reach:0};
+    byPlatformMap[pk].count++; byPlatformMap[pk].reach += reach;
+
+    const bk = o.blogger || "—";
+    if(!byBloggerMap[bk]) byBloggerMap[bk] = {blogger:bk, count:0, reach:0};
+    byBloggerMap[bk].count++; byBloggerMap[bk].reach += reach;
+  });
+
+  const instagramCount = pubsInPeriod.filter(p=>(p.platform||"").startsWith("Instagram")).length;
+  const tiktokCount = pubsInPeriod.filter(p=>p.platform==="TikTok").length;
+
+  // Запланировано: доставлено, публикации ещё нет — т.е. блогер по плану должен выложить, но пока не выложил.
+  // Если период задан — берём только те, что доставлены в этот период (своей даты публикации у них нет).
+  const pending = orders.filter(o=>{
+    if(o.status!=="delivered" || pubOf(o.id)) return false;
+    if((from || to) && !inDateRange(o.deliveredAt, from, to)) return false;
+    return true;
+  });
+  const pendingReachEst = pending.reduce((s,o)=> s + Math.round((o.followers||0) * ACTIVE_AUDIENCE_RATE), 0);
+
+  return {
+    postsCount: pubsInPeriod.length, storiesOnlyCount: storiesCount, nonStoriesCount: postsCount,
+    instagramCount, tiktokCount, totalReach,
+    byPlatform: Object.values(byPlatformMap).sort((a,b)=>b.reach-a.reach),
+    byBlogger: Object.values(byBloggerMap).sort((a,b)=>b.reach-a.reach),
+    pendingCount: pending.length, pendingReachEst,
+  };
+}
 /* ---------- ROMI крупных инфлюенс-интеграций (кривая затухания) ----------
    Логика (как договорились с заказчиком):
    1) база дня = среднее по «чистым» дням (без эффекта чьей-либо интеграции) по этому товару;
@@ -1546,6 +1596,7 @@ const UI = {
   filters: {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""},
   topSort: "views",
   reportSort: "", // сортировка кликом по заголовку в "Сводном отчёте" (см. sortableTh) — платформа/дата публ./охват/ER/клики/продажи/выручка
+  reportPeriod: {from:"", to:""}, // период (по дате публикации) для сводки "Сколько выложили" в верхней части "Сводного отчёта" — см. reportPeriodSummary()
   inflFilter: {search:"", sort:"default", month:""},
   microFilter: {search:"", sort:"default", paymentStatus:""},
   inflDashMonth: "", // выбранный месяц в новом стилизованном дашборде "Платный инфлюенс" (см. tplInfluencerBrandDashboard)
@@ -2736,6 +2787,57 @@ function tplMicroInfluencers(){
   `;
 }
 
+// Панель "Сколько выложили за период" в верхней части "Сводного отчёта" (см. reportPeriodSummary()) —
+// отдельный период (по дате публикации) от фильтров детальной таблицы ниже, т.к. это самостоятельный
+// срез "сколько сделали за X", а не фильтр списка. Пустой период (по умолчанию) = вся история.
+function tplReportPeriodSummary(){
+  const rp = UI.reportPeriod;
+  const s = reportPeriodSummary(rp.from, rp.to);
+  return `
+    <div class="panel">
+      <div class="panel-title">Сколько выложили за период
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">по дате публикации — оставьте пустым для всей истории</span>
+      </div>
+      <div class="toolbar" style="margin-bottom:12px">
+        <span style="align-self:center;color:var(--ink-mute);font-size:12px">дата публикации с</span>
+        <input type="date" id="rp-date-from" value="${rp.from||''}">
+        <span style="align-self:center;color:var(--ink-mute);font-size:12px">по</span>
+        <input type="date" id="rp-date-to" value="${rp.to||''}">
+      </div>
+      <div class="grid-kpi" style="margin-bottom:12px">
+        <div class="kpi"><div class="num">${s.postsCount}</div><div class="lbl">Выложено всего (постов + сторис)</div></div>
+        <div class="kpi"><div class="num">${s.instagramCount}</div><div class="lbl">Instagram (Reels + Stories)</div></div>
+        <div class="kpi"><div class="num">${s.tiktokCount}</div><div class="lbl">TikTok</div></div>
+        <div class="kpi ok"><div class="num">${fmtNum(s.totalReach)}</div><div class="lbl">Общий охват</div></div>
+        <div class="kpi warn"><div class="num">${s.pendingCount}</div><div class="lbl">Запланировано (доставлено, ждёт выкладки)</div></div>
+      </div>
+      <div class="login-hint" style="margin-bottom:12px">
+        Из выложенного: ${s.nonStoriesCount} постов/видео (Reels, TikTok, YouTube Shorts, отзыв), ${s.storiesOnlyCount} сторис.
+        Планируемый охват от того, что ещё в работе (${s.pendingCount} шт.): ~${fmtNum(s.pendingReachEst)} (оценка 15% от подписчиков блогера).
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+        <div>
+          <div class="panel-title" style="font-size:13px;margin-bottom:8px">Разрез по площадкам</div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Площадка</th><th>Постов</th><th>Охват</th></tr></thead>
+            <tbody>
+              ${s.byPlatform.map(x=>`<tr><td>${escapeHtml(x.platform)}</td><td>${x.count}</td><td>${fmtNum(x.reach)}</td></tr>`).join("") || `<tr><td class="empty" colspan="3">Нет публикаций за период</td></tr>`}
+            </tbody>
+          </table></div>
+        </div>
+        <div>
+          <div class="panel-title" style="font-size:13px;margin-bottom:8px">Разрез по блогерам</div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Блогер</th><th>Постов</th><th>Охват</th></tr></thead>
+            <tbody>
+              ${s.byBlogger.map(x=>`<tr><td>${escapeHtml(x.blogger)}</td><td>${x.count}</td><td>${fmtNum(x.reach)}</td></tr>`).join("") || `<tr><td class="empty" colspan="3">Нет публикаций за период</td></tr>`}
+            </tbody>
+          </table></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
 /* ---------- Сводный отчёт ---------- */
 function tplReport(){
   const {orders, campaigns} = DataManager.state;
@@ -2783,6 +2885,7 @@ function tplReport(){
   }
   const pc = publicationComplianceSummary();
   return `
+    ${tplReportPeriodSummary()}
     <div class="panel">
       <div class="panel-title">Выкладка: доставлено → выложено
         <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">кликните проект в таблице, чтобы отфильтровать список ниже</span>
@@ -4164,6 +4267,13 @@ function wireDeskTab(){
   }
 
   else if(UI.tab==="report"){
+    // Период панели "Сколько выложили за период" (см. tplReportPeriodSummary/reportPeriodSummary) —
+    // отдельные поля от fr-date-from/to ниже (те фильтруют детальную таблицу).
+    const rpDateFrom = document.getElementById("rp-date-from");
+    if(rpDateFrom) rpDateFrom.onchange = e=>{ UI.reportPeriod.from = e.target.value; renderDeskTab(); };
+    const rpDateTo = document.getElementById("rp-date-to");
+    if(rpDateTo) rpDateTo.onchange = e=>{ UI.reportPeriod.to = e.target.value; renderDeskTab(); };
+
     const frSearch = document.getElementById("fr-search");
     wireSearchOnEnter(frSearch, v=>{ UI.filters.search = v; renderDeskTab(); });
     document.getElementById("fr-campaign").onchange = e=>{ UI.filters.campaign = e.target.value; renderDeskTab(); };
@@ -5729,21 +5839,26 @@ async function runSelfTests(){
       const headerAsc = sortableTh("Охват","reach","");
       if(headerAsc !== `<th class="th-sort" data-sort-key="reach">Охват</th>`) throw new Error("без активной сортировки заголовок не должен быть подсвечен: "+headerAsc);
 
+      // Панель "Сколько выложили за период" (см. tplReportPeriodSummary) тоже содержит блогеров A/B/C
+      // в своём разрезе по блогерам — обрезаем html до начала детальной таблицы ("Сводный отчёт:
+      // логистика..."), чтобы регекс ниже смотрел только на неё, а не на обе таблицы сразу.
+      const detailTableOnly = html=> html.slice(html.indexOf("Сводный отчёт: логистика"));
+
       UI.reportSort = "reach_desc";
       let html = tplReport();
       if(!html.includes('class="th-sort th-sort-active" data-sort-key="reach">Охват ▼')) throw new Error("при sort=reach_desc заголовок 'Охват' должен быть активным со стрелкой вниз");
-      let order = [...html.matchAll(/>([ABC])<\/td>/g)].map(m=>m[1]);
+      let order = [...detailTableOnly(html).matchAll(/>([ABC])<\/td>/g)].map(m=>m[1]);
       if(JSON.stringify(order)!==JSON.stringify(["B","C","A"])) throw new Error("сортировка 'Охват сначала больше' должна дать B(300),C(200),A(100): "+order);
 
       UI.reportSort = "reach_asc";
       html = tplReport();
       if(!html.includes('class="th-sort th-sort-active" data-sort-key="reach">Охват ▲')) throw new Error("при sort=reach_asc заголовок должен быть активным со стрелкой вверх");
-      order = [...html.matchAll(/>([ABC])<\/td>/g)].map(m=>m[1]);
+      order = [...detailTableOnly(html).matchAll(/>([ABC])<\/td>/g)].map(m=>m[1]);
       if(JSON.stringify(order)!==JSON.stringify(["A","C","B"])) throw new Error("сортировка 'Охват сначала меньше' должна дать A(100),C(200),B(300): "+order);
 
       UI.reportSort = "revenue_desc";
       html = tplReport();
-      order = [...html.matchAll(/>([ABC])<\/td>/g)].map(m=>m[1]);
+      order = [...detailTableOnly(html).matchAll(/>([ABC])<\/td>/g)].map(m=>m[1]);
       if(JSON.stringify(order)!==JSON.stringify(["B","C","A"])) throw new Error("сортировка по выручке 'сначала больше' должна дать B(3000),C(2000),A(1000): "+order);
     } finally {
       DataManager.state.orders = savedOrders; DataManager.state.publications = savedPubs; DataManager.state.campaigns = savedCampaigns;
@@ -5771,6 +5886,96 @@ async function runSelfTests(){
       if(UI.reportSort !== "revenue_asc") throw new Error("повторный клик по той же колонке должен переключить на '_asc': "+UI.reportSort);
     } finally {
       UI.tab = savedTab; UI.role = savedRole; UI.reportSort = savedSort;
+      DataManager.state.orders = savedOrders; DataManager.state.publications = savedPubs; DataManager.state.campaigns = savedCampaigns;
+      UI.filters = JSON.parse(savedFilters);
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("reportPeriodSummary(): считает выложенные посты/сторис, Instagram/TikTok, охват и разрезы по площадкам/блогерам", ()=>{
+    const savedOrders = DataManager.state.orders, savedPubs = DataManager.state.publications;
+    try{
+      DataManager.state.orders = [
+        {id:9990, blogger:"Аня", status:"delivered", followers:1000, deliveredAt:"2026-07-01"},
+        {id:9991, blogger:"Аня", status:"delivered", followers:1000, deliveredAt:"2026-07-02"},
+        {id:9992, blogger:"Боря", status:"delivered", followers:2000, deliveredAt:"2026-07-03"},
+        {id:9993, blogger:"Вика", status:"delivered", followers:5000, deliveredAt:"2026-07-20"}, // вне периода, но с публикацией внутри — не должна попасть по дате публикации
+        {id:9994, blogger:"Гоша", status:"delivered", followers:4000, deliveredAt:"2026-07-10"}, // запланировано (без публикации), в периоде по дате доставки
+        {id:9995, blogger:"Даша", status:"delivered", followers:3000, deliveredAt:"2026-06-01"}, // запланировано, но вне периода
+      ];
+      DataManager.state.publications = [
+        {id:9970, orderId:9990, platform:"Instagram Reels", publishedAt:"2026-07-05", measurements:[{views:500}]},
+        {id:9971, orderId:9991, platform:"Instagram Stories", publishedAt:"2026-07-06", measurements:[]},
+        {id:9972, orderId:9992, platform:"TikTok", publishedAt:"2026-07-07", measurements:[{views:300}]},
+        {id:9973, orderId:9993, platform:"Instagram Reels", publishedAt:"2026-06-15", measurements:[{views:100}]},
+      ];
+      const s = reportPeriodSummary("2026-07-01","2026-07-15");
+      if(s.postsCount !== 3) throw new Error("в периоде должно быть 3 публикации (Reels/Stories/TikTok), получили: "+s.postsCount);
+      if(s.instagramCount !== 2) throw new Error("Instagram (Reels+Stories) должно быть 2: "+s.instagramCount);
+      if(s.tiktokCount !== 1) throw new Error("TikTok должно быть 1: "+s.tiktokCount);
+      if(s.storiesOnlyCount !== 1) throw new Error("сторис должно быть 1: "+s.storiesOnlyCount);
+      if(s.nonStoriesCount !== 2) throw new Error("постов/видео (не сторис) должно быть 2: "+s.nonStoriesCount);
+      // Аня-Reels: реальный просмотр 500 → охват 500. Аня-Stories: нет замера, но доставлено+опубликовано → оценка 15% от 1000=150.
+      // Боря-TikTok: реальный просмотр 300.
+      if(s.totalReach !== 500+150+300) throw new Error("общий охват за период должен быть 950 (500+150+300): "+s.totalReach);
+      const ig = s.byPlatform.find(x=>x.platform==="Instagram Reels");
+      if(!ig || ig.count!==1 || ig.reach!==500) throw new Error("разрез по площадке 'Instagram Reels' неверен: "+JSON.stringify(ig));
+      const anaRow = s.byBlogger.find(x=>x.blogger==="Аня");
+      if(!anaRow || anaRow.count!==2 || anaRow.reach!==650) throw new Error("разрез по блогеру 'Аня' должен быть 2 публикации, охват 650: "+JSON.stringify(anaRow));
+      // Запланировано в периоде (доставлено 07-10, публикации нет) — Гоша один; Даша вне периода (06-01), Вика уже опубликована.
+      if(s.pendingCount !== 1) throw new Error("запланировано в периоде должно быть 1 (Гоша): "+s.pendingCount);
+      if(s.pendingReachEst !== Math.round(4000*0.15)) throw new Error("оценка охвата запланированного должна быть 15% от подписчиков Гоши: "+s.pendingReachEst);
+      // Без периода — вся история: 4 публикации, запланировано — Гоша и Даша (оба без публикации, доставлены)
+      const all = reportPeriodSummary("","");
+      if(all.postsCount !== 4) throw new Error("без периода должны учитываться все 4 публикации: "+all.postsCount);
+      if(all.pendingCount !== 2) throw new Error("без периода запланировано должно быть 2 (Гоша+Даша): "+all.pendingCount);
+    } finally {
+      DataManager.state.orders = savedOrders; DataManager.state.publications = savedPubs;
+    }
+  });
+  TestSuite.test("tplReportPeriodSummary(): рисует панель с KPI, разрезами по площадкам/блогерам и датами периода", ()=>{
+    const savedOrders = DataManager.state.orders, savedPubs = DataManager.state.publications;
+    const savedPeriod = JSON.stringify(UI.reportPeriod);
+    try{
+      DataManager.state.orders = [{id:9996, blogger:"Тест Блогер", status:"delivered", followers:1000, deliveredAt:"2026-07-01"}];
+      DataManager.state.publications = [{id:9974, orderId:9996, platform:"TikTok", publishedAt:"2026-07-02", measurements:[{views:777}]}];
+      UI.reportPeriod = {from:"2026-07-01", to:"2026-07-31"};
+      const html = tplReportPeriodSummary();
+      if(!html.includes('id="rp-date-from" value="2026-07-01"')) throw new Error("поле 'дата публикации с' должно быть заполнено из UI.reportPeriod.from");
+      if(!html.includes('id="rp-date-to" value="2026-07-31"')) throw new Error("поле 'дата публикации по' должно быть заполнено из UI.reportPeriod.to");
+      if(!html.includes("Тест Блогер")) throw new Error("блогер должен попасть в разрез по блогерам");
+      if(!html.includes("TikTok")) throw new Error("площадка должна попасть в разрез по площадкам");
+      if(!html.includes(fmtNum(777))) throw new Error("охват из замера должен отобразиться: "+html);
+    } finally {
+      DataManager.state.orders = savedOrders; DataManager.state.publications = savedPubs;
+      UI.reportPeriod = JSON.parse(savedPeriod);
+    }
+  });
+  TestSuite.test("wireDeskTab(report): изменение дат периода 'Сколько выложили' обновляет UI.reportPeriod", ()=>{
+    const savedTab = UI.tab, savedRole = UI.role;
+    const savedPeriod = JSON.stringify(UI.reportPeriod);
+    const savedOrders = DataManager.state.orders, savedPubs = DataManager.state.publications, savedCampaigns = DataManager.state.campaigns;
+    const savedFilters = JSON.stringify(UI.filters);
+    try{
+      DataManager.state.campaigns = [];
+      DataManager.state.orders = [];
+      DataManager.state.publications = [];
+      UI.filters = {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""};
+      UI.reportPeriod = {from:"", to:""};
+      UI.role = "manager"; UI.tab = "report";
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+      renderDeskShell();
+      const from = document.getElementById("rp-date-from");
+      if(!from) throw new Error("поле 'дата публикации с' должно быть на странице");
+      from.value = "2026-07-01";
+      from.dispatchEvent(new Event("change"));
+      if(UI.reportPeriod.from !== "2026-07-01") throw new Error("изменение поля 'с' должно обновить UI.reportPeriod.from: "+UI.reportPeriod.from);
+      const to = document.getElementById("rp-date-to");
+      to.value = "2026-07-31";
+      to.dispatchEvent(new Event("change"));
+      if(UI.reportPeriod.to !== "2026-07-31") throw new Error("изменение поля 'по' должно обновить UI.reportPeriod.to: "+UI.reportPeriod.to);
+    } finally {
+      UI.tab = savedTab; UI.role = savedRole;
+      UI.reportPeriod = JSON.parse(savedPeriod);
       DataManager.state.orders = savedOrders; DataManager.state.publications = savedPubs; DataManager.state.campaigns = savedCampaigns;
       UI.filters = JSON.parse(savedFilters);
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
