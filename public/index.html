@@ -330,6 +330,7 @@ const Api = {
   updatePublication: (id, changes)=> apiFetch("/api/publications/"+id, {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
   deletePublication: (id)=> apiFetch("/api/publications/"+id, {method:"DELETE"}),
   addMeasurement: (pubId, m)=> apiFetch("/api/publications/"+pubId+"/measurements", {method:"POST", headers:jsonHeaders, body:JSON.stringify(m)}),
+  patchLatestMeasurement: (pubId, changes)=> apiFetch("/api/publications/"+pubId+"/measurements/latest", {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
   importPublications: (rows)=> apiFetch("/api/publications/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
 
   login: (role, login, password)=> apiFetch("/api/auth/login", {method:"POST", headers:jsonHeaders, body:JSON.stringify({role, login, password})}),
@@ -665,6 +666,14 @@ function editableMeasureCell(pub, orderId, content){
   if(!pub) return content;
   return `<button class="link-btn rep-add-measure-btn" data-order="${orderId}" title="Изменить охват/ER/клики/продажи">${content}</button>`;
 }
+// Инлайн-редактирование одного числового поля замера (Охват/Клики/Продажи/Выручка) прямо в
+// "Сводном отчёте" (см. поля measureViews/measureClicks/measureSales/measureRevenue в
+// inlineEditSpan): переводим имя "виртуального" поля в реальное имя поля замера и сохраняем
+// частичным PATCH последнего замера через Api.patchLatestMeasurement (правит last-запись на
+// месте — новую строку в историю замеров это не добавляет, в отличие от Api.addMeasurement).
+// ER сюда не входит — это производная величина (лайки+комментарии)/охват, у неё нет своего
+// поля для прямого редактирования, поэтому она по-прежнему открывает модалку (editableMeasureCell).
+const MEASURE_FIELD_MAP = {measureViews:"views", measureClicks:"clicks", measureSales:"salesCount", measureRevenue:"salesRevenue"};
 // from/to (необязательные, "YYYY-MM-DD") — фильтр периода по дате публикации (для дашборда
 // маркетолога с выбором диапазона/недели/конкретной даты). Без периода — вся история, как раньше.
 function marketingSummary(from, to){
@@ -704,6 +713,12 @@ function publicationComplianceSummary(){
   const waitingCount = delivered.length - posted.length;
   const pct = delivered.length ? Math.round(posted.length/delivered.length*100) : null;
 
+  // Платно/бесплатно: тип интеграции хранится в pub.paidAmount (>0 — платно, см. колонку "Тип
+  // интеграции" в таблице ниже) — считаем по уже выложенным публикациям.
+  const paidCount = posted.filter(o=>{ const p = postedOf(o); return p && (p.paidAmount||0)>0; }).length;
+  const freeCount = posted.length - paidCount;
+  const paidAmountTotal = posted.reduce((s,o)=>{ const p = postedOf(o); return s + ((p && p.paidAmount>0) ? p.paidAmount : 0); }, 0);
+
   // Среднее время от доставки до выкладки — только там, где обе даты есть и выкладка не раньше доставки
   // (отрицательные значения обычно означают опечатку в ручной дате, не показательны для средней).
   const lags = posted.map(o=>{
@@ -742,7 +757,8 @@ function publicationComplianceSummary(){
   }).filter(x=>x.deliveredCount>0).sort((a,b)=>(a.pct==null?-1:a.pct)-(b.pct==null?-1:b.pct));
 
   return {deliveredCount: delivered.length, postedCount: posted.length, waitingCount, pct,
-    withLink, withoutLink, avgLagDays, ageBuckets, byCampaign};
+    withLink, withoutLink, avgLagDays, ageBuckets, byCampaign,
+    paidCount, freeCount, paidAmountTotal};
 }
 // Сводка по публикациям за произвольный период (для менеджера/логиста и маркетолога, вкладка
 // "Сводный отчёт"): сколько реально выложили (по дате публикации, попавшей в период) — с разбивкой
@@ -777,6 +793,10 @@ function reportPeriodSummary(from, to){
   const instagramCount = pubsInPeriod.filter(p=>(p.platform||"").startsWith("Instagram")).length;
   const tiktokCount = pubsInPeriod.filter(p=>p.platform==="TikTok").length;
 
+  const paidCount = pubsInPeriod.filter(p=>(p.paidAmount||0)>0).length;
+  const freeCount = pubsInPeriod.length - paidCount;
+  const paidAmountTotal = pubsInPeriod.reduce((s,p)=> s + (p.paidAmount>0 ? p.paidAmount : 0), 0);
+
   // Запланировано: доставлено, публикации ещё нет — т.е. блогер по плану должен выложить, но пока не выложил.
   // Если период задан — берём только те, что доставлены в этот период (своей даты публикации у них нет).
   const pending = orders.filter(o=>{
@@ -792,6 +812,7 @@ function reportPeriodSummary(from, to){
     byPlatform: Object.values(byPlatformMap).sort((a,b)=>b.reach-a.reach),
     byBlogger: Object.values(byBloggerMap).sort((a,b)=>b.reach-a.reach),
     pendingCount: pending.length, pendingReachEst,
+    paidCount, freeCount, paidAmountTotal,
   };
 }
 /* ---------- ROMI крупных инфлюенс-интеграций (кривая затухания) ----------
@@ -1597,6 +1618,7 @@ const UI = {
   topSort: "views",
   reportSort: "", // сортировка кликом по заголовку в "Сводном отчёте" (см. sortableTh) — платформа/дата публ./охват/ER/клики/продажи/выручка
   reportPeriod: {from:"", to:""}, // период (по дате публикации) для сводки "Сколько выложили" в верхней части "Сводного отчёта" — см. reportPeriodSummary()
+  reportOnlyWaiting: false, // фильтр "Сводного отчёта": показывать только доставленные, но ещё не выложенные (чтобы обзванивать блогеров)
   inflFilter: {search:"", sort:"default", month:""},
   microFilter: {search:"", sort:"default", paymentStatus:""},
   inflDashMonth: "", // выбранный месяц в новом стилизованном дашборде "Платный инфлюенс" (см. tplInfluencerBrandDashboard)
@@ -2811,6 +2833,11 @@ function tplReportPeriodSummary(){
         <div class="kpi ok"><div class="num">${fmtNum(s.totalReach)}</div><div class="lbl">Общий охват</div></div>
         <div class="kpi warn"><div class="num">${s.pendingCount}</div><div class="lbl">Запланировано (доставлено, ждёт выкладки)</div></div>
       </div>
+      <div class="grid-kpi" style="margin-bottom:12px">
+        <div class="kpi"><div class="num">${s.freeCount}</div><div class="lbl">Бесплатных интеграций</div></div>
+        <div class="kpi ok"><div class="num">${s.paidCount}</div><div class="lbl">Платных интеграций</div></div>
+        <div class="kpi ok"><div class="num">${fmtNum(s.paidAmountTotal)} ₸</div><div class="lbl">Сумма оплат за интеграции</div></div>
+      </div>
       <div class="login-hint" style="margin-bottom:12px">
         Из выложенного: ${s.nonStoriesCount} постов/видео (Reels, TikTok, YouTube Shorts, отзыв), ${s.storiesOnlyCount} сторис.
         Планируемый охват от того, что ещё в работе (${s.pendingCount} шт.): ~${fmtNum(s.pendingReachEst)} (оценка 15% от подписчиков блогера).
@@ -2854,6 +2881,9 @@ function tplReport(){
       const inPub = inDateRange(pub && pub.publishedAt, f.dateFrom, f.dateTo);
       if(!inDelivery && !inPub) return false;
     }
+    // Фильтр "Ждут выкладки": доставлено, но публикации ещё нет — чтобы менеджер мог быстро
+    // собрать список для обзвона блогеров (включается кликом по KPI "Ждут выкладки").
+    if(UI.reportOnlyWaiting && !(o.status==="delivered" && !pubOf(o.id))) return false;
     return true;
   });
   // Сортировка кликом по заголовку ("как в Excel", см. sortableTh/UI.reportSort) — платформа и дата
@@ -2893,7 +2923,7 @@ function tplReport(){
       <div class="grid-kpi" style="margin-bottom:12px">
         <div class="kpi ${pc.pct==null?'':(pc.pct>=80?'ok':pc.pct>=50?'warn':'bad')}"><div class="num">${pc.pct==null?'—':pc.pct+'%'}</div><div class="lbl">Выложено от доставленного</div></div>
         <div class="kpi ok"><div class="num">${pc.postedCount}</div><div class="lbl">Выложено (${pc.withLink} со ссылкой, ${pc.withoutLink} сторис без)</div></div>
-        <div class="kpi warn"><div class="num">${pc.waitingCount}</div><div class="lbl">Ждут выкладки</div></div>
+        <div class="kpi warn" id="rep-waiting-kpi" style="cursor:pointer" title="Кликните, чтобы показать в таблице ниже только тех, кто ждёт выкладки — для обзвона"><div class="num">${pc.waitingCount}</div><div class="lbl">Ждут выкладки${UI.reportOnlyWaiting?' · фильтр включён':' (клик — фильтр)'}</div></div>
         <div class="kpi"><div class="num">${pc.avgLagDays==null?'—':pc.avgLagDays.toFixed(1)}</div><div class="lbl">Среднее дней доставка → выкладка</div></div>
       </div>
       ${pc.waitingCount ? `
@@ -2901,6 +2931,12 @@ function tplReport(){
         <div class="kpi"><div class="num">${pc.ageBuckets.fresh}</div><div class="lbl">Ждут 0–3 дня</div></div>
         <div class="kpi warn"><div class="num">${pc.ageBuckets.mid}</div><div class="lbl">Ждут 4–7 дней</div></div>
         <div class="kpi bad"><div class="num">${pc.ageBuckets.stale}</div><div class="lbl">Ждут больше недели</div></div>
+      </div>` : ""}
+      ${pc.postedCount ? `
+      <div class="grid-kpi" style="margin-bottom:12px">
+        <div class="kpi"><div class="num">${pc.freeCount}</div><div class="lbl">Бесплатных интеграций</div></div>
+        <div class="kpi ok"><div class="num">${pc.paidCount}</div><div class="lbl">Платных интеграций</div></div>
+        <div class="kpi ok"><div class="num">${fmtNum(pc.paidAmountTotal)} ₸</div><div class="lbl">Сумма оплат за интеграции</div></div>
       </div>` : ""}
       <div class="table-wrap"><table>
         <thead><tr><th>Проект</th><th>Доставлено</th><th>Выложено</th><th>Ждут</th><th>%</th></tr></thead>
@@ -2926,6 +2962,9 @@ function tplReport(){
         <input type="date" id="fr-date-from" value="${f.dateFrom||''}">
         <span style="align-self:center;color:var(--ink-mute);font-size:12px">по</span>
         <input type="date" id="fr-date-to" value="${f.dateTo||''}">
+        <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--ink-mute);white-space:nowrap">
+          <input type="checkbox" id="fr-only-waiting" ${UI.reportOnlyWaiting?'checked':''}> Только «Ждёт выкладки» (для обзвона)
+        </label>
       </div>
       ${(()=>{
         const rowIds = rows.map(o=>o.id);
@@ -2939,14 +2978,16 @@ function tplReport(){
       })()}
       <div class="login-hint" style="margin-bottom:8px">
         Кликните по заголовку колонки (Платформа/Дата публ./Охват/ER/Клики/Продажи/Выручка), чтобы отсортировать
-        список — как в Excel: первый клик "сначала больше", повторный — "сначала меньше". Платформа, ссылка на
-        публикацию и сумма оплаты за интеграцию (тип: платно/бесплатно) редактируются прямо в таблице кликом
-        по значению — как только для этой доставки отмечена публикация.
+        список — как в Excel: первый клик "сначала больше", повторный — "сначала меньше". Почти любое значение
+        в таблице (дата доставки, платформа, ссылка, сумма оплаты, охват, клики, продажи, выручка) редактируется
+        прямо кликом по нему — как только для этой доставки отмечена публикация; ER считается автоматически из
+        охвата/лайков/комментариев, для его правки открывается окно "+ Данные". Колонка "Блогер" закреплена
+        слева при горизонтальном скролле.
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
           <th class="rowcheck"><input type="checkbox" id="rep-check-all"></th>
-          <th>№</th><th>Блогер</th><th>Подписчики</th><th>Проект</th><th>Город</th><th>Водитель</th><th>Статус доставки</th><th>Статус публикации</th><th>Тип интеграции</th><th>Дата доставки</th>
+          <th>№</th><th class="sticky-col">Блогер</th><th>Подписчики</th><th>Проект</th><th>Город</th><th>Водитель</th><th>Статус доставки</th><th>Статус публикации</th><th>Тип интеграции</th><th>Дата доставки</th>
           ${sortableTh("Платформа","platform",UI.reportSort)}${sortableTh("Дата публ.","pubDate",UI.reportSort)}<th>Ссылка</th>${sortableTh("Охват","reach",UI.reportSort)}${sortableTh("ER","er",UI.reportSort)}${sortableTh("Клики","clicks",UI.reportSort)}${sortableTh("Продажи","sales",UI.reportSort)}${sortableTh("Выручка","revenue",UI.reportSort)}<th>Bitrix</th><th></th>
         </tr></thead>
         <tbody>
@@ -2957,7 +2998,7 @@ function tplReport(){
             return `<tr>
               <td class="rowcheck"><input type="checkbox" class="rep-row-check" data-id="${o.id}" ${UI.selectedPubIds.has(o.id)?'checked':''}></td>
               <td>#${o.id}</td>
-              <td>${escapeHtml(o.blogger)}</td>
+              <td class="sticky-col">${escapeHtml(o.blogger)}${o.phone?`<br><a class="icon-btn call" href="${telLink(o.phone)}" style="font-size:11px">📞 ${escapeHtml(o.phone)}</a>`:""}</td>
               <td>${fmtNum(o.followers)}</td>
               <td>${escapeHtml(campaignName(o.campaignId))}</td>
               <td>${escapeHtml(o.city)}</td>
@@ -2967,7 +3008,7 @@ function tplReport(){
               <td>${pub
                   ? inlineEditSpan(pub.paidAmount>0 ? `💰 Платно · ${fmtNum(pub.paidAmount)} ₸` : `<span style="color:var(--ink-mute)">Бесплатно</span>`, pub.id, "paidAmount", pub.paidAmount||0, "number")
                   : "—"}</td>
-              <td>${escapeHtml(o.deliveredAt||"—")}</td>
+              <td>${inlineEditSpan(escapeHtml(o.deliveredAt||"—"), o.id, "deliveredAt", o.deliveredAt||"", "date")}</td>
               <td>${pub ? inlineEditSpan(escapeHtml(pub.platform), pub.id, "platform", pub.platform, "select", PLATFORMS) : "—"}</td>
               <td>${pub ? inlineEditSpan(escapeHtml(pub.publishedAt||"—"), pub.id, "publishedAt", pub.publishedAt||"", "date") : "—"}</td>
               <td>${pub
@@ -2975,11 +3016,11 @@ function tplReport(){
                       ? `<a href="${escapeHtml(pub.link)}" target="_blank" rel="noopener">ссылка</a> ${inlineEditSpan("✎", pub.id, "link", pub.link, "text")}`
                       : inlineEditSpan("—", pub.id, "link", "", "text"))
                   : "—"}</td>
-              <td>${editableMeasureCell(pub, o.id, r.value?fmtNum(r.value)+reachBadge(r):"—")}</td>
+              <td>${pub ? inlineEditSpan((r.value?fmtNum(r.value):"—")+reachBadge(r), pub.id, "measureViews", m?(m.views||0):0, "number") : "—"}</td>
               <td>${editableMeasureCell(pub, o.id, m?fmtPercent(erPercent(m)):"—")}</td>
-              <td>${editableMeasureCell(pub, o.id, m&&m.clicks?fmtNum(m.clicks):"—")}</td>
-              <td>${editableMeasureCell(pub, o.id, m?(m.salesCount||0):"—")}</td>
-              <td>${editableMeasureCell(pub, o.id, m?fmtNum(m.salesRevenue):"—")}</td>
+              <td>${pub ? inlineEditSpan(m&&m.clicks?fmtNum(m.clicks):"—", pub.id, "measureClicks", m?(m.clicks||0):0, "number") : "—"}</td>
+              <td>${pub ? inlineEditSpan(m?(m.salesCount||0):"—", pub.id, "measureSales", m?(m.salesCount||0):0, "number") : "—"}</td>
+              <td>${pub ? inlineEditSpan(m?fmtNum(m.salesRevenue):"—", pub.id, "measureRevenue", m?(m.salesRevenue||0):0, "number") : "—"}</td>
               <td>${o.status==='delivered' ? (o.bitrixSynced?'✓':'—') : "—"}</td>
               <td>
                 ${pub
@@ -4283,6 +4324,14 @@ function wireDeskTab(){
       btn.onclick = ()=>{ UI.filters.campaign = btn.dataset.id; renderDeskTab(); };
     });
 
+    // Фильтр "Ждут выкладки" (доставлено, публикации нет) — чекбокс в тулбаре и клик по самому
+    // KPI "Ждут выкладки" в верхней панели делают одно и то же, чтобы менеджеру было легче
+    // быстро собрать список для обзвона блогеров.
+    const frOnlyWaiting = document.getElementById("fr-only-waiting");
+    if(frOnlyWaiting) frOnlyWaiting.onchange = e=>{ UI.reportOnlyWaiting = e.target.checked; renderDeskTab(); };
+    const repWaitingKpi = document.getElementById("rep-waiting-kpi");
+    if(repWaitingKpi) repWaitingKpi.onclick = ()=>{ UI.reportOnlyWaiting = !UI.reportOnlyWaiting; renderDeskTab(); };
+
     // Сортировка кликом по заголовку колонки ("как в Excel") — см. sortableTh()/UI.reportSort.
     // Первый клик по колонке ставит "сначала больше", повторный клик по той же колонке — "сначала меньше".
     document.querySelectorAll(".th-sort").forEach(th=>{
@@ -4293,11 +4342,23 @@ function wireDeskTab(){
       };
     });
 
-    // Инлайн-редактирование "по-экселевски" (см. inlineEditSpan/wireInlineEdit): платформа (select),
-    // ссылка на публикацию и сумма оплаты за интеграцию редактируются прямо в таблице кликом по
-    // значению — без карандаша и отдельной модалки. Сохранение — частичный PATCH через Api.updatePublication.
+    // Инлайн-редактирование "по-экселевски" (см. inlineEditSpan/wireInlineEdit): практически любое
+    // значение в таблице редактируется прямо кликом — без карандаша и отдельной модалки.
+    // Три вида полей роутятся по-разному при сохранении:
+    //  - "deliveredAt" — это поле заказа, а не публикации, id в data-id в этом случае — o.id
+    //    (см. tplReport), сохраняем через Api.updateOrder;
+    //  - "measureViews"/"measureClicks"/"measureSales"/"measureRevenue" — "виртуальные" поля
+    //    последнего замера публикации (см. MEASURE_FIELD_MAP) — правим last-запись на месте
+    //    через Api.patchLatestMeasurement, без дублей в истории замеров;
+    //  - всё остальное (платформа, ссылка, сумма оплаты) — обычный частичный PATCH публикации.
     wireInlineEdit(document.getElementById("main"), async (id, field, value)=>{
-      await Api.updatePublication(id, {[field]: value});
+      if(field === "deliveredAt"){
+        await Api.updateOrder(id, {deliveredAt: value});
+      } else if(MEASURE_FIELD_MAP[field]){
+        await Api.patchLatestMeasurement(id, {[MEASURE_FIELD_MAP[field]]: value});
+      } else {
+        await Api.updatePublication(id, {[field]: value});
+      }
       await DataManager.refresh(); render();
     });
 
@@ -5812,8 +5873,11 @@ async function runSelfTests(){
       if(!html.includes('href="https://tiktok.com/@x"')) throw new Error("заполненная ссылка на публикацию должна быть кликабельной");
       if(!/data-field="link" data-type="text" data-value=""[^>]*>—</.test(html)) throw new Error("пустая ссылка должна показываться как '—' (inline-edit для добавления)");
       // строка без публикации — тип интеграции, платформа и ссылка должны быть просто "—", без inline-edit
+      // ("Дата доставки" — исключение: это поле заказа, а не публикации, и остаётся редактируемым
+      // независимо от наличия публикации, поэтому её единственный inline-edit тут ожидаем).
       const rowsWithoutPub = html.split("Без публикации")[1].split("</tr>")[0];
-      if((rowsWithoutPub.match(/inline-edit/g)||[]).length) throw new Error("у заказа без публикации не должно быть inline-edit ячеек (тип/платформа/ссылка): "+rowsWithoutPub);
+      const inlineEditFields = [...rowsWithoutPub.matchAll(/data-field="([^"]+)"/g)].map(m=>m[1]);
+      if(JSON.stringify(inlineEditFields) !== JSON.stringify(["deliveredAt"])) throw new Error("у заказа без публикации inline-edit должен быть только у 'Дата доставки': "+JSON.stringify(inlineEditFields));
     } finally {
       DataManager.state.orders = savedOrders; DataManager.state.publications = savedPubs; DataManager.state.campaigns = savedCampaigns;
       UI.filters = JSON.parse(savedFilters); UI.reportSort = savedSort;
@@ -5979,6 +6043,178 @@ async function runSelfTests(){
       DataManager.state.orders = savedOrders; DataManager.state.publications = savedPubs; DataManager.state.campaigns = savedCampaigns;
       UI.filters = JSON.parse(savedFilters);
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("tplReport: колонка 'Блогер' закреплена (sticky-col), телефон — кликабельная ссылка для звонка", ()=>{
+    const savedOrders = DataManager.state.orders, savedPubs = DataManager.state.publications, savedCampaigns = DataManager.state.campaigns;
+    const savedFilters = JSON.stringify(UI.filters), savedSort = UI.reportSort, savedWaiting = UI.reportOnlyWaiting;
+    try{
+      DataManager.state.campaigns = [];
+      DataManager.state.orders = [{id:9880, blogger:"Стики Тест", phone:"+77001234567", status:"delivered", followers:1000, city:"Алматы", address:"", deliveredAt:"2026-07-01"}];
+      DataManager.state.publications = [];
+      UI.filters = {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""};
+      UI.reportSort = ""; UI.reportOnlyWaiting = false;
+      const html = tplReport();
+      if(!/<th class="sticky-col">Блогер<\/th>/.test(html)) throw new Error("заголовок 'Блогер' должен иметь класс sticky-col");
+      if(!/<td class="sticky-col">/.test(html)) throw new Error("ячейка с именем блогера должна иметь класс sticky-col");
+      if(!html.includes('href="tel:+77001234567"')) throw new Error("рядом с именем блогера должна быть кликабельная ссылка для звонка: "+telLink("+77001234567"));
+    } finally {
+      DataManager.state.orders = savedOrders; DataManager.state.publications = savedPubs; DataManager.state.campaigns = savedCampaigns;
+      UI.filters = JSON.parse(savedFilters); UI.reportSort = savedSort; UI.reportOnlyWaiting = savedWaiting;
+    }
+  });
+  TestSuite.test("tplReport: 'Дата доставки' и Охват/Клики/Продажи/Выручка редактируются кликом прямо в таблице (не через модалку), ER — по-прежнему через модалку", ()=>{
+    const savedOrders = DataManager.state.orders, savedPubs = DataManager.state.publications, savedCampaigns = DataManager.state.campaigns;
+    const savedFilters = JSON.stringify(UI.filters), savedSort = UI.reportSort, savedWaiting = UI.reportOnlyWaiting;
+    try{
+      DataManager.state.campaigns = [];
+      DataManager.state.orders = [{id:9881, blogger:"Инлайн Тест", status:"delivered", followers:1000, city:"Алматы", address:"", deliveredAt:"2026-07-05"}];
+      DataManager.state.publications = [{id:9982, orderId:9881, platform:"TikTok", link:"", publishedAt:"2026-07-06", paidAmount:0, measurements:[{views:500, likes:10, comments:2, clicks:7, salesCount:3, salesRevenue:9000}]}];
+      UI.filters = {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""};
+      UI.reportSort = ""; UI.reportOnlyWaiting = false;
+      const html = tplReport();
+      if(!/data-field="deliveredAt" data-type="date" data-value="2026-07-05"/.test(html)) throw new Error("'Дата доставки' должна быть inline-editable (date): "+html.slice(0,50));
+      if(!/data-field="measureViews" data-type="number" data-value="500"/.test(html)) throw new Error("Охват должен быть inline-editable через measureViews");
+      if(!/data-field="measureClicks" data-type="number" data-value="7"/.test(html)) throw new Error("Клики должны быть inline-editable через measureClicks");
+      if(!/data-field="measureSales" data-type="number" data-value="3"/.test(html)) throw new Error("Продажи должны быть inline-editable через measureSales");
+      if(!/data-field="measureRevenue" data-type="number" data-value="9000"/.test(html)) throw new Error("Выручка должна быть inline-editable через measureRevenue");
+      // ER — производная величина (лайки+комментарии)/охват, у неё нет отдельного поля для инлайн-правки,
+      // поэтому она по-прежнему открывает модалку "+ Данные" (editableMeasureCell), не inline-edit.
+      if(!html.includes('class="link-btn rep-add-measure-btn"')) throw new Error("ER должна по-прежнему открывать модалку через rep-add-measure-btn");
+    } finally {
+      DataManager.state.orders = savedOrders; DataManager.state.publications = savedPubs; DataManager.state.campaigns = savedCampaigns;
+      UI.filters = JSON.parse(savedFilters); UI.reportSort = savedSort; UI.reportOnlyWaiting = savedWaiting;
+    }
+  });
+  TestSuite.test("Api.patchLatestMeasurement и wireDeskTab(report): клик по Охват/Клики/Продажи/Выручка сохраняет через PATCH .../measurements/latest, 'Дата доставки' — через PATCH /api/orders/:id", ()=>{
+    const savedTab = UI.tab, savedRole = UI.role, savedSort = UI.reportSort, savedWaiting = UI.reportOnlyWaiting;
+    const savedOrders = DataManager.state.orders, savedPubs = DataManager.state.publications, savedCampaigns = DataManager.state.campaigns;
+    const savedFilters = JSON.stringify(UI.filters);
+    const origFetch = window.fetch;
+    try{
+      DataManager.state.campaigns = [];
+      DataManager.state.orders = [{id:9882, blogger:"Роутинг Тест", status:"delivered", followers:1000, city:"Алматы", address:"", deliveredAt:"2026-07-05"}];
+      DataManager.state.publications = [{id:9983, orderId:9882, platform:"TikTok", link:"", publishedAt:"2026-07-06", paidAmount:0, measurements:[{views:500, clicks:7, salesCount:3, salesRevenue:9000}]}];
+      UI.filters = {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""};
+      UI.reportSort = ""; UI.reportOnlyWaiting = false;
+      UI.role = "manager"; UI.tab = "report";
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+      renderDeskShell();
+
+      let captured = null;
+      window.fetch = (url, opts)=>{ captured = {url, opts}; return Promise.resolve({ ok:true, status:200, json: ()=>Promise.resolve({ok:true}) }); };
+
+      const clicksSpan = document.querySelector('.inline-edit[data-field="measureClicks"]');
+      if(!clicksSpan) throw new Error("ячейка 'Клики' должна быть inline-edit в отрисованной таблице");
+      clicksSpan.click();
+      const clicksInput = clicksSpan.querySelector("input");
+      clicksInput.value = "42";
+      clicksInput.dispatchEvent(new Event("blur"));
+      if(!captured || !captured.url.includes("/api/publications/9983/measurements/latest")) throw new Error("клик по 'Клики' должен PATCH-ить .../measurements/latest: "+JSON.stringify(captured));
+      if(captured.opts.method !== "PATCH") throw new Error("должен быть PATCH-запрос: "+JSON.stringify(captured.opts));
+      let body = JSON.parse(captured.opts.body);
+      if(body.clicks !== 42) throw new Error("тело запроса должно содержать {clicks:42}: "+captured.opts.body);
+
+      captured = null;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+      renderDeskShell();
+      const deliveredSpan = document.querySelector('.inline-edit[data-field="deliveredAt"]');
+      if(!deliveredSpan) throw new Error("ячейка 'Дата доставки' должна быть inline-edit в отрисованной таблице");
+      deliveredSpan.click();
+      const deliveredInput = deliveredSpan.querySelector("input");
+      deliveredInput.value = "2026-07-09";
+      deliveredInput.dispatchEvent(new Event("blur"));
+      if(!captured || !captured.url.includes("/api/orders/9882")) throw new Error("клик по 'Дата доставки' должен PATCH-ить /api/orders/:id: "+JSON.stringify(captured));
+      body = JSON.parse(captured.opts.body);
+      if(body.deliveredAt !== "2026-07-09") throw new Error("тело запроса должно содержать {deliveredAt:'2026-07-09'}: "+captured.opts.body);
+    } finally {
+      window.fetch = origFetch;
+      UI.tab = savedTab; UI.role = savedRole; UI.reportSort = savedSort; UI.reportOnlyWaiting = savedWaiting;
+      DataManager.state.orders = savedOrders; DataManager.state.publications = savedPubs; DataManager.state.campaigns = savedCampaigns;
+      UI.filters = JSON.parse(savedFilters);
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("tplReport: фильтр 'Ждут выкладки' (UI.reportOnlyWaiting) показывает только доставленные без публикации, KPI-карточка и чекбокс переключают его", ()=>{
+    const savedTab = UI.tab, savedRole = UI.role, savedSort = UI.reportSort, savedWaiting = UI.reportOnlyWaiting;
+    const savedOrders = DataManager.state.orders, savedPubs = DataManager.state.publications, savedCampaigns = DataManager.state.campaigns;
+    const savedFilters = JSON.stringify(UI.filters);
+    try{
+      DataManager.state.campaigns = [];
+      DataManager.state.orders = [
+        {id:9883, blogger:"Ждёт", status:"delivered", followers:1000, city:"Алматы", address:"", deliveredAt:"2026-07-01"},
+        {id:9884, blogger:"Выложено", status:"delivered", followers:1000, city:"Алматы", address:"", deliveredAt:"2026-07-01"},
+        {id:9885, blogger:"Не доставлено", status:"assigned", followers:1000, city:"Алматы", address:"", deliveredAt:null},
+      ];
+      DataManager.state.publications = [{id:9984, orderId:9884, platform:"TikTok", link:"", publishedAt:"2026-07-02", paidAmount:0, measurements:[]}];
+      UI.filters = {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""};
+      UI.reportSort = "";
+      // KPI-панель "Выкладка: доставлено → выложено" выше детальной таблицы содержит слово "Выложено"
+      // в подписи ("N Выложено (...)") независимо от фильтра — обрезаем html до начала детальной
+      // таблицы, чтобы проверять только реально отфильтрованные строки, а не текст панели.
+      const detailTableOnly = h=> h.slice(h.indexOf("Сводный отчёт: логистика"));
+
+      UI.reportOnlyWaiting = false;
+      let html = detailTableOnly(tplReport());
+      if(!html.includes("Ждёт") || !html.includes("Выложено") || !html.includes("Не доставлено")) throw new Error("без фильтра должны быть видны все строки");
+
+      UI.reportOnlyWaiting = true;
+      html = detailTableOnly(tplReport());
+      if(!html.includes("Ждёт")) throw new Error("с фильтром должен остаться 'Ждёт' (доставлено, без публикации)");
+      if(html.includes("Выложено")) throw new Error("с фильтром не должно быть 'Выложено' (уже есть публикация)");
+      if(html.includes("Не доставлено")) throw new Error("с фильтром не должно быть 'Не доставлено' (ещё не доставлено)");
+
+      UI.reportOnlyWaiting = false;
+      UI.role = "manager"; UI.tab = "report";
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+      renderDeskShell();
+      const checkbox = document.getElementById("fr-only-waiting");
+      if(!checkbox) throw new Error("чекбокс 'Только Ждёт выкладки' должен быть в тулбаре");
+      checkbox.checked = true;
+      checkbox.dispatchEvent(new Event("change"));
+      if(!UI.reportOnlyWaiting) throw new Error("чекбокс должен включать UI.reportOnlyWaiting");
+      const kpi = document.getElementById("rep-waiting-kpi");
+      if(!kpi) throw new Error("KPI-карточка 'Ждут выкладки' должна быть кликабельной (id=rep-waiting-kpi)");
+      kpi.click();
+      if(UI.reportOnlyWaiting) throw new Error("повторный клик по KPI должен выключать фильтр (тумблер)");
+    } finally {
+      UI.tab = savedTab; UI.role = savedRole; UI.reportSort = savedSort; UI.reportOnlyWaiting = savedWaiting;
+      DataManager.state.orders = savedOrders; DataManager.state.publications = savedPubs; DataManager.state.campaigns = savedCampaigns;
+      UI.filters = JSON.parse(savedFilters);
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("publicationComplianceSummary()/reportPeriodSummary(): считают платные/бесплатные интеграции и сумму оплат", ()=>{
+    const savedOrders = DataManager.state.orders, savedPubs = DataManager.state.publications, savedCampaigns = DataManager.state.campaigns;
+    try{
+      DataManager.state.campaigns = [];
+      DataManager.state.orders = [
+        {id:9886, blogger:"Платный1", status:"delivered", followers:1000, deliveredAt:"2026-07-01"},
+        {id:9887, blogger:"Платный2", status:"delivered", followers:1000, deliveredAt:"2026-07-01"},
+        {id:9888, blogger:"Бесплатный", status:"delivered", followers:1000, deliveredAt:"2026-07-01"},
+        {id:9889, blogger:"Ждёт", status:"delivered", followers:1000, deliveredAt:"2026-07-01"},
+      ];
+      DataManager.state.publications = [
+        {id:9985, orderId:9886, platform:"TikTok", publishedAt:"2026-07-05", paidAmount:15000, measurements:[]},
+        {id:9986, orderId:9887, platform:"TikTok", publishedAt:"2026-07-06", paidAmount:8000, measurements:[]},
+        {id:9987, orderId:9888, platform:"TikTok", publishedAt:"2026-07-07", paidAmount:0, measurements:[]},
+      ];
+      const pc = publicationComplianceSummary();
+      if(pc.paidCount !== 2) throw new Error("платных интеграций должно быть 2: "+pc.paidCount);
+      if(pc.freeCount !== 1) throw new Error("бесплатных интеграций должно быть 1: "+pc.freeCount);
+      if(pc.paidAmountTotal !== 23000) throw new Error("сумма оплат должна быть 23000: "+pc.paidAmountTotal);
+
+      const s = reportPeriodSummary("2026-07-01","2026-07-31");
+      if(s.paidCount !== 2) throw new Error("reportPeriodSummary: платных должно быть 2: "+s.paidCount);
+      if(s.freeCount !== 1) throw new Error("reportPeriodSummary: бесплатных должно быть 1: "+s.freeCount);
+      if(s.paidAmountTotal !== 23000) throw new Error("reportPeriodSummary: сумма оплат должна быть 23000: "+s.paidAmountTotal);
+
+      const html = tplReport();
+      if(!html.includes("Платных интеграций")) throw new Error("панель 'Выкладка' должна показывать KPI 'Платных интеграций'");
+      if(!html.includes("Бесплатных интеграций")) throw new Error("панель 'Выкладка' должна показывать KPI 'Бесплатных интеграций'");
+      if(!html.includes(fmtNum(23000)+" ₸")) throw new Error("панель 'Выкладка' должна показывать сумму оплат 23000 ₸");
+    } finally {
+      DataManager.state.orders = savedOrders; DataManager.state.publications = savedPubs; DataManager.state.campaigns = savedCampaigns;
     }
   });
   TestSuite.test("tplCampaigns отображает номер реализации проекта (для сверки с 1С, не в отчёте)", ()=>{
