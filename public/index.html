@@ -124,6 +124,15 @@ td.wrap{white-space:normal;max-width:220px}
 th.sticky-col{z-index:2;background:#f7f9fb}
 tr:hover td.sticky-col{background:#fafcfe}
 
+/* Телефон блогера в закреплённой колонке "Блогер" (напр. в "Сводном отчёте") — скрыт под
+   маленьким значком, чтобы не растягивать узкую sticky-колонку; клик по значку раскрывает
+   номер как кликабельную ссылку для звонка. */
+.phone-toggle{display:inline-block;margin-top:2px}
+.phone-toggle summary{cursor:pointer;list-style:none;color:var(--ink-mute);font-size:12px;width:18px}
+.phone-toggle summary::-webkit-details-marker{display:none}
+.phone-toggle[open] summary{margin-bottom:2px}
+.phone-toggle a{font-size:11px;white-space:nowrap}
+
 /* Заголовки таблиц с сортировкой по клику (как в Excel) — см. sortableTh(). Клик по заголовку
    ставит сортировку "сначала больше" по этой колонке, повторный клик по той же — переключает
    на "сначала меньше"; клик по другой колонке снова начинает с "сначала больше". */
@@ -2998,7 +3007,7 @@ function tplReport(){
             return `<tr>
               <td class="rowcheck"><input type="checkbox" class="rep-row-check" data-id="${o.id}" ${UI.selectedPubIds.has(o.id)?'checked':''}></td>
               <td>#${o.id}</td>
-              <td class="sticky-col">${escapeHtml(o.blogger)}${o.phone?`<br><a class="icon-btn call" href="${telLink(o.phone)}" style="font-size:11px">📞 ${escapeHtml(o.phone)}</a>`:""}</td>
+              <td class="sticky-col">${escapeHtml(o.blogger)}${o.phone?`<details class="phone-toggle"><summary title="Показать телефон">📞</summary><a class="icon-btn call" href="${telLink(o.phone)}">${escapeHtml(o.phone)}</a></details>`:""}</td>
               <td>${fmtNum(o.followers)}</td>
               <td>${escapeHtml(campaignName(o.campaignId))}</td>
               <td>${escapeHtml(o.city)}</td>
