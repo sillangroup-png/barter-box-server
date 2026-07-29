@@ -327,6 +327,7 @@ const Api = {
   deleteReturn: (id)=> apiFetch("/api/returns/"+id, {method:"DELETE"}),
 
   createPublication: (p)=> apiFetch("/api/publications", {method:"POST", headers:jsonHeaders, body:JSON.stringify(p)}),
+  updatePublication: (id, changes)=> apiFetch("/api/publications/"+id, {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
   deletePublication: (id)=> apiFetch("/api/publications/"+id, {method:"DELETE"}),
   addMeasurement: (pubId, m)=> apiFetch("/api/publications/"+pubId+"/measurements", {method:"POST", headers:jsonHeaders, body:JSON.stringify(m)}),
   importPublications: (rows)=> apiFetch("/api/publications/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
@@ -1544,6 +1545,7 @@ const UI = {
   role: null, driverCode: null, authToken: null, readOnly: false, tab: "dashboard",
   filters: {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""},
   topSort: "views",
+  reportSort: "", // сортировка кликом по заголовку в "Сводном отчёте" (см. sortableTh) — платформа/дата публ./охват/ER/клики/продажи/выручка
   inflFilter: {search:"", sort:"default", month:""},
   microFilter: {search:"", sort:"default", paymentStatus:""},
   inflDashMonth: "", // выбранный месяц в новом стилизованном дашборде "Платный инфлюенс" (см. tplInfluencerBrandDashboard)
@@ -2752,6 +2754,33 @@ function tplReport(){
     }
     return true;
   });
+  // Сортировка кликом по заголовку ("как в Excel", см. sortableTh/UI.reportSort) — платформа и дата
+  // публикации сортируются как строки (ISO-дата и так сортируется лексикографически верно),
+  // остальные колонки — числом; там, где публикации/замера ещё нет, значение считается наименьшим,
+  // чтобы такие строки не перемешивались посередине при сортировке "сначала больше".
+  if(UI.reportSort){
+    const key = UI.reportSort.replace(/_(desc|asc)$/, "");
+    const isDesc = UI.reportSort.endsWith("_desc");
+    const sortValue = o=>{
+      const pub = pubOf(o.id);
+      const m = pub ? latestMeasurement(pub) : null;
+      switch(key){
+        case "platform": return pub ? pub.platform : "";
+        case "pubDate": return pub ? (pub.publishedAt||"") : "";
+        case "reach": return reachInfo(o, pub, m).value;
+        case "er": { const v = m?erPercent(m):null; return v==null?-1:v; }
+        case "clicks": return m&&m.clicks ? m.clicks : 0;
+        case "sales": return m ? (m.salesCount||0) : 0;
+        case "revenue": return m ? (m.salesRevenue||0) : 0;
+        default: return 0;
+      }
+    };
+    rows = rows.slice().sort((a,b)=>{
+      const av = sortValue(a), bv = sortValue(b);
+      const cmp = (typeof av==="string") ? av.localeCompare(bv) : av-bv;
+      return isDesc ? -cmp : cmp;
+    });
+  }
   const pc = publicationComplianceSummary();
   return `
     <div class="panel">
@@ -2805,11 +2834,17 @@ function tplReport(){
         <button class="btn btn-danger btn-sm" id="rep-bulk-delete-btn">Удалить выделенное</button>
       </div>` : "";
       })()}
+      <div class="login-hint" style="margin-bottom:8px">
+        Кликните по заголовку колонки (Платформа/Дата публ./Охват/ER/Клики/Продажи/Выручка), чтобы отсортировать
+        список — как в Excel: первый клик "сначала больше", повторный — "сначала меньше". Платформа, ссылка на
+        публикацию и сумма оплаты за интеграцию (тип: платно/бесплатно) редактируются прямо в таблице кликом
+        по значению — как только для этой доставки отмечена публикация.
+      </div>
       <div class="table-wrap"><table>
         <thead><tr>
           <th class="rowcheck"><input type="checkbox" id="rep-check-all"></th>
-          <th>№</th><th>Блогер</th><th>Подписчики</th><th>Проект</th><th>Город</th><th>Водитель</th><th>Статус доставки</th><th>Статус публикации</th><th>Дата доставки</th>
-          <th>Платформа</th><th>Дата публ.</th><th>Охват</th><th>ER</th><th>Клики</th><th>Продажи</th><th>Выручка</th><th>Bitrix</th><th></th>
+          <th>№</th><th>Блогер</th><th>Подписчики</th><th>Проект</th><th>Город</th><th>Водитель</th><th>Статус доставки</th><th>Статус публикации</th><th>Тип интеграции</th><th>Дата доставки</th>
+          ${sortableTh("Платформа","platform",UI.reportSort)}${sortableTh("Дата публ.","pubDate",UI.reportSort)}<th>Ссылка</th>${sortableTh("Охват","reach",UI.reportSort)}${sortableTh("ER","er",UI.reportSort)}${sortableTh("Клики","clicks",UI.reportSort)}${sortableTh("Продажи","sales",UI.reportSort)}${sortableTh("Выручка","revenue",UI.reportSort)}<th>Bitrix</th><th></th>
         </tr></thead>
         <tbody>
           ${rows.map(o=>{
@@ -2826,9 +2861,17 @@ function tplReport(){
               <td>${escapeHtml(driverName(o.driverCode))}</td>
               <td>${statusBadge(o.status)}</td>
               <td>${pubStatusBadge(o, pub, "rep-")}</td>
+              <td>${pub
+                  ? inlineEditSpan(pub.paidAmount>0 ? `💰 Платно · ${fmtNum(pub.paidAmount)} ₸` : `<span style="color:var(--ink-mute)">Бесплатно</span>`, pub.id, "paidAmount", pub.paidAmount||0, "number")
+                  : "—"}</td>
               <td>${escapeHtml(o.deliveredAt||"—")}</td>
-              <td>${pub?escapeHtml(pub.platform):"—"}</td>
-              <td>${pub?escapeHtml(pub.publishedAt):"—"}</td>
+              <td>${pub ? inlineEditSpan(escapeHtml(pub.platform), pub.id, "platform", pub.platform, "select", PLATFORMS) : "—"}</td>
+              <td>${pub ? inlineEditSpan(escapeHtml(pub.publishedAt||"—"), pub.id, "publishedAt", pub.publishedAt||"", "date") : "—"}</td>
+              <td>${pub
+                  ? (pub.link
+                      ? `<a href="${escapeHtml(pub.link)}" target="_blank" rel="noopener">ссылка</a> ${inlineEditSpan("✎", pub.id, "link", pub.link, "text")}`
+                      : inlineEditSpan("—", pub.id, "link", "", "text"))
+                  : "—"}</td>
               <td>${editableMeasureCell(pub, o.id, r.value?fmtNum(r.value)+reachBadge(r):"—")}</td>
               <td>${editableMeasureCell(pub, o.id, m?fmtPercent(erPercent(m)):"—")}</td>
               <td>${editableMeasureCell(pub, o.id, m&&m.clicks?fmtNum(m.clicks):"—")}</td>
@@ -2842,7 +2885,7 @@ function tplReport(){
                   : `<button class="btn btn-primary btn-sm rep-add-pub-btn" data-order="${o.id}">Отметить выложено</button>`}
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="19">Нет данных</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="21">Нет данных</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -3142,6 +3185,7 @@ function modalAddPublication(orderId){
       <div class="field"><label>Дата публикации</label><input id="m-date" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
       <div class="field"><label>Промокод</label><input id="m-promo" placeholder="Например NAME15"></div>
       <div class="field"><label>Подписчики блогера</label><input id="m-followers" type="number" value="${o.followers||0}"></div>
+      <div class="field"><label>Сумма оплаты за интеграцию, ₸ (если бесплатно — оставьте пустым)</label><input id="m-paid-amount" type="number" placeholder="0"></div>
     </div>
     <div class="login-hint" style="margin-top:6px">
       Сторис часто не имеют ссылки (исчезают за 24 часа) — можно оставить поле пустым и просто отметить, что блогер выложил.
@@ -3157,12 +3201,14 @@ function modalAddPublication(orderId){
     const btn = document.getElementById("m-save");
     const link = document.getElementById("m-link").value.trim();
     const followers = parseInt(document.getElementById("m-followers").value,10)||0;
+    const paidAmount = parseInt(document.getElementById("m-paid-amount").value,10)||0;
     try{
       await withBusy(btn, async ()=>{
         await Api.createPublication({
           orderId, platform: document.getElementById("m-platform").value,
           link, publishedAt: document.getElementById("m-date").value,
           promoCode: document.getElementById("m-promo").value.trim(),
+          paidAmount,
         });
         if(followers !== (o.followers||0)) await Api.updateOrder(orderId, {followers});
       });
@@ -3201,6 +3247,7 @@ function modalBulkMarkPosted(orderIds){
     <div class="form-row">
       <div class="field"><label>Платформа</label><select id="m-platform">${PLATFORMS.map(p=>`<option>${p}</option>`).join("")}</select></div>
       <div class="field"><label>Дата публикации</label><input id="m-date" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="field"><label>Сумма оплаты за интеграцию, ₸ (если бесплатно — оставьте пустым)</label><input id="m-paid-amount" type="number" placeholder="0"></div>
     </div>
     <div class="login-hint" style="margin-top:6px">
       Эти значения применятся ко всем выбранным. Ссылку и точные охваты/клики/продажи для отдельных публикаций
@@ -3216,10 +3263,11 @@ function modalBulkMarkPosted(orderIds){
     const btn = document.getElementById("m-save");
     const platform = document.getElementById("m-platform").value;
     const publishedAt = document.getElementById("m-date").value;
+    const paidAmount = parseInt(document.getElementById("m-paid-amount").value,10)||0;
     try{
       await withBusy(btn, async ()=>{
         for(const o of eligible){
-          await Api.createPublication({ orderId: o.id, platform, link: "", publishedAt, promoCode: "" });
+          await Api.createPublication({ orderId: o.id, platform, link: "", publishedAt, promoCode: "", paidAmount });
         }
       });
       closeModal();
@@ -4125,6 +4173,24 @@ function wireDeskTab(){
       btn.onclick = ()=>{ UI.filters.campaign = btn.dataset.id; renderDeskTab(); };
     });
 
+    // Сортировка кликом по заголовку колонки ("как в Excel") — см. sortableTh()/UI.reportSort.
+    // Первый клик по колонке ставит "сначала больше", повторный клик по той же колонке — "сначала меньше".
+    document.querySelectorAll(".th-sort").forEach(th=>{
+      th.onclick = ()=>{
+        const key = th.dataset.sortKey;
+        UI.reportSort = (UI.reportSort === key+"_desc") ? key+"_asc" : key+"_desc";
+        renderDeskTab();
+      };
+    });
+
+    // Инлайн-редактирование "по-экселевски" (см. inlineEditSpan/wireInlineEdit): платформа (select),
+    // ссылка на публикацию и сумма оплаты за интеграцию редактируются прямо в таблице кликом по
+    // значению — без карандаша и отдельной модалки. Сохранение — частичный PATCH через Api.updatePublication.
+    wireInlineEdit(document.getElementById("main"), async (id, field, value)=>{
+      await Api.updatePublication(id, {[field]: value});
+      await DataManager.refresh(); render();
+    });
+
     document.querySelectorAll(".rep-add-pub-btn").forEach(btn=>{
       btn.onclick = ()=> modalAddPublication(parseInt(btn.dataset.order,10));
     });
@@ -4165,7 +4231,7 @@ function wireDeskTab(){
     };
 
     document.getElementById("export-report-csv-btn").onclick = ()=>{
-      const header = ["ID","Блогер","Подписчики","Проект","Город","Водитель","Статус доставки","Дата доставки","Платформа","Дата публикации","Охват","Оценка охвата","ER%","Клики","Продажи шт","Выручка","Bitrix"];
+      const header = ["ID","Блогер","Подписчики","Проект","Город","Водитель","Статус доставки","Дата доставки","Тип интеграции","Сумма оплаты","Платформа","Дата публикации","Ссылка","Охват","Оценка охвата","ER%","Клики","Продажи шт","Выручка","Bitrix"];
       const lines = [header.map(csvEscape).join(",")];
       DataManager.state.orders.forEach(o=>{
         const pub = pubOf(o.id); const m = pub ? latestMeasurement(pub) : null;
@@ -4174,7 +4240,8 @@ function wireDeskTab(){
         lines.push([
           o.id, o.blogger, o.followers||0, campaignName(o.campaignId), o.city, driverName(o.driverCode),
           (STATUS_META[o.status]||{}).label || o.status, o.deliveredAt || "",
-          pub ? pub.platform : "", pub ? pub.publishedAt : "",
+          pub ? (pub.paidAmount>0 ? "Платно" : "Бесплатно") : "", pub ? (pub.paidAmount||0) : "",
+          pub ? pub.platform : "", pub ? pub.publishedAt : "", pub ? (pub.link||"") : "",
           r.value || "", r.estimated ? "да" : "нет", er!=null ? er.toFixed(1) : "",
           m && m.clicks ? m.clicks : "",
           m ? (m.salesCount||0) : "", m ? (m.salesRevenue||0) : "",
@@ -5608,6 +5675,104 @@ async function runSelfTests(){
       UI.tab = savedTab; UI.role = savedRole;
       UI.filters = JSON.parse(savedFilters);
       DataManager.state.orders = savedOrders; DataManager.state.drivers = savedDrivers; DataManager.state.campaigns = savedCampaigns;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("tplReport: колонка 'Тип интеграции' показывает Платно/Бесплатно по pub.paidAmount, ссылка/платформа — inline-edit", ()=>{
+    const savedOrders = DataManager.state.orders, savedPubs = DataManager.state.publications, savedCampaigns = DataManager.state.campaigns;
+    const savedFilters = JSON.stringify(UI.filters), savedSort = UI.reportSort;
+    try{
+      DataManager.state.campaigns = [];
+      DataManager.state.orders = [
+        {id:9930, blogger:"Платный", status:"delivered", followers:1000, city:"Алматы", address:"", deliveredAt:"2026-07-01"},
+        {id:9931, blogger:"Бесплатный", status:"delivered", followers:1000, city:"Алматы", address:"", deliveredAt:"2026-07-01"},
+        {id:9932, blogger:"Без публикации", status:"delivered", followers:1000, city:"Алматы", address:"", deliveredAt:"2026-07-01"},
+      ];
+      DataManager.state.publications = [
+        {id:9940, orderId:9930, platform:"TikTok", link:"https://tiktok.com/@x", publishedAt:"2026-07-02", paidAmount:15000, measurements:[]},
+        {id:9941, orderId:9931, platform:"Instagram Stories", link:"", publishedAt:"2026-07-03", paidAmount:0, measurements:[]},
+      ];
+      UI.filters = {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""};
+      UI.reportSort = "";
+      const html = tplReport();
+      if(!html.includes(`💰 Платно · ${fmtNum(15000)} ₸`)) throw new Error("платная интеграция должна показывать сумму: "+html);
+      if(!/data-field="paidAmount" data-type="number" data-value="0"[^>]*>.*?Бесплатно/.test(html)) throw new Error("бесплатная интеграция (paidAmount=0) должна показывать 'Бесплатно' и быть inline-editable");
+      if(!html.includes('data-field="platform" data-type="select"')) throw new Error("платформа должна быть inline-editable select");
+      if(!html.includes('data-options="[&quot;Instagram Reels&quot;,&quot;Instagram Stories&quot;,&quot;TikTok&quot;,&quot;YouTube Shorts&quot;,&quot;Отзыв / пост&quot;]"')) throw new Error("select платформы должен предлагать варианты из PLATFORMS (включая TikTok/Reels/Stories)");
+      if(!html.includes('href="https://tiktok.com/@x"')) throw new Error("заполненная ссылка на публикацию должна быть кликабельной");
+      if(!/data-field="link" data-type="text" data-value=""[^>]*>—</.test(html)) throw new Error("пустая ссылка должна показываться как '—' (inline-edit для добавления)");
+      // строка без публикации — тип интеграции, платформа и ссылка должны быть просто "—", без inline-edit
+      const rowsWithoutPub = html.split("Без публикации")[1].split("</tr>")[0];
+      if((rowsWithoutPub.match(/inline-edit/g)||[]).length) throw new Error("у заказа без публикации не должно быть inline-edit ячеек (тип/платформа/ссылка): "+rowsWithoutPub);
+    } finally {
+      DataManager.state.orders = savedOrders; DataManager.state.publications = savedPubs; DataManager.state.campaigns = savedCampaigns;
+      UI.filters = JSON.parse(savedFilters); UI.reportSort = savedSort;
+    }
+  });
+  TestSuite.test("tplReport: сортировка по клику на заголовок (Excel-style) — Охват/Выручка/Платформа сортируются по возрастанию/убыванию", ()=>{
+    const savedOrders = DataManager.state.orders, savedPubs = DataManager.state.publications, savedCampaigns = DataManager.state.campaigns;
+    const savedFilters = JSON.stringify(UI.filters), savedSort = UI.reportSort;
+    try{
+      DataManager.state.campaigns = [];
+      DataManager.state.orders = [
+        {id:9950, blogger:"A", status:"delivered", followers:1000, city:"Алматы", address:"", deliveredAt:"2026-07-01"},
+        {id:9951, blogger:"B", status:"delivered", followers:1000, city:"Алматы", address:"", deliveredAt:"2026-07-01"},
+        {id:9952, blogger:"C", status:"delivered", followers:1000, city:"Алматы", address:"", deliveredAt:"2026-07-01"},
+      ];
+      DataManager.state.publications = [
+        {id:9960, orderId:9950, platform:"TikTok", link:"", publishedAt:"2026-07-01", paidAmount:0, measurements:[{views:100, salesRevenue:1000}]},
+        {id:9961, orderId:9951, platform:"Instagram Reels", link:"", publishedAt:"2026-07-02", paidAmount:0, measurements:[{views:300, salesRevenue:3000}]},
+        {id:9962, orderId:9952, platform:"Instagram Stories", link:"", publishedAt:"2026-07-03", paidAmount:0, measurements:[{views:200, salesRevenue:2000}]},
+      ];
+      UI.filters = {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""};
+
+      const headerAsc = sortableTh("Охват","reach","");
+      if(headerAsc !== `<th class="th-sort" data-sort-key="reach">Охват</th>`) throw new Error("без активной сортировки заголовок не должен быть подсвечен: "+headerAsc);
+
+      UI.reportSort = "reach_desc";
+      let html = tplReport();
+      if(!html.includes('class="th-sort th-sort-active" data-sort-key="reach">Охват ▼')) throw new Error("при sort=reach_desc заголовок 'Охват' должен быть активным со стрелкой вниз");
+      let order = [...html.matchAll(/>([ABC])<\/td>/g)].map(m=>m[1]);
+      if(JSON.stringify(order)!==JSON.stringify(["B","C","A"])) throw new Error("сортировка 'Охват сначала больше' должна дать B(300),C(200),A(100): "+order);
+
+      UI.reportSort = "reach_asc";
+      html = tplReport();
+      if(!html.includes('class="th-sort th-sort-active" data-sort-key="reach">Охват ▲')) throw new Error("при sort=reach_asc заголовок должен быть активным со стрелкой вверх");
+      order = [...html.matchAll(/>([ABC])<\/td>/g)].map(m=>m[1]);
+      if(JSON.stringify(order)!==JSON.stringify(["A","C","B"])) throw new Error("сортировка 'Охват сначала меньше' должна дать A(100),C(200),B(300): "+order);
+
+      UI.reportSort = "revenue_desc";
+      html = tplReport();
+      order = [...html.matchAll(/>([ABC])<\/td>/g)].map(m=>m[1]);
+      if(JSON.stringify(order)!==JSON.stringify(["B","C","A"])) throw new Error("сортировка по выручке 'сначала больше' должна дать B(3000),C(2000),A(1000): "+order);
+    } finally {
+      DataManager.state.orders = savedOrders; DataManager.state.publications = savedPubs; DataManager.state.campaigns = savedCampaigns;
+      UI.filters = JSON.parse(savedFilters); UI.reportSort = savedSort;
+    }
+  });
+  TestSuite.test("wireDeskTab(report): клик по заголовку .th-sort переключает UI.reportSort (desc → asc → desc)", ()=>{
+    const savedTab = UI.tab, savedRole = UI.role, savedSort = UI.reportSort;
+    const savedOrders = DataManager.state.orders, savedPubs = DataManager.state.publications, savedCampaigns = DataManager.state.campaigns;
+    const savedFilters = JSON.stringify(UI.filters);
+    try{
+      DataManager.state.campaigns = [];
+      DataManager.state.orders = [{id:9970, blogger:"A", status:"delivered", followers:1000, city:"Алматы", address:"", deliveredAt:"2026-07-01"}];
+      DataManager.state.publications = [];
+      UI.filters = {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""};
+      UI.reportSort = "";
+      UI.role = "manager"; UI.tab = "report";
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+      renderDeskShell();
+      const th = document.querySelector('.th-sort[data-sort-key="revenue"]');
+      if(!th) throw new Error("заголовок 'Выручка' должен быть кликабельным (.th-sort)");
+      th.click();
+      if(UI.reportSort !== "revenue_desc") throw new Error("первый клик должен поставить '_desc': "+UI.reportSort);
+      document.querySelector('.th-sort[data-sort-key="revenue"]').click();
+      if(UI.reportSort !== "revenue_asc") throw new Error("повторный клик по той же колонке должен переключить на '_asc': "+UI.reportSort);
+    } finally {
+      UI.tab = savedTab; UI.role = savedRole; UI.reportSort = savedSort;
+      DataManager.state.orders = savedOrders; DataManager.state.publications = savedPubs; DataManager.state.campaigns = savedCampaigns;
+      UI.filters = JSON.parse(savedFilters);
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
