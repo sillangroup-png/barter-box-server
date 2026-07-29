@@ -592,6 +592,28 @@ app.post("/api/publications/:id/measurements", requireAuth, (req,res)=>{
   persist();
   res.json(pub);
 });
+// Частичное обновление ПОСЛЕДНЕГО замера публикации (или создание первого, если замеров ещё не
+// было) — для инлайн-редактирования одного числового поля (Охват/Клики/Продажи/Выручка) прямо в
+// "Сводном отчёте". В отличие от POST выше (который всегда добавляет новую строку в историю
+// замеров), этот эндпоинт правит last-запись на месте, чтобы клик по одному значению не плодил
+// дубли в истории замеров.
+app.patch("/api/publications/:id/measurements/latest", requireAuth, (req,res)=>{
+  const pub = state.publications.find(p=>p.id===+req.params.id);
+  if(!pub) return res.status(404).json({error:"publication not found"});
+  const b = req.body || {};
+  let m = pub.measurements[pub.measurements.length-1];
+  if(!m){
+    m = { id: nextMeasurementId(), date: new Date().toISOString().slice(0,10), views:0, likes:0, comments:0, saves:0, clicks:0, salesCount:0, salesRevenue:0, note:"" };
+    pub.measurements.push(m);
+  }
+  ["views","likes","comments","saves","clicks","salesCount","salesRevenue"].forEach(k=>{
+    if(b[k]!==undefined) m[k] = parseInt(b[k],10)||0;
+  });
+  if(b.note!==undefined) m.note = b.note;
+  if(b.date!==undefined) m.date = b.date;
+  persist();
+  res.json(pub);
+});
 
 app.post("/api/publications/import", requireAuth, (req,res)=>{
   const {rows} = req.body || {};
