@@ -742,7 +742,7 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
     productStatus: b.productStatus || "", videoStatus: b.videoStatus || "",
     reelsLink: b.reelsLink || "", factReachReels: b.factReachReels || 0,
     tiktokVideoLink: b.tiktokVideoLink || "", factReachTT: b.factReachTT || 0,
-    publishDate: b.publishDate || "", notes: b.notes || "",
+    plannedDate: b.plannedDate || "", publishDate: b.publishDate || "", notes: b.notes || "",
   };
   state.microInfluencerDeals.push(deal);
   persist();
@@ -812,6 +812,7 @@ app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
       factReachReels: parseInt(r["факт охват reels"] || 0, 10) || 0,
       tiktokVideoLink: r["ссылка на видео тт"] || r["tiktok_link"] || "",
       factReachTT: parseInt(r["факт охват тт"] || 0, 10) || 0,
+      plannedDate: r["плановая дата"] || r["дата план"] || r["planned_date"] || "",
       publishDate: r["дата выкладки"] || r["publish_date"] || "",
       notes: r["комментарий"] || r["notes"] || "",
     };
