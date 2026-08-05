@@ -1025,7 +1025,10 @@ function computeMicroInfluencerRomi(){
 }
 function microInfluencerSummary(from, to){
   let deals = DataManager.state.microInfluencerDeals;
-  if(from || to) deals = deals.filter(d=>inDateRange(d.publishDate, from, to));
+  // Фильтр по факт-дате выкладки, а если её ещё нет — по плановой (см. microDealDate()), чтобы
+  // интеграция с только плановой датой тоже попадала в свой месяц при подсчёте KPI — так же, как
+  // уже работает в microBloggerSummary()/microAvailableMonths().
+  if(from || to) deals = deals.filter(d=>inDateRange(microDealDate(d), from, to));
   // totalCost = оплата блогерам + себестоимость подаренного товара (см. microDealTotalCost).
   const totalCost = deals.reduce((s,d)=>s+microDealTotalCost(d),0);
   const totalFactReach = deals.reduce((s,d)=>s+microDealFactReach(d),0);
@@ -2661,6 +2664,13 @@ function tplInfluencerDeals(){
 /* ---------- Инфлюенс интеграции микро/средние (отв. Нина) ---------- */
 function tplMicroInfluencers(){
   const s = microInfluencerSummary();
+  // KPI-плашки (Всего интеграций/Уникальных блогеров/Сумма/Факт.охват/CPV/Опубликовано/Ещё
+  // запланировано) — отдельная сводка, пересчитываемая по тому же месяцу, что выбран в фильтре
+  // "Сводка по блогерам" чуть выше (UI.microSummaryMonth), а не по всей истории целиком. Раздельно
+  // от "s" (который остаётся базой для самой детальной таблицы ниже — у неё свой фильтр mf.month),
+  // чтобы выбор месяца в одном месте не переключал незаметно и содержимое другого.
+  const summaryMonth = UI.microSummaryMonth;
+  const kpi_s = summaryMonth ? microInfluencerSummary(summaryMonth+"-01", monthEnd(summaryMonth)) : s;
   const mf = UI.microFilter;
   let deals = s.deals;
   if(mf.search){
@@ -2715,14 +2725,15 @@ function tplMicroInfluencers(){
     ${tplMicroInfluencerCompare(s.romiRows)}
     ${tplMicroBloggerSummary()}
 
+    <div class="login-hint" style="margin-bottom:6px">Метрики ниже — за ${summaryMonth?monthLabel(summaryMonth):'весь период'} (см. фильтр "Месяц" в сводке по блогерам выше)</div>
     <div class="grid-kpi">
-      <div class="kpi"><div class="num">${s.count}</div><div class="lbl">Всего интеграций</div></div>
-      <div class="kpi"><div class="num">${s.uniqueBloggerCount}</div><div class="lbl">Уникальных блогеров (один может продавать пакетом несколько интеграций)</div></div>
-      <div class="kpi bad"><div class="num">${fmtNum(s.totalCost)} ₸</div><div class="lbl">Сумма (${s.paidCount} оплачено, ${s.toPayCount} к оплате, ${s.unpaidCount} не оплачено)</div></div>
-      <div class="kpi ok"><div class="num">${fmtNum(s.totalFactReach)}</div><div class="lbl">Факт.охват (Reels+TikTok)</div></div>
-      <div class="kpi"><div class="num">${s.avgCpv==null?'—':s.avgCpv.toFixed(3)+' ₸'}</div><div class="lbl">Средний CPV (сумма/факт.охват)</div></div>
-      <div class="kpi"><div class="num">${s.publishedCount}</div><div class="lbl">Опубликовано видео (план ${s.count})</div></div>
-      <div class="kpi warn"><div class="num">${s.pendingCount}</div><div class="lbl">Ещё запланировано (не оплачено и не опубликовано)</div></div>
+      <div class="kpi"><div class="num">${kpi_s.count}</div><div class="lbl">Всего интеграций</div></div>
+      <div class="kpi"><div class="num">${kpi_s.uniqueBloggerCount}</div><div class="lbl">Уникальных блогеров (один может продавать пакетом несколько интеграций)</div></div>
+      <div class="kpi bad"><div class="num">${fmtNum(kpi_s.totalCost)} ₸</div><div class="lbl">Сумма (${kpi_s.paidCount} оплачено, ${kpi_s.toPayCount} к оплате, ${kpi_s.unpaidCount} не оплачено)</div></div>
+      <div class="kpi ok"><div class="num">${fmtNum(kpi_s.totalFactReach)}</div><div class="lbl">Факт.охват (Reels+TikTok)</div></div>
+      <div class="kpi"><div class="num">${kpi_s.avgCpv==null?'—':kpi_s.avgCpv.toFixed(3)+' ₸'}</div><div class="lbl">Средний CPV (сумма/факт.охват)</div></div>
+      <div class="kpi"><div class="num">${kpi_s.publishedCount}</div><div class="lbl">Опубликовано видео (план ${kpi_s.count})</div></div>
+      <div class="kpi warn"><div class="num">${kpi_s.pendingCount}</div><div class="lbl">Ещё запланировано (не оплачено и не опубликовано)</div></div>
     </div>
     <div class="panel">
       <div class="panel-title">
@@ -5397,6 +5408,36 @@ async function runSelfTests(){
       if(html.includes("Июньский факт")) throw new Error("при фильтре по сентябрю не должно быть июньской записи");
     } finally {
       DataManager.state.microInfluencerDeals = saved;
+      UI.microFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("tplMicroInfluencers: KPI-плашки (Всего интеграций и др.) пересчитываются по UI.microSummaryMonth, а не по всей истории", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedSummaryMonth = UI.microSummaryMonth;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9210, blogerName:"Августовский", cost:500, factReachReels:500, factReachTT:0, publishDate:"2026-08-05", plannedDate:"", paymentStatus:"оплачено"},
+        {id:9211, blogerName:"Июньский", cost:800, factReachReels:800, factReachTT:0, publishDate:"2026-06-05", plannedDate:"", paymentStatus:"оплачено"},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:"", month:""};
+      const kpiGridOnly = h=> h.slice(0, h.indexOf("Инфлюенс интеграции микро/средние"));
+
+      UI.microSummaryMonth = "";
+      let html = kpiGridOnly(tplMicroInfluencers());
+      if(!/<div class="num">2<\/div><div class="lbl">Всего интеграций/.test(html)) throw new Error("при 'весь период' должны учитываться обе интеграции: "+html);
+      if(!html.includes("за весь период")) throw new Error("подпись должна говорить 'за весь период' при пустом фильтре");
+      if(!html.includes("1 300")) throw new Error("сумма за весь период должна быть 500+800=1300: "+html);
+
+      UI.microSummaryMonth = "2026-08";
+      html = kpiGridOnly(tplMicroInfluencers());
+      if(!/<div class="num">1<\/div><div class="lbl">Всего интеграций/.test(html)) throw new Error("при фильтре 'август' должна остаться только 1 интеграция: "+html);
+      if(!html.includes("500")) throw new Error("сумма/охват должны пересчитаться по августу (500), а не по всей истории (1300): "+html);
+      if(html.includes("1 300")) throw new Error("при фильтре 'август' не должна показываться сумма за весь период (1300)");
+      if(html.includes("Август 2026") === false) throw new Error("подпись должна показывать выбранный месяц");
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+      UI.microSummaryMonth = savedSummaryMonth;
       UI.microFilter = JSON.parse(savedFilter);
     }
   });
