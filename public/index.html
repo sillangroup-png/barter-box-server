@@ -1005,7 +1005,11 @@ function microDealCpv(d){
 }
 // Дата интеграции для фильтров/сравнения периодов у микро/средних — просто дата выкладки
 // (в отличие от крупных, тут нет отдельной план-даты).
-function microDealDate(d){ return d.publishDate || ""; }
+// Дата интеграции для фильтров/месячных вкладок: факт-дата выкладки, а если её ещё нет (видео
+// ещё не вышло) — плановая дата публикации (см. поле "Плановая дата" в таблице/модалке) — так
+// девочки могут занести в график дату будущей публикации и сразу увидеть интеграцию в нужном
+// месяце, не дожидаясь факта. Ровно та же логика, что у inflDealDate() для крупных интеграций.
+function microDealDate(d){ return d.publishDate || d.plannedDate || ""; }
 function microDealMatchKey(d){ return (d.barcode||"").trim() || d.product; }
 // Тот же decay-движок ROMI, что и computeInfluencerRomi, и считается ОДНИМ общим расчётом
 // вместе с крупными интеграциями (см. комментарий у computeUnifiedInfluencerRomi выше) — так
@@ -1629,7 +1633,7 @@ const UI = {
   reportPeriod: {from:"", to:""}, // период (по дате публикации) для сводки "Сколько выложили" в верхней части "Сводного отчёта" — см. reportPeriodSummary()
   reportOnlyWaiting: false, // фильтр "Сводного отчёта": показывать только доставленные, но ещё не выложенные (чтобы обзванивать блогеров)
   inflFilter: {search:"", sort:"default", month:""},
-  microFilter: {search:"", sort:"default", paymentStatus:""},
+  microFilter: {search:"", sort:"default", paymentStatus:"", month:""},
   inflDashMonth: "", // выбранный месяц в новом стилизованном дашборде "Платный инфлюенс" (см. tplInfluencerBrandDashboard)
   inflCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
   microDashMonth: "", // выбранный месяц в дашборде "Микро/средние" (см. tplMicroInfluencerBrandDashboard)
@@ -2674,6 +2678,12 @@ function tplMicroInfluencers(){
   if(mf.paymentStatus){
     deals = deals.filter(d=> d.paymentStatus===mf.paymentStatus);
   }
+  // Фильтр по месяцу (план или факт даты выкладки, см. microDealDate()) — чтобы девочки могли
+  // занести в таблицу плановую дату будущей публикации и сразу увидеть её сгруппированной по
+  // нужному месяцу, как в графике/календаре, не дожидаясь факта.
+  if(mf.month){
+    deals = deals.filter(d=> microDealDate(d).slice(0,7)===mf.month);
+  }
   // Вклад в продажи/ROMI посчитаны в microInfluencerSummary() через romiRows — раскладываем
   // по id сделки, чтобы показать в таблице рядом с каждой интеграцией (как в "Инфлюенс интеграции крупные").
   const romiById = {};
@@ -2738,6 +2748,10 @@ function tplMicroInfluencers(){
           <option value="">Все статусы оплаты</option>
           ${MICRO_PAYMENT_STATUSES.map(st=>`<option value="${st}" ${mf.paymentStatus===st?'selected':''}>${st}</option>`).join("")}
         </select>
+        <select id="micro-month-filter">
+          <option value="">Все месяцы</option>
+          ${microAvailableMonths().map(m=>`<option value="${m}" ${mf.month===m?'selected':''}>${escapeHtml(monthLabel(m))}</option>`).join("")}
+        </select>
         <select id="micro-sort">
           <option value="default" ${mf.sort==='default'?'selected':''}>Без сортировки</option>
           <option value="cost_desc" ${mf.sort==='cost_desc'?'selected':''}>Сумма: сначала больше</option>
@@ -2759,7 +2773,9 @@ function tplMicroInfluencers(){
         Enter или клик вне поля сохраняет, Esc отменяет. Карандаш ✎ по-прежнему открывает полную форму,
         если нужно поле, которого нет в таблице. Колонки CPV, «Вклад в продажи» и ROMI считаются
         автоматически (по сумме, стоимости товара, факт.охвату и продажам из 1С) и вручную не редактируются —
-        поменяются сами, если поправить факт.охват или сумму.
+        поменяются сами, если поправить факт.охват или сумму. Колонка «Плановая дата» — чтобы занести
+        будущую публикацию в график заранее: фильтр «Все месяцы» и группировки по месяцам (дашборд выше,
+        сводка по блогерам) учитывают её, пока нет факт-даты выкладки.
       </div>
       ${(()=>{
         const dealIds = deals.map(d=>d.id);
@@ -2777,7 +2793,7 @@ function tplMicroInfluencers(){
           <th class="sticky-col">Блогер</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
           ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
           ${sortableTh("Вклад в продажи","sales",mf.sort)}${sortableTh("ROMI","romi",mf.sort)}
-          <th>Статус товара</th><th>Статус видео</th><th>Дата выкладки</th><th>Ссылка на Reels</th><th></th>
+          <th>Статус товара</th><th>Статус видео</th><th>Плановая дата</th><th>Дата выкладки</th><th>Ссылка на Reels</th><th></th>
         </tr></thead>
         <tbody>
           ${deals.map((d,i)=>{
@@ -2802,6 +2818,7 @@ function tplMicroInfluencers(){
               <td title="Считается автоматически: вклад в продажи ÷ (сумма + стоимость товара)">${(r && r.romi!=null) ? r.romi.toFixed(2) : "—"}</td>
               <td>${inlineEditSpan(escapeHtml(d.productStatus||"—"), d.id, 'productStatus', d.productStatus||'', 'select', MICRO_PRODUCT_STATUSES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.videoStatus||"—"), d.id, 'videoStatus', d.videoStatus||'', 'select', MICRO_VIDEO_STATUSES)}</td>
+              <td>${inlineEditSpan(escapeHtml(d.plannedDate||"—"), d.id, 'plannedDate', d.plannedDate||'', 'date')}</td>
               <td>${inlineEditSpan(escapeHtml(d.publishDate||"—"), d.id, 'publishDate', d.publishDate||'', 'date')}</td>
               <td>${d.reelsLink
                 ? `<a href="${escapeHtml(d.reelsLink)}" target="_blank" rel="noopener">${escapeHtml(d.reelsLink)}</a> ${inlineEditSpan("✎", d.id, 'reelsLink', d.reelsLink, 'text')}`
@@ -2811,7 +2828,7 @@ function tplMicroInfluencers(){
                 <button class="btn btn-danger btn-sm del-micro-btn" data-id="${d.id}">✕</button>
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="19">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="20">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -3610,7 +3627,7 @@ function modalMicroDeal(existing){
     product:"", barcode:"", productCategory:"",
     productStatus: MICRO_PRODUCT_STATUSES[0], videoStatus: MICRO_VIDEO_STATUSES[0],
     reelsLink:"", factReachReels:0, tiktokVideoLink:"", factReachTT:0,
-    publishDate:"", notes:"",
+    plannedDate:"", publishDate:"", notes:"",
   };
   openModal(`
     <h3>${isEdit?'Изменить':'Новая'} интеграция · Инфлюенс микро/средние</h3>
@@ -3658,7 +3675,11 @@ function modalMicroDeal(existing){
       <div class="field"><label>Ссылка на видео TikTok</label><input id="mm-tt-link" value="${escapeHtml(d.tiktokVideoLink||'')}"></div>
       <div class="field"><label>Факт.охват TikTok</label><input id="mm-fact-reach-tt" type="number" value="${d.factReachTT||0}"></div>
     </div>
-    <div class="field"><label>Дата выкладки</label><input id="mm-publish-date" type="date" value="${d.publishDate||''}"></div>
+    <div class="form-row">
+      <div class="field"><label>Плановая дата публикации</label><input id="mm-planned-date" type="date" value="${d.plannedDate||''}"></div>
+      <div class="field"><label>Дата выкладки (факт)</label><input id="mm-publish-date" type="date" value="${d.publishDate||''}"></div>
+    </div>
+    <div class="login-hint">Плановая дата — чтобы интеграция сразу попала в нужный месяц фильтра/графика, даже если видео ещё не вышло. Как только появится факт-дата выкладки — используется она.</div>
     <div class="field"><label>Комментарий</label><textarea id="mm-notes">${escapeHtml(d.notes||"")}</textarea></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="mm-cancel">Отмена</button>
@@ -3698,6 +3719,7 @@ function modalMicroDeal(existing){
       factReachReels: parseInt(document.getElementById("mm-fact-reach-reels").value,10)||0,
       tiktokVideoLink: document.getElementById("mm-tt-link").value.trim(),
       factReachTT: parseInt(document.getElementById("mm-fact-reach-tt").value,10)||0,
+      plannedDate: document.getElementById("mm-planned-date").value,
       publishDate: document.getElementById("mm-publish-date").value,
       notes: document.getElementById("mm-notes").value.trim(),
     };
@@ -4174,6 +4196,7 @@ function wireDeskTab(){
     const microSearch = document.getElementById("micro-search");
     wireSearchOnEnter(microSearch, v=>{ UI.microFilter.search = v; renderDeskTab(); });
     document.getElementById("micro-payment-filter").onchange = e=>{ UI.microFilter.paymentStatus = e.target.value; renderDeskTab(); };
+    document.getElementById("micro-month-filter").onchange = e=>{ UI.microFilter.month = e.target.value; renderDeskTab(); };
     document.getElementById("micro-sort").onchange = e=>{ UI.microFilter.sort = e.target.value; renderDeskTab(); };
     // Сортировка кликом по заголовку колонки ("как в Excel") — см. sortableTh(). Первый клик по
     // колонке ставит "сначала больше", повторный клик по той же колонке — переключает на
@@ -4267,14 +4290,14 @@ function wireDeskTab(){
     });
 
     document.getElementById("template-micro-csv-btn").onclick = ()=>{
-      const header = ["id","блогер","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","дата выкладки","комментарий"];
-      const example = ["","@small_blogger","+77001234567","Алматы","","https://instagram.com/small_blogger","15000","3.2","2000","https://tiktok.com/@small_blogger","8000","4.1","1500","30000","5000","не оплачено","Kaspi","000000000000","1 сторис + 1 reels","Питательный бальзам для губ","4620400203663","Уход","товар заказан","не опубликовано","","0","","0","2026-07-20",""];
+      const header = ["id","блогер","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий"];
+      const example = ["","@small_blogger","+77001234567","Алматы","","https://instagram.com/small_blogger","15000","3.2","2000","https://tiktok.com/@small_blogger","8000","4.1","1500","30000","5000","не оплачено","Kaspi","000000000000","1 сторис + 1 reels","Питательный бальзам для губ","4620400203663","Уход","товар заказан","не опубликовано","","0","","0","2026-07-15","2026-07-20",""];
       const csv = [header, example].map(row=>row.map(csvEscape).join(",")).join("\n");
       downloadFile("barter-box-micro-influencers-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
       toast("Шаблон скачан");
     };
     document.getElementById("export-micro-csv-btn").onclick = ()=>{
-      const header = ["id","блогер","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","дата выкладки","комментарий"];
+      const header = ["id","блогер","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий"];
       const lines = [header.map(csvEscape).join(",")];
       // "deals" — переменная из tplMicroInfluencers() (учитывает поиск/фильтр), а этот обработчик
       // живёт в wireDeskTab() — отдельной функции, где такой переменной нет. Раньше это падало
@@ -4291,7 +4314,7 @@ function wireDeskTab(){
           d.product||"", d.barcode||"", d.productCategory||"",
           d.productStatus||"", d.videoStatus||"",
           d.reelsLink||"", d.factReachReels||0, d.tiktokVideoLink||"", d.factReachTT||0,
-          d.publishDate||"", d.notes||"",
+          d.plannedDate||"", d.publishDate||"", d.notes||"",
         ].map(csvEscape).join(","));
       });
       downloadFile("barter-box-micro-influencers-export.csv", "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
@@ -5328,6 +5351,99 @@ async function runSelfTests(){
     } finally {
       DataManager.state.microInfluencerDeals = saved;
       UI.microFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("microDealDate(): факт-дата выкладки в приоритете, плановая дата — фолбэк, если факта ещё нет", ()=>{
+    if(microDealDate({publishDate:"2026-07-10", plannedDate:"2026-07-01"}) !== "2026-07-10") throw new Error("при наличии факт-даты она должна быть в приоритете");
+    if(microDealDate({publishDate:"", plannedDate:"2026-07-01"}) !== "2026-07-01") throw new Error("без факт-даты должна использоваться плановая");
+    if(microDealDate({}) !== "") throw new Error("без обеих дат должна вернуться пустая строка");
+  });
+  TestSuite.test("microAvailableMonths(): учитывает плановую дату у интеграций без факт-даты выкладки", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9112, blogerName:"Факт", publishDate:"2026-06-05", plannedDate:""},
+        {id:9113, blogerName:"План", publishDate:"", plannedDate:"2026-09-12"},
+        {id:9114, blogerName:"Без дат", publishDate:"", plannedDate:""},
+      ];
+      const months = microAvailableMonths();
+      if(!months.includes("2026-06")) throw new Error("должен попасть месяц факт-даты: "+JSON.stringify(months));
+      if(!months.includes("2026-09")) throw new Error("должен попасть месяц плановой даты (факта ещё нет): "+JSON.stringify(months));
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+    }
+  });
+  TestSuite.test("tplMicroInfluencers: колонка 'Плановая дата' — inline-editable, фильтр 'Все месяцы' учитывает план/факт даты", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9115, blogerName:"Июньский факт", cost:1000, publishDate:"2026-06-05", plannedDate:""},
+        {id:9116, blogerName:"Сентябрьский план", cost:1000, publishDate:"", plannedDate:"2026-09-12"},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:"", month:""};
+      // Дашборд/сравнение периодов/сводка по блогерам выше детальной таблицы (см. tplMicroInfluencers())
+      // перечисляют блогеров независимо от mf.month (у них свои отдельные периоды) — обрезаем html до
+      // начала самой детальной таблицы, чтобы регексы ниже проверяли только её, а не всю страницу целиком.
+      const detailTableOnly = h=> h.slice(h.indexOf("Инфлюенс интеграции микро/средние"));
+      let html = tplMicroInfluencers();
+      if(!/data-field="plannedDate" data-type="date" data-value="2026-09-12"/.test(html)) throw new Error("'Плановая дата' должна быть inline-editable (date)");
+      if(!html.includes('<option value="2026-06"')) throw new Error("фильтр месяцев должен предлагать июнь (по факт-дате)");
+      if(!html.includes('<option value="2026-09"')) throw new Error("фильтр месяцев должен предлагать сентябрь (по плановой дате)");
+
+      UI.microFilter.month = "2026-09";
+      html = detailTableOnly(tplMicroInfluencers());
+      if(!html.includes("Сентябрьский план")) throw new Error("при фильтре по сентябрю должна остаться запись с плановой датой в сентябре");
+      if(html.includes("Июньский факт")) throw new Error("при фильтре по сентябрю не должно быть июньской записи");
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+      UI.microFilter = JSON.parse(savedFilter);
+    }
+  });
+  TestSuite.test("wireDeskTab(microInfluencers): выбор месяца в фильтре обновляет UI.microFilter.month", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    const savedTab = UI.tab;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9117, blogerName:"Тест Месяц", cost:1000, publishDate:"2026-08-01", plannedDate:""},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:"", month:""};
+      UI.tab = "microInfluencers";
+      document.body.innerHTML = '<main id="main"></main><div id="toast"></div>';
+      document.getElementById("main").innerHTML = tplMicroInfluencers();
+      wireDeskTab();
+      const monthSelect = document.getElementById("micro-month-filter");
+      if(!monthSelect) throw new Error("фильтр 'micro-month-filter' должен быть в DOM после wireDeskTab()");
+      monthSelect.value = "2026-08";
+      monthSelect.dispatchEvent(new Event("change"));
+      if(UI.microFilter.month !== "2026-08") throw new Error("выбор месяца должен обновить UI.microFilter.month: "+UI.microFilter.month);
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+      UI.microFilter = JSON.parse(savedFilter);
+      UI.tab = savedTab;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("modalMicroDeal(): форма содержит поле 'Плановая дата публикации' (mm-planned-date), payload передаёт plannedDate при сохранении", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const origFetch = window.fetch;
+    try{
+      DataManager.state.microInfluencerDeals = [];
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+      modalMicroDeal(null);
+      const input = document.getElementById("mm-planned-date");
+      if(!input) throw new Error("в модалке должно быть поле mm-planned-date");
+      document.getElementById("mm-name").value = "Плановый Тест";
+      input.value = "2026-10-05";
+      let captured = null;
+      window.fetch = (url, opts)=>{ captured = {url, opts}; return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({id:1})}); };
+      document.getElementById("mm-save").onclick();
+      if(!captured || !captured.opts.body.includes('"plannedDate":"2026-10-05"')) throw new Error("payload сохранения должен включать plannedDate: "+(captured&&captured.opts.body));
+    } finally {
+      window.fetch = origFetch;
+      DataManager.state.microInfluencerDeals = savedDeals;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
   TestSuite.test("tplMicroInfluencers: слева есть чекбоксы массового выбора (check-all + построчные), панель массового удаления скрыта без выбора", ()=>{
