@@ -632,20 +632,29 @@ function latestMeasurement(pub){
   return (pub && pub.measurements && pub.measurements.length) ? pub.measurements[pub.measurements.length-1] : null;
 }
 // Быстрые пресеты периода для фильтра "по неделе / по конкретной дате" на дашборде маркетолога.
-function todayStr(){ return new Date().toISOString().slice(0,10); }
+// Локальная дата в формате YYYY-MM-DD — НЕ использовать d.toISOString().slice(0,10) для этого:
+// toISOString() всегда переводит в UTC, а у нас пользователи в Казахстане (UTC+5), поэтому
+// полночь по местному времени — это ещё "вчера" по UTC, и такая конвертация систематически
+// сдвигает "сегодня"/границы недели/месяца на день назад (например, "Этот месяц" на дашборде
+// показывал 31.07-30.08 вместо 01.08-31.08 — из-за этого охват в разных виджетах не сходился).
+function toLocalYMD(d){
+  const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,"0"), day = String(d.getDate()).padStart(2,"0");
+  return `${y}-${m}-${day}`;
+}
+function todayStr(){ return toLocalYMD(new Date()); }
 function weekRangeStr(){
   const now = new Date();
   const day = now.getDay(); // 0=вс,1=пн...6=сб
   const diffToMonday = day===0 ? -6 : 1-day;
   const monday = new Date(now); monday.setDate(now.getDate()+diffToMonday);
   const sunday = new Date(monday); sunday.setDate(monday.getDate()+6);
-  return {from: monday.toISOString().slice(0,10), to: sunday.toISOString().slice(0,10)};
+  return {from: toLocalYMD(monday), to: toLocalYMD(sunday)};
 }
 function monthRangeStr(){
   const now = new Date();
   const first = new Date(now.getFullYear(), now.getMonth(), 1);
   const last = new Date(now.getFullYear(), now.getMonth()+1, 0);
-  return {from: first.toISOString().slice(0,10), to: last.toISOString().slice(0,10)};
+  return {from: toLocalYMD(first), to: toLocalYMD(last)};
 }
 function erPercent(m){
   if(!m || !m.views) return null;
@@ -3363,7 +3372,7 @@ function modalAddPublication(orderId){
     <div class="form-row">
       <div class="field"><label>Платформа</label><select id="m-platform">${PLATFORMS.map(p=>`<option>${p}</option>`).join("")}</select></div>
       <div class="field"><label>Ссылка (необязательно для сторис)</label><input id="m-link" placeholder="https://instagram.com/..."></div>
-      <div class="field"><label>Дата публикации</label><input id="m-date" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="field"><label>Дата публикации</label><input id="m-date" type="date" value="${todayStr()}"></div>
       <div class="field"><label>Промокод</label><input id="m-promo" placeholder="Например NAME15"></div>
       <div class="field"><label>Подписчики блогера</label><input id="m-followers" type="number" value="${o.followers||0}"></div>
       <div class="field"><label>Сумма оплаты за интеграцию, ₸ (если бесплатно — оставьте пустым)</label><input id="m-paid-amount" type="number" placeholder="0"></div>
@@ -3427,7 +3436,7 @@ function modalBulkMarkPosted(orderIds){
     </div>` : ""}
     <div class="form-row">
       <div class="field"><label>Платформа</label><select id="m-platform">${PLATFORMS.map(p=>`<option>${p}</option>`).join("")}</select></div>
-      <div class="field"><label>Дата публикации</label><input id="m-date" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="field"><label>Дата публикации</label><input id="m-date" type="date" value="${todayStr()}"></div>
       <div class="field"><label>Сумма оплаты за интеграцию, ₸ (если бесплатно — оставьте пустым)</label><input id="m-paid-amount" type="number" placeholder="0"></div>
     </div>
     <div class="login-hint" style="margin-top:6px">
@@ -3467,7 +3476,7 @@ function modalAddMeasurement(orderId, isFirst){
   openModal(`
     <h3>Замер охвата · ${escapeHtml(o.blogger)}</h3>
     <div class="form-row">
-      <div class="field"><label>Дата замера</label><input id="m-mdate" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="field"><label>Дата замера</label><input id="m-mdate" type="date" value="${todayStr()}"></div>
       <div class="field"><label>Просмотры</label><input id="m-views" type="number" value="0"></div>
       <div class="field"><label>Лайки</label><input id="m-likes" type="number" value="0"></div>
       <div class="field"><label>Комментарии</label><input id="m-comments" type="number" value="0"></div>
@@ -3595,7 +3604,7 @@ function modalDeal(existing){
 }
 
 function modalSale(){
-  const today = new Date().toISOString().slice(0,10);
+  const today = todayStr();
   openModal(`
     <h3>Продажи за день (из 1С)</h3>
     <div class="form-row">
@@ -4725,6 +4734,22 @@ async function runSelfTests(){
     Object.keys(STATUS_META).forEach(k=>{
       if(!statusBadge(k).includes(STATUS_META[k].label)) throw new Error("badge label mismatch for "+k);
     });
+  });
+  TestSuite.test("toLocalYMD()/todayStr()/weekRangeStr()/monthRangeStr(): считают дату по локальным компонентам, а не через toISOString() (у пользователей в Казахстане UTC+5, и toISOString() переводит в UTC — полночь по местному времени ещё 'вчера' по UTC, из-за чего 'Этот месяц'/'Сегодня' раньше сдвигались на день назад и охват на дашборде не сходился с охватом на вкладке)", ()=>{
+    const pad2 = n=> String(n).padStart(2,"0");
+    const localStr = d=> `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+    // Опорная точка — 1 и последний день конкретного месяца (не "сегодня", чтобы тест не зависел
+    // от даты запуска): раньше toLocalYMD(new Date(2026,7,1)) в часовом поясе впереди UTC съезжал
+    // на "2026-07-31" из-за new Date(...).toISOString().slice(0,10) внутри todayStr/monthRangeStr.
+    const first = new Date(2026,7,1), last = new Date(2026,7,31);
+    if(toLocalYMD(first) !== "2026-08-01") throw new Error("toLocalYMD(1 авг 2026) должен быть 2026-08-01, а не "+toLocalYMD(first));
+    if(toLocalYMD(last) !== "2026-08-31") throw new Error("toLocalYMD(31 авг 2026) должен быть 2026-08-31, а не "+toLocalYMD(last));
+    if(todayStr() !== localStr(new Date())) throw new Error("todayStr() должен совпадать с локальной датой 'сегодня': "+todayStr());
+    const now = new Date();
+    const expectedFirst = localStr(new Date(now.getFullYear(), now.getMonth(), 1));
+    const expectedLast = localStr(new Date(now.getFullYear(), now.getMonth()+1, 0));
+    const mo = monthRangeStr();
+    if(mo.from !== expectedFirst || mo.to !== expectedLast) throw new Error("monthRangeStr() должен вернуть границы текущего месяца по локальному времени: "+JSON.stringify(mo)+" ожидалось "+expectedFirst+"—"+expectedLast);
   });
   TestSuite.test("csvEscape оборачивает поля с запятой в кавычки", ()=>{
     if(csvEscape("a,b") !== '"a,b"') throw new Error("csv escape failed");
