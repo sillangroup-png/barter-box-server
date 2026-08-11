@@ -133,6 +133,31 @@ tr:hover td.sticky-col{background:#fafcfe}
 .phone-toggle[open] summary{margin-bottom:2px}
 .phone-toggle a{font-size:11px;white-space:nowrap}
 
+/* "Планер блогеров" (см. tplMicroCalendar) — календарная сетка планов публикаций микро/средних
+   интеграций по месяцам, цвет карточки/точки — по блогеру (см. bloggerColor). */
+.planner-cal{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.planner-cal-head{font-size:11px;font-weight:700;color:var(--ink-mute);text-align:center;padding:2px 0 6px;text-transform:uppercase}
+.planner-day{border:1px solid var(--line);border-radius:8px;padding:6px;min-height:96px;background:#fff;display:flex;flex-direction:column;gap:4px}
+.planner-day.out{background:#f7f9fb}
+.planner-day.out .planner-day-head span:first-child{color:var(--ink-mute)}
+.planner-day.today{border-color:var(--action);box-shadow:0 0 0 1px var(--action)}
+.planner-day-head{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--ink-soft);font-weight:600}
+.planner-day.today .planner-day-head span:first-child{color:var(--action)}
+.planner-day-add{width:18px;height:18px;border-radius:5px;background:#eef3f7;color:var(--ink-mute);border:none;font-size:13px;line-height:1;display:grid;place-items:center;cursor:pointer;flex:none}
+.planner-day-add:hover{background:#e2e9ef;color:var(--ink)}
+.planner-card{border-radius:6px;padding:4px 6px;font-size:11.3px;position:relative;border-left:3px solid var(--c,var(--action));cursor:pointer}
+.planner-card.done{background:#f7f9fb;color:var(--ink-mute);border-left-color:var(--line-2)}
+.planner-card b{display:flex;align-items:center;gap:4px;font-weight:700;font-size:11.5px;padding-right:12px}
+.planner-card a{color:inherit;text-decoration:none}
+.planner-card a:hover{text-decoration:underline}
+.planner-card .dot{width:7px;height:7px;border-radius:50%;background:var(--c,var(--action));flex:none;display:inline-block}
+.planner-card .prod{color:var(--ink-mute);margin-top:1px}
+.planner-card .rm{position:absolute;top:3px;right:4px;border:none;background:none;color:var(--ink-mute);cursor:pointer;font-size:12px;line-height:1;padding:2px}
+.planner-card .rm:hover{color:var(--bad)}
+.planner-chip{border:1px solid var(--line-2);border-radius:20px;padding:4px 10px 4px 8px;font-size:12px;font-weight:600;display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:#fff;color:var(--ink)}
+.planner-chip .dot{width:8px;height:8px;border-radius:50%;background:var(--c,var(--action))}
+.planner-chip.inactive{opacity:.4}
+
 /* Заголовки таблиц с сортировкой по клику (как в Excel) — см. sortableTh(). Клик по заголовку
    ставит сортировку "сначала больше" по этой колонке, повторный клик по той же — переключает
    на "сначала меньше"; клик по другой колонке снова начинает с "сначала больше". */
@@ -1652,6 +1677,8 @@ const UI = {
   microCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
   microSummaryMonth: "", // выбранный месяц в сводке "по блогерам" перед таблицей интеграций (см. tplMicroBloggerSummary)
   microSummaryExpanded: false, // "Сводка по блогерам" свёрнута до 10 строк, пока не нажата "Показать все"
+  calendarMonth: "", // выбранный месяц в "Планере блогеров" (см. tplMicroCalendar) — "YYYY-MM", пусто = текущий месяц
+  calendarHiddenBloggers: new Set(), // блогеры, скрытые из календаря кликом по чипу-легенде (по умолчанию видны все)
   dashExpenseCampaign: "", // фильтр проекта в панели "Расходы на бартер" дашборда менеджера: "" = все проекты (с разрезом по каждому)
   inflTopFilter: {from:"", to:""},
   dashPeriod: {from:"", to:""}, // фильтр по периоду на главном дашборде маркетолога (диапазон/неделя/конкретная дата)
@@ -1797,6 +1824,7 @@ const MARKETER_TABS = [
   {id:"publications",     label:"Публикации и охваты"},
   {id:"influencerDeals",  label:"Инфлюенс интеграции крупные"},
   {id:"microInfluencers", label:"Инфлюенс интеграции микро/средние"},
+  {id:"microCalendar",    label:"Планер блогеров"},
   {id:"report",           label:"Сводный отчёт"},
 ];
 function tabsForRole(){ return UI.role==="marketer" ? MARKETER_TABS : MANAGER_TABS; }
@@ -1869,6 +1897,7 @@ function renderDeskTab(){
   else if(UI.tab==="topBloggers") main.innerHTML = tplTopBloggers();
   else if(UI.tab==="influencerDeals") main.innerHTML = tplInfluencerDeals();
   else if(UI.tab==="microInfluencers") main.innerHTML = tplMicroInfluencers();
+  else if(UI.tab==="microCalendar") main.innerHTML = tplMicroCalendar();
   else if(UI.tab==="report") main.innerHTML = tplReport();
   wireDeskTab();
   if(scrollPositions.length){
@@ -3635,9 +3664,124 @@ function modalSale(){
   };
 }
 
-function modalMicroDeal(existing){
+/* ---------- "Планер блогеров" — календарь плановых/фактических дат публикаций (см. AskUserQuestion
+   в диалоге: план, если есть, иначе факт — та же логика, что и у microDealDate(); ссылка в карточке —
+   Instagram, если заполнен, иначе TikTok). ---------- */
+// Фиксированная палитра "цвет/светлый фон" для карточек по блогеру — детерминированно выбирается
+// по хэшу имени, чтобы один и тот же блогер везде в календаре был одного цвета.
+const CALENDAR_PALETTE = [
+  {c:"#7b6fd0", bg:"#efecfb"}, {c:"#2f9ec6", bg:"#e6f4fa"}, {c:"#d5638a", bg:"#fbe9ef"},
+  {c:"#c98a2f", bg:"#f7eeda"}, {c:"#3fae53", bg:"#e8f7ec"}, {c:"#338af3", bg:"#e8f1fd"},
+  {c:"#d94f4f", bg:"#fbe9e9"}, {c:"#a367c9", bg:"#f2ebfa"}, {c:"#1fa8a3", bg:"#e3f6f5"},
+  {c:"#7c8a3f", bg:"#eef2df"},
+];
+function bloggerColor(name){
+  const s = name || "—";
+  let h = 0;
+  for(let i=0;i<s.length;i++){ h = (h*31 + s.charCodeAt(i)) | 0; }
+  return CALENDAR_PALETTE[Math.abs(h) % CALENDAR_PALETTE.length];
+}
+// Список дат ("YYYY-MM-DD") полными неделями (Пн—Вс), покрывающими месяц ym целиком —
+// включая "серые" дни соседних месяцев, чтобы сетка календаря была без дыр по краям.
+function monthGridDates(ym){
+  const [y,m] = ym.split("-").map(Number);
+  const first = new Date(y, m-1, 1);
+  const startOffset = (first.getDay()+6)%7; // 0=Пн ... 6=Вс
+  const gridStart = new Date(y, m-1, 1-startOffset);
+  const last = new Date(y, m, 0);
+  const lastOffset = (last.getDay()+6)%7;
+  const totalDays = startOffset + last.getDate() + (6-lastOffset);
+  const days = [];
+  for(let i=0;i<totalDays;i++){
+    const dt = new Date(gridStart); dt.setDate(gridStart.getDate()+i);
+    days.push(toLocalYMD(dt));
+  }
+  return days;
+}
+// Группирует интеграции микро/средних блогеров по дате календаря (microDealDate — план, если
+// есть, иначе факт), чтобы разложить их по ячейкам сетки.
+function calendarEntriesByDate(){
+  const map = {};
+  DataManager.state.microInfluencerDeals.forEach(d=>{
+    const dt = microDealDate(d);
+    if(!dt) return;
+    (map[dt] = map[dt] || []).push(d);
+  });
+  return map;
+}
+function tplMicroCalendar(){
+  if(!UI.calendarMonth) UI.calendarMonth = todayStr().slice(0,7);
+  const ym = UI.calendarMonth;
+  const days = monthGridDates(ym);
+  const entriesByDate = calendarEntriesByDate();
+  const allBloggers = [...new Set(DataManager.state.microInfluencerDeals.map(d=>d.blogerName).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ru"));
+  const hidden = UI.calendarHiddenBloggers;
+  const today = todayStr();
+  const [y,m] = ym.split("-").map(Number);
+  const prevYm = m===1 ? `${y-1}-12` : `${y}-${String(m-1).padStart(2,"0")}`;
+  const nextYm = m===12 ? `${y+1}-01` : `${y}-${String(m+1).padStart(2,"0")}`;
+  const dowLabels = ["ПН","ВТ","СР","ЧТ","ПТ","СБ","ВС"];
+
+  return `
+    <div class="panel">
+      <div class="panel-title">
+        📅 Планер блогеров
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="btn btn-ghost btn-sm" id="cal-prev" data-ym="${prevYm}">‹</button>
+          <b style="min-width:130px;text-align:center;font-size:13.5px">${monthLabel(ym)}</b>
+          <button class="btn btn-ghost btn-sm" id="cal-next" data-ym="${nextYm}">›</button>
+          <button class="btn btn-primary btn-sm" id="cal-add">+ Добавить</button>
+        </div>
+      </div>
+      <div class="login-hint" style="margin-bottom:10px">
+        Дата ячейки — плановая дата публикации, а если её ещё нет — фактическая дата выкладки.
+        Клик по «+» на дне добавляет интеграцию сразу с этой плановой датой; клик по карточке — открывает её на редактирование;
+        ✕ на карточке снимает интеграцию с плана (дата очищается, сама запись не удаляется).
+      </div>
+      ${allBloggers.length ? `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <span style="align-self:center;color:var(--ink-mute);font-size:12px">Блогеры:</span>
+        ${allBloggers.map(name=>{
+          const col = bloggerColor(name);
+          const isHidden = hidden.has(name);
+          return `<button class="planner-chip ${isHidden?'inactive':''}" data-blogger="${escapeHtml(name)}" style="--c:${col.c}"><span class="dot"></span>${escapeHtml(name)}</button>`;
+        }).join("")}
+      </div>` : ""}
+      <div class="planner-cal">
+        ${dowLabels.map(l=>`<div class="planner-cal-head">${l}</div>`).join("")}
+        ${days.map(dateStr=>{
+          const inMonth = dateStr.slice(0,7)===ym;
+          const isToday = dateStr===today;
+          const dayNum = parseInt(dateStr.slice(8,10),10);
+          const items = (entriesByDate[dateStr]||[]).filter(d=>!hidden.has(d.blogerName||"—"));
+          return `<div class="planner-day ${inMonth?'':'out'} ${isToday?'today':''}">
+            <div class="planner-day-head">
+              <span>${dayNum}</span>
+              <button class="planner-day-add" data-add-date="${dateStr}" title="Добавить интеграцию на эту дату">+</button>
+            </div>
+            ${items.map(d=>{
+              const col = bloggerColor(d.blogerName||"—");
+              const isDone = !!d.publishDate;
+              const link = d.instagramAccount || d.tiktokAccount || "";
+              const nameHtml = link
+                ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener"><span class="dot"></span>${escapeHtml(d.blogerName||"—")}</a>`
+                : `<span class="dot"></span>${escapeHtml(d.blogerName||"—")}`;
+              return `<div class="planner-card ${isDone?'done':''}" style="--c:${col.c};${isDone?'':`background:${col.bg}`}" data-open-deal="${d.id}">
+                <b>${nameHtml}</b>
+                <div class="prod">${escapeHtml(d.product||"—")}</div>
+                ${!isDone?`<button class="rm" data-unschedule="${d.id}" title="Снять с плана">✕</button>`:""}
+              </div>`;
+            }).join("")}
+          </div>`;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function modalMicroDeal(existing, prefill){
   const isEdit = !!existing;
-  const d = existing || {
+  const d = existing || Object.assign({
     responsible:"Нина", blogerName:"", phone:"",
     instagramAccount:"", followers:0, er:0, avgReach:0,
     tiktokAccount:"", followersTT:0, erTT:0, avgReachTT:0,
@@ -3648,7 +3792,7 @@ function modalMicroDeal(existing){
     productStatus: MICRO_PRODUCT_STATUSES[0], videoStatus: MICRO_VIDEO_STATUSES[0],
     reelsLink:"", factReachReels:0, tiktokVideoLink:"", factReachTT:0,
     plannedDate:"", publishDate:"", notes:"",
-  };
+  }, prefill||{});
   openModal(`
     <h3>${isEdit?'Изменить':'Новая'} интеграция · Инфлюенс микро/средние</h3>
     <div class="form-row">
@@ -4357,6 +4501,54 @@ function wireDeskTab(){
       };
       reader.readAsText(file, "UTF-8");
     };
+  }
+
+  else if(UI.tab==="microCalendar"){
+    const calAddBtn = document.getElementById("cal-add");
+    if(calAddBtn) calAddBtn.onclick = ()=> modalMicroDeal(null);
+    const calPrev = document.getElementById("cal-prev");
+    if(calPrev) calPrev.onclick = ()=>{ UI.calendarMonth = calPrev.dataset.ym; renderDeskTab(); };
+    const calNext = document.getElementById("cal-next");
+    if(calNext) calNext.onclick = ()=>{ UI.calendarMonth = calNext.dataset.ym; renderDeskTab(); };
+
+    // Чипы-легенда блогеров — клик скрывает/показывает карточки этого блогера в календаре
+    // (UI.calendarHiddenBloggers), сами интеграции при этом никак не меняются.
+    document.querySelectorAll(".planner-chip").forEach(chip=>{
+      chip.onclick = ()=>{
+        const name = chip.dataset.blogger;
+        if(UI.calendarHiddenBloggers.has(name)) UI.calendarHiddenBloggers.delete(name);
+        else UI.calendarHiddenBloggers.add(name);
+        renderDeskTab();
+      };
+    });
+
+    // "+" на дне календаря — новая интеграция сразу с плановой датой этого дня.
+    document.querySelectorAll(".planner-day-add").forEach(btn=>{
+      btn.onclick = ()=> modalMicroDeal(null, {plannedDate: btn.dataset.addDate});
+    });
+
+    // "✕" на карточке — снять с плана: очищаем плановую дату (сама интеграция остаётся,
+    // просто пропадает из календаря, пока ей не назначат новую дату).
+    document.querySelectorAll(".planner-card .rm").forEach(btn=>{
+      btn.onclick = async (e)=>{
+        e.stopPropagation();
+        const id = parseInt(btn.dataset.unschedule,10);
+        try{
+          await withBusy(btn, ()=> Api.updateMicroDeal(id, {plannedDate:""}));
+          toast("Снято с плана");
+          await DataManager.refresh(); render();
+        }catch(err){ toast(err.message, true); }
+      };
+    });
+
+    // Клик по самой карточке (не по ссылке и не по ✕) — открыть интеграцию на редактирование.
+    document.querySelectorAll(".planner-card").forEach(card=>{
+      card.onclick = (e)=>{
+        if(e.target.closest("a") || e.target.closest(".rm")) return;
+        const deal = DataManager.state.microInfluencerDeals.find(d=>d.id===parseInt(card.dataset.openDeal,10));
+        if(deal) modalMicroDeal(deal);
+      };
+    });
   }
 
   else if(UI.tab==="report"){
@@ -5487,6 +5679,138 @@ async function runSelfTests(){
     } finally {
       DataManager.state.microInfluencerDeals = saved;
       UI.microFilter = JSON.parse(savedFilter);
+      UI.tab = savedTab;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("monthGridDates()/bloggerColor(): полные недели пн-вс вокруг месяца, детерминированный цвет по имени блогера", ()=>{
+    const grid = monthGridDates("2026-08");
+    if(grid.length % 7 !== 0) throw new Error("сетка должна состоять из целых недель: "+grid.length+" дней");
+    if(grid[0] !== "2026-07-27") throw new Error("сетка августа 2026 должна начинаться с понедельника 27.07 (1 августа — суббота): "+grid[0]);
+    if(!grid.includes("2026-08-01") || !grid.includes("2026-08-31")) throw new Error("сетка должна включать весь август: "+JSON.stringify(grid));
+    if(grid[grid.length-1] !== "2026-09-06") throw new Error("сетка должна заканчиваться воскресеньем 06.09 (31.08 — понедельник): "+grid[grid.length-1]);
+
+    const c1 = bloggerColor("Аружан"), c2 = bloggerColor("Аружан"), c3 = bloggerColor("Динара");
+    if(c1.c !== c2.c) throw new Error("цвет одного и того же блогера должен быть одинаковым при каждом вызове");
+    if(!c1.c || !c1.bg) throw new Error("bloggerColor должен вернуть {c, bg}: "+JSON.stringify(c1));
+  });
+  TestSuite.test("tplMicroCalendar(): карточка на день определяется по плановой дате (факт — фолбэк), ссылка Instagram>TikTok, ✕ только у ещё не выложенных", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedMonth = UI.calendarMonth;
+    const savedHidden = UI.calendarHiddenBloggers;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9801, blogerName:"Аружан", product:"Набор шампунь", plannedDate:"2026-08-12", publishDate:"", instagramAccount:"https://instagram.com/aruzhan", tiktokAccount:"https://tiktok.com/@aruzhan"},
+        {id:9802, blogerName:"Динара", product:"Энзимка+крем", plannedDate:"", publishDate:"2026-08-14", instagramAccount:"", tiktokAccount:"https://tiktok.com/@dinara"},
+        {id:9803, blogerName:"Скрытый", product:"Тест", plannedDate:"2026-08-12", publishDate:"", instagramAccount:"", tiktokAccount:""},
+      ];
+      UI.calendarMonth = "2026-08";
+      UI.calendarHiddenBloggers = new Set(["Скрытый"]);
+      const html = tplMicroCalendar();
+      if(!/data-open-deal="9801"/.test(html)) throw new Error("карточка Аружан (план 12.08) должна попасть в календарь");
+      if(!/data-open-deal="9802"/.test(html)) throw new Error("карточка Динара (нет плана, есть факт 14.08) должна попасть в календарь по факт-дате");
+      if(html.includes('data-open-deal="9803"')) throw new Error("скрытый через чип-легенду блогер не должен отрисовываться");
+      if(!html.includes('href="https://instagram.com/aruzhan"')) throw new Error("ссылка должна вести на Instagram, если он заполнен");
+      if(!/data-unschedule="9801"/.test(html)) throw new Error("у ещё не выложенной (план) интеграции должна быть кнопка ✕ снять с плана");
+      if(/data-unschedule="9802"/.test(html)) throw new Error("у уже выложенной (факт) интеграции не должно быть кнопки ✕");
+      if(!html.includes('href="https://tiktok.com/@dinara"')) throw new Error("если Instagram не заполнен — ссылка должна вести на TikTok");
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+      UI.calendarMonth = savedMonth;
+      UI.calendarHiddenBloggers = savedHidden;
+    }
+  });
+  TestSuite.test("wireDeskTab(microCalendar): навигация по месяцам и чип-легенда скрывают/показывают блогера, '+' на дне открывает модалку с плановой датой", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedMonth = UI.calendarMonth;
+    const savedHidden = UI.calendarHiddenBloggers;
+    const savedTab = UI.tab;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9804, blogerName:"Камила", product:"Крем", plannedDate:"2026-08-20", publishDate:""},
+      ];
+      UI.calendarMonth = "2026-08";
+      UI.calendarHiddenBloggers = new Set();
+      UI.tab = "microCalendar";
+      document.body.innerHTML = '<main id="main"></main><div id="toast"></div>';
+      document.getElementById("main").innerHTML = tplMicroCalendar();
+      wireDeskTab();
+
+      const nextBtn = document.getElementById("cal-next");
+      if(!nextBtn) throw new Error("кнопка перехода на следующий месяц должна быть в DOM");
+      nextBtn.click();
+      if(UI.calendarMonth !== "2026-09") throw new Error("клик по '›' должен переключить месяц на 2026-09: "+UI.calendarMonth);
+
+      document.getElementById("main").innerHTML = tplMicroCalendar();
+      wireDeskTab();
+      const prevBtn = document.getElementById("cal-prev");
+      prevBtn.click();
+      if(UI.calendarMonth !== "2026-08") throw new Error("клик по '‹' должен вернуть месяц на 2026-08: "+UI.calendarMonth);
+
+      document.getElementById("main").innerHTML = tplMicroCalendar();
+      wireDeskTab();
+      const chip = document.querySelector('.planner-chip[data-blogger="Камила"]');
+      if(!chip) throw new Error("чип-легенда 'Камила' должен быть в DOM");
+      chip.click();
+      if(!UI.calendarHiddenBloggers.has("Камила")) throw new Error("клик по чипу должен скрыть блогера");
+
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+      document.getElementById("app").innerHTML = '<main id="main"></main><div id="toast"></div>';
+      UI.calendarHiddenBloggers = new Set();
+      document.getElementById("main").innerHTML = tplMicroCalendar();
+      wireDeskTab();
+      const addBtn = document.querySelector('.planner-day-add[data-add-date="2026-08-14"]');
+      if(!addBtn) throw new Error("кнопка '+' для 14.08 должна быть в DOM");
+      addBtn.click();
+      const plannedInput = document.getElementById("mm-planned-date");
+      if(!plannedInput || plannedInput.value !== "2026-08-14") throw new Error("модалка должна открыться с предзаполненной плановой датой 2026-08-14: "+(plannedInput&&plannedInput.value));
+      closeModal();
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+      UI.calendarMonth = savedMonth;
+      UI.calendarHiddenBloggers = savedHidden;
+      UI.tab = savedTab;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("wireDeskTab(microCalendar): ✕ на карточке снимает плановую дату через PATCH, клик по карточке открывает интеграцию на редактирование", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedMonth = UI.calendarMonth;
+    const savedHidden = UI.calendarHiddenBloggers;
+    const savedTab = UI.tab;
+    const origFetch = window.fetch;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9805, blogerName:"Сымбат", product:"Энзимка+крем", plannedDate:"2026-08-14", publishDate:""},
+      ];
+      UI.calendarMonth = "2026-08";
+      UI.calendarHiddenBloggers = new Set();
+      UI.tab = "microCalendar";
+      document.body.innerHTML = '<main id="main"></main><div id="toast"></div>';
+      document.getElementById("main").innerHTML = tplMicroCalendar();
+      wireDeskTab();
+
+      // Клик по самой карточке (не по ✕) — открывает интеграцию на редактирование в той же модалке,
+      // что и кнопка "Изменить" в таблице.
+      const card = document.querySelector('.planner-card[data-open-deal="9805"]');
+      if(!card) throw new Error("карточка интеграции 9805 должна быть в DOM");
+      card.click();
+      const nameInput = document.getElementById("mm-name");
+      if(!nameInput || nameInput.value !== "Сымбат") throw new Error("клик по карточке должен открыть модалку редактирования с блогером 'Сымбат': "+(nameInput&&nameInput.value));
+      closeModal();
+
+      let captured = null;
+      window.fetch = (url, opts)=>{ captured = {url, opts}; return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({id:9805})}); };
+      const rmBtn = document.querySelector('.planner-card .rm[data-unschedule="9805"]');
+      if(!rmBtn) throw new Error("кнопка ✕ должна быть в DOM у ещё не выложенной интеграции");
+      rmBtn.click();
+      if(!captured || !captured.url.includes("/api/micro-influencer-deals/9805") || captured.opts.method!=="PATCH") throw new Error("✕ должен отправлять PATCH на /api/micro-influencer-deals/:id: "+JSON.stringify(captured));
+      if(!captured.opts.body.includes('"plannedDate":""')) throw new Error("PATCH должен очищать plannedDate: "+captured.opts.body);
+    } finally {
+      window.fetch = origFetch;
+      DataManager.state.microInfluencerDeals = saved;
+      UI.calendarMonth = savedMonth;
+      UI.calendarHiddenBloggers = savedHidden;
       UI.tab = savedTab;
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
