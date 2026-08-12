@@ -1353,7 +1353,7 @@ function microBloggerAgg(rows){
     const a = map[login];
     a.reach += microDealFactReach(r.deal);
     a.contribution += r.netContribution||0;
-    a.cost += r.deal.cost||0;
+    a.cost += microDealTotalCost(r.deal); // оплата + себестоимость товара, см. комментарий у microDealTotalCost
     a.dealsCount++;
   });
   return Object.values(map);
@@ -1385,7 +1385,11 @@ function microFunnelCounts(allRows){
 }
 function microInfluencerBrandStats(monthRows){
   const withBaseline = monthRows.filter(r=>r.hasBaseline);
-  const totalCost = monthRows.reduce((s,r)=>s+(r.deal.cost||0),0);
+  // Расход считаем как microDealTotalCost (оплата блогеру + себестоимость подаренного товара) —
+  // та же формула, что и везде в приложении (CPV в таблице, "Сводка по блогерам", ROMI-движок).
+  // Раньше здесь брали только r.deal.cost (голую оплату), из-за чего "Расходы" на этом дашборде
+  // не совпадали с суммой в других местах ровно на сумму себестоимости товара по интеграциям месяца.
+  const totalCost = monthRows.reduce((s,r)=>s+microDealTotalCost(r.deal),0);
   const totalReach = monthRows.reduce((s,r)=>s+microDealFactReach(r.deal),0);
   const totalContribution = monthRows.reduce((s,r)=>s+(r.netContribution||0),0);
   const dealsCount = monthRows.length;
@@ -1398,7 +1402,7 @@ function microInfluencerBrandStats(monthRows){
   const cpv = totalReach>0 ? totalCost/totalReach : null;
   const upliftPerView = totalReach>0 ? totalContribution/totalReach : null;
   const upliftPerDeal = withBaseline.length
-    ? withBaseline.reduce((s,r)=>s+(r.netContribution-(r.deal.cost||0)),0)/withBaseline.length
+    ? withBaseline.reduce((s,r)=>s+(r.netContribution-microDealTotalCost(r.deal)),0)/withBaseline.length
     : null;
 
   const bloggerAgg = microBloggerAgg(withBaseline)
@@ -1407,7 +1411,7 @@ function microInfluencerBrandStats(monthRows){
   const bestBlogger = bloggerAgg.slice().sort((a,b)=>b.profit-a.profit)[0] || null;
   const worstBlogger = bloggerAgg.length>1 ? bloggerAgg.slice().sort((a,b)=>a.profit-b.profit)[0] : null;
 
-  const dealProfit = withBaseline.filter(r=>(r.deal.cost||0)>0).map(r=>({r, profit:r.netContribution-r.deal.cost}));
+  const dealProfit = withBaseline.filter(r=>microDealTotalCost(r.deal)>0).map(r=>({r, profit:r.netContribution-microDealTotalCost(r.deal)}));
   const bestDeal = dealProfit.slice().sort((a,b)=>b.profit-a.profit)[0] || null;
   const worstDeal = dealProfit.length>1 ? dealProfit.slice().sort((a,b)=>a.profit-b.profit)[0] : null;
 
@@ -1453,7 +1457,12 @@ function tplMicroInfluencerBrandDashboard(allRows){
     </div>`;
   }
   const month = (UI.microDashMonth && months.includes(UI.microDashMonth)) ? UI.microDashMonth : months[months.length-1];
-  const monthRows = allRows.filter(r=>microDealDate(r.deal).slice(0,7)===month);
+  // Считаем только уже ОПУБЛИКОВАННЫЕ интеграции (videoStatus==="опубликовано"). Раньше сюда попадали
+  // и оплаченные, но ещё не выложенные интеграции (через план-дату в microDealDate) — расход по ним
+  // уже учитывался, а вклада в продажи/охвата ещё не было, и статистика "на сегодня" получалась
+  // завышенной по расходам и заниженной по ROMI/CPV. Как только блогер публикует пост и появляется
+  // факт.охват — интеграция сама попадёт в статистику месяца публикации.
+  const monthRows = allRows.filter(r=>r.deal.videoStatus==="опубликовано" && microDealDate(r.deal).slice(0,7)===month);
   const s = microInfluencerBrandStats(monthRows);
 
   const MAX_MONTH_TABS = 6;
@@ -1491,6 +1500,7 @@ function tplMicroInfluencerBrandDashboard(allRows){
       </div>
     </div>
     <div class="login-hint" style="margin-bottom:12px">
+      Показаны только уже опубликованные интеграции (оплаченные, но ещё не выложенные — не учитываются, появятся сами после выкладки).
       ROMI считается только там, где у интеграции есть ШК (или совпадает название товара) и в «Продажи по дням (1С)» есть история продаж этого товара.
     </div>
 
@@ -1536,7 +1546,9 @@ function microPeriodStats(rows, from, to){
   const inPeriod = rows.filter(r => inDateRange(microDealDate(r.deal), from, to));
   const dealsCount = inPeriod.length;
   const reach = inPeriod.reduce((s,r)=>s+microDealFactReach(r.deal),0);
-  const cost = inPeriod.reduce((s,r)=>s+(r.deal.cost||0),0);
+  // microDealTotalCost — та же формула расхода (оплата + себестоимость товара), что и на дашборде
+  // выше (см. microInfluencerBrandStats), чтобы "Расход" в сравнении периодов совпадал с "Расходы" там.
+  const cost = inPeriod.reduce((s,r)=>s+microDealTotalCost(r.deal),0);
   const contribution = inPeriod.reduce((s,r)=>s+(r.netContribution||0),0);
   const withRomi = inPeriod.filter(r=>r.romi!=null);
   const avgRomi = withRomi.length ? withRomi.reduce((a,r)=>a+r.romi,0)/withRomi.length : null;
@@ -1716,8 +1728,11 @@ function tplMicroInfluencerCompare(rows){
     cmp.aFrom = first+"-01"; cmp.aTo = monthEnd(first);
     cmp.bFrom = last+"-01"; cmp.bTo = monthEnd(last);
   }
-  const a = microPeriodStats(rows, cmp.aFrom, cmp.aTo);
-  const b = microPeriodStats(rows, cmp.bFrom, cmp.bTo);
+  // Оплаченные, но ещё не выложенные интеграции сюда не берём — та же логика, что и на дашборде
+  // выше, иначе "Расход" за месяц в сравнении не совпадал бы с "Расходы" в KPI-плашках дашборда.
+  const publishedRows = rows.filter(r=>r.deal.videoStatus==="опубликовано");
+  const a = microPeriodStats(publishedRows, cmp.aFrom, cmp.aTo);
+  const b = microPeriodStats(publishedRows, cmp.bFrom, cmp.bTo);
   const metricRow = (label, av, bv, fmt) => `<tr>
     <td>${label}</td>
     <td>${fmt(av)}</td>
@@ -6636,6 +6651,66 @@ async function runSelfTests(){
     } finally {
       DataManager.state.microInfluencerDeals = savedDeals;
       UI.microDashMonth = savedDashMonth;
+    }
+  });
+  TestSuite.test("tplMicroInfluencerBrandDashboard: не учитывает оплаченные, но ещё не выложенные интеграции, расход считается с себестоимостью товара (регрессия: 'Расходы' на дашборде не совпадали с суммой в других местах на сумму себестоимости товара + учитывали ещё не вышедшие посты)", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedDashMonth = UI.microDashMonth;
+    try{
+      const published1 = {id:9961, blogerName:"@pub1", product:"P1", publishDate:"2026-07-05", factReachReels:1000, factReachTT:0, cost:1000, productCost:200, paymentStatus:"оплачено", videoStatus:"опубликовано"};
+      const published2 = {id:9962, blogerName:"@pub2", product:"P2", publishDate:"2026-07-10", factReachReels:2000, factReachTT:0, cost:2000, productCost:300, paymentStatus:"оплачено", videoStatus:"опубликовано"};
+      // Оплачена и себестоимость товара большая, но видео ещё не вышло — не должна попадать ни в
+      // "Расходы", ни в охват/ROMI дашборда, пока блогер реально не опубликует пост.
+      const notYetPublished = {id:9963, blogerName:"@notyet", product:"P3", plannedDate:"2026-07-15", factReachReels:0, factReachTT:0, cost:50000, productCost:9000, paymentStatus:"оплачено", videoStatus:"не опубликовано"};
+      DataManager.state.microInfluencerDeals = [published1, published2, notYetPublished];
+      UI.microDashMonth = "";
+      const rows = [
+        {deal:published1, netContribution:0, romi:null, hasBaseline:false},
+        {deal:published2, netContribution:0, romi:null, hasBaseline:false},
+        {deal:notYetPublished, netContribution:0, romi:null, hasBaseline:false},
+      ];
+      const html = tplMicroInfluencerBrandDashboard(rows);
+      document.body.innerHTML = '<div id="app"></div>';
+      document.getElementById("app").innerHTML = html;
+      const nums = [...document.querySelectorAll(".grid-kpi .kpi .num")].map(el=>el.textContent);
+      const spendText = nums[0]; // первая плашка сетки — "Расходы"
+      const digitsOnly = spendText.replace(/[^\d]/g,"");
+      if(digitsOnly !== "3500") throw new Error(`"Расходы" должны быть 1200+2300=3500 (оплата+себестоимость двух ОПУБЛИКОВАННЫХ интеграций, без 59000 неопубликованной), получили: ${spendText}`);
+      if(!html.includes("не учитываются") ) throw new Error("на панели должна быть подсказка про то, что оплаченные-невыложенные не учитываются");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+      UI.microDashMonth = savedDashMonth;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("tplMicroInfluencerCompare/microPeriodStats: та же логика — не учитывает неопубликованные интеграции, расход с себестоимостью товара", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedCompare = JSON.stringify(UI.microCompare);
+    try{
+      const published1 = {id:9964, blogerName:"@cpub1", product:"P1", publishDate:"2026-07-05", factReachReels:1000, factReachTT:0, cost:1000, productCost:200, videoStatus:"опубликовано"};
+      const published2 = {id:9965, blogerName:"@cpub2", product:"P2", publishDate:"2026-07-10", factReachReels:2000, factReachTT:0, cost:2000, productCost:300, videoStatus:"опубликовано"};
+      const notYetPublished = {id:9966, blogerName:"@cnotyet", product:"P3", plannedDate:"2026-07-15", factReachReels:0, factReachTT:0, cost:50000, productCost:9000, videoStatus:"не опубликовано"};
+      DataManager.state.microInfluencerDeals = [published1, published2, notYetPublished];
+      UI.microCompare = {aFrom:"", aTo:"", bFrom:"", bTo:""}; // сбрасываем — оба периода auto-выставятся на единственный месяц (июль)
+      const rows = [
+        {deal:published1, netContribution:0, romi:null, hasBaseline:false},
+        {deal:published2, netContribution:0, romi:null, hasBaseline:false},
+        {deal:notYetPublished, netContribution:0, romi:null, hasBaseline:false},
+      ];
+      const html = tplMicroInfluencerCompare(rows);
+      document.body.innerHTML = '<div id="app"></div>';
+      document.getElementById("app").innerHTML = html;
+      const rowsEls = [...document.querySelectorAll("table tr")];
+      const costRow = rowsEls.find(tr=>tr.children[0] && tr.children[0].textContent==="Расход");
+      if(!costRow) throw new Error("строка 'Расход' не найдена в таблице сравнения периодов");
+      const periodA = costRow.children[1].textContent.replace(/[^\d]/g,"");
+      const periodB = costRow.children[2].textContent.replace(/[^\d]/g,"");
+      if(periodA !== "3500") throw new Error("Период A: расход должен быть 3500 (без неопубликованной интеграции), получили: "+costRow.children[1].textContent);
+      if(periodB !== "3500") throw new Error("Период B: расход должен быть 3500 (без неопубликованной интеграции), получили: "+costRow.children[2].textContent);
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+      UI.microCompare = JSON.parse(savedCompare);
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
   TestSuite.test("microContributionExplain объясняет вклад в продажи: период, ШК, пересечение с крупными блогерами", ()=>{
