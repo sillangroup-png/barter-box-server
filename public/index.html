@@ -1609,11 +1609,13 @@ function tplMicroBloggerSummary(){
   `;
 }
 // Сводка нагрузки по ответственным менеджерам — сколько блогеров сейчас на ком висит.
-// Считаем по ВСЕМ интеграциям (без фильтра по месяцу — это снимок текущей загрузки, а не
-// показатель за период), группируя по d.responsible. "В работе" — видео ещё не опубликовано
-// (videoStatus !== "опубликовано"), т.е. блогер ещё в процессе, а не просто числится в истории.
-function microResponsibleSummary(){
-  const deals = DataManager.state.microInfluencerDeals;
+// По умолчанию (month="") считаем по ВСЕМ интеграциям — снимок текущей загрузки. Если выбран
+// месяц (см. UI.microResponsibleMonth), фильтруем по plan/факт дате публикации (microDealDate),
+// как и в "Сводке по блогерам" — так менеджер может посмотреть загрузку конкретно за месяц,
+// а не только "на сегодня". "В работе" — видео ещё не опубликовано (videoStatus !== "опубликовано").
+function microResponsibleSummary(month){
+  let deals = DataManager.state.microInfluencerDeals;
+  if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
   const map = {};
   deals.forEach(d=>{
     const name = d.responsible || "Не указан";
@@ -1632,12 +1634,20 @@ function microResponsibleSummary(){
   })).sort((a,b)=> b.uniqueBloggerCount - a.uniqueBloggerCount);
 }
 function tplMicroResponsibleSummary(){
-  const rows = microResponsibleSummary();
+  const months = microAvailableMonths();
+  const month = UI.microResponsibleMonth;
+  const rows = microResponsibleSummary(month);
   return `
     <div class="panel">
       <div class="panel-title">
         Сводка по ответственным
-        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">сколько блогеров сейчас в работе у каждого менеджера (снимок на сегодня, без фильтра по месяцу)</span>
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">сколько блогеров в работе у каждого менеджера — за выбранный месяц или "на сегодня" по всей истории</span>
+      </div>
+      <div class="toolbar" style="margin-bottom:12px">
+        <select id="micro-responsible-summary-month">
+          <option value="">Вся история (на сегодня)</option>
+          ${months.map(m=>`<option value="${m}" ${month===m?'selected':''}>${escapeHtml(monthLabel(m))}</option>`).join("")}
+        </select>
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
@@ -1650,7 +1660,7 @@ function tplMicroResponsibleSummary(){
             <td>${r.inProgress}</td>
             <td>${r.published}</td>
             <td>${r.dealsCount}</td>
-          </tr>`).join("") || `<tr><td class="empty" colspan="5">Интеграций пока нет</td></tr>`}
+          </tr>`).join("") || `<tr><td class="empty" colspan="5">${month ? "Нет интеграций за выбранный месяц" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -1728,6 +1738,7 @@ const UI = {
   microCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
   microSummaryMonth: "", // выбранный месяц в сводке "по блогерам" перед таблицей интеграций (см. tplMicroBloggerSummary)
   microSummaryExpanded: false, // "Сводка по блогерам" свёрнута до 10 строк, пока не нажата "Показать все"
+  microResponsibleMonth: "", // выбранный месяц в "Сводке по ответственным" (см. tplMicroResponsibleSummary) — "" = вся история (снимок загрузки на сегодня)
   calendarMonth: "", // выбранный месяц в "Планере блогеров" (см. tplMicroCalendar) — "YYYY-MM", пусто = текущий месяц
   calendarHiddenBloggers: new Set(), // блогеры, скрытые из календаря кликом по чипу-легенде (по умолчанию видны все)
   dashExpenseCampaign: "", // фильтр проекта в панели "Расходы на бартер" дашборда менеджера: "" = все проекты (с разрезом по каждому)
@@ -4453,6 +4464,8 @@ function wireDeskTab(){
     if(microSummaryMonthSelect) microSummaryMonthSelect.onchange = e=>{ UI.microSummaryMonth = e.target.value; UI.microSummaryExpanded = false; renderDeskTab(); };
     const microSummaryShowAllBtn = document.getElementById("micro-summary-show-all");
     if(microSummaryShowAllBtn) microSummaryShowAllBtn.onclick = ()=>{ UI.microSummaryExpanded = true; renderDeskTab(); };
+    const microResponsibleSummaryMonthSelect = document.getElementById("micro-responsible-summary-month");
+    if(microResponsibleSummaryMonthSelect) microResponsibleSummaryMonthSelect.onchange = e=>{ UI.microResponsibleMonth = e.target.value; renderDeskTab(); };
     ["micro-cmp-a-from","micro-cmp-a-to","micro-cmp-b-from","micro-cmp-b-to"].forEach(id=>{
       const el = document.getElementById(id);
       if(!el) return;
@@ -5456,6 +5469,42 @@ async function runSelfTests(){
       if(responsibleSummaryPos === -1 || responsibleSummaryPos <= bloggerSummaryPos || responsibleSummaryPos >= detailPos) throw new Error("'Сводка по ответственным' должна быть между 'Сводкой по блогерам' и основной таблицей интеграций");
     } finally {
       DataManager.state.microInfluencerDeals = savedDeals;
+    }
+  });
+  TestSuite.test("microResponsibleSummary(month)/tplMicroResponsibleSummary(): фильтр по месяцу сужает сводку, select есть в DOM и wireDeskTab обновляет UI.microResponsibleMonth", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedMonth = UI.microResponsibleMonth;
+    const savedTab = UI.tab;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9750, blogerName:"Июльский Блогер", responsible:"Нина", videoStatus:"не опубликовано", publishDate:"2026-07-05"},
+        {id:9751, blogerName:"Августовский Блогер", responsible:"Аружан", videoStatus:"не опубликовано", publishDate:"2026-08-05"},
+      ];
+      UI.microResponsibleMonth = "";
+      // Без фильтра — оба ответственных видны.
+      let rows = microResponsibleSummary(UI.microResponsibleMonth);
+      if(rows.length !== 2) throw new Error("без фильтра должны быть видны оба ответственных: "+rows.length);
+      // С фильтром по августу — только Аружан.
+      rows = microResponsibleSummary("2026-08");
+      if(rows.length !== 1 || rows[0].responsible !== "Аружан") throw new Error("фильтр 'август' должен оставить только Аружан: "+JSON.stringify(rows));
+
+      UI.tab = "microInfluencers";
+      document.body.innerHTML = '<main id="main"></main><div id="toast"></div>';
+      document.getElementById("main").innerHTML = tplMicroInfluencers();
+      wireDeskTab();
+      const select = document.getElementById("micro-responsible-summary-month");
+      if(!select) throw new Error("select 'micro-responsible-summary-month' должен быть в DOM после wireDeskTab()");
+      select.value = "2026-08";
+      select.dispatchEvent(new Event("change"));
+      if(UI.microResponsibleMonth !== "2026-08") throw new Error("выбор месяца должен обновить UI.microResponsibleMonth: "+UI.microResponsibleMonth);
+      const html = tplMicroResponsibleSummary();
+      if(html.includes(">Нина<")) throw new Error("после фильтра по августу 'Нина' (июльская интеграция) не должна показываться");
+      if(!html.includes(">Аружан<")) throw new Error("после фильтра по августу 'Аружан' должен остаться");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+      UI.microResponsibleMonth = savedMonth;
+      UI.tab = savedTab;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
   TestSuite.test("wireDeskTab(microInfluencers): выбор месяца в 'Сводке по блогерам' обновляет UI.microSummaryMonth", ()=>{
