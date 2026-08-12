@@ -732,7 +732,7 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
   const deal = {
     id: nextId("microInfluencerDeals"),
     responsible: b.responsible || "Нина",
-    blogerName: b.blogerName, phone: b.phone || "",
+    blogerName: b.blogerName, bloggerCategory: b.bloggerCategory || "", phone: b.phone || "",
     instagramAccount: b.instagramAccount || "", followers: b.followers || 0, er: b.er || 0, avgReach: b.avgReach || 0,
     tiktokAccount: b.tiktokAccount || "", followersTT: b.followersTT || 0, erTT: b.erTT || 0, avgReachTT: b.avgReachTT || 0,
     cost: b.cost || 0, productCost: b.productCost || 0, paymentStatus: b.paymentStatus || MICRO_PAYMENT_STATUSES[0],
@@ -786,6 +786,7 @@ app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
     const fields = {
       responsible: r["ответственный"] || r["responsible"] || "Нина",
       blogerName,
+      bloggerCategory: r["категория блогера"] || r["blogger_category"] || "",
       phone: (r["телефон"] || r["номер телефона"] || r["phone"] || "").toString().trim(),
       instagramAccount: r["instagram"] || r["аккаунт instagram"] || "",
       followers: parseInt(r["подписчики"] || r["followers"] || 0, 10) || 0,
