@@ -2830,6 +2830,10 @@ function tplMicroInfluencers(){
   // чтобы выбор месяца в одном месте не переключал незаметно и содержимое другого.
   const summaryMonth = UI.microSummaryMonth;
   const kpi_s = summaryMonth ? microInfluencerSummary(summaryMonth+"-01", monthEnd(summaryMonth)) : s;
+  // Список месяцев для селекта фильтра прямо у KPI-плашек ниже — тот же UI.microSummaryMonth,
+  // что и в "Сводке по блогерам" выше (микро-summary-month), просто продублированный контрол
+  // здесь для удобства: маркетологу не нужно скроллить наверх, чтобы поменять месяц у этих цифр.
+  const kpiMonths = microAvailableMonths();
   const mf = UI.microFilter;
   let deals = s.deals;
   if(mf.search){
@@ -2892,7 +2896,13 @@ function tplMicroInfluencers(){
     ${tplMicroBloggerSummary()}
     ${tplMicroResponsibleSummary()}
 
-    <div class="login-hint" style="margin-bottom:6px">Метрики ниже — за ${summaryMonth?monthLabel(summaryMonth):'весь период'} (см. фильтр "Месяц" в сводке по блогерам выше)</div>
+    <div class="toolbar" style="margin-bottom:8px;align-items:center;flex-wrap:wrap">
+      <span style="color:var(--ink-mute);font-size:12px">Метрики ниже — за ${summaryMonth?monthLabel(summaryMonth):'весь период'}:</span>
+      <select id="micro-kpi-month">
+        <option value="">Весь период</option>
+        ${kpiMonths.map(m=>`<option value="${m}" ${summaryMonth===m?'selected':''}>${escapeHtml(monthLabel(m))}</option>`).join("")}
+      </select>
+    </div>
     <div class="grid-kpi">
       <div class="kpi"><div class="num">${kpi_s.count}</div><div class="lbl">Всего интеграций</div></div>
       <div class="kpi"><div class="num">${kpi_s.uniqueBloggerCount}</div><div class="lbl">Уникальных блогеров (один может продавать пакетом несколько интеграций)</div></div>
@@ -4536,6 +4546,10 @@ function wireDeskTab(){
     };
     const microSummaryMonthSelect = document.getElementById("micro-summary-month");
     if(microSummaryMonthSelect) microSummaryMonthSelect.onchange = e=>{ UI.microSummaryMonth = e.target.value; UI.microSummaryExpanded = false; renderDeskTab(); };
+    // Тот же UI.microSummaryMonth, что и выше — просто второй селект рядом с KPI-плашками
+    // "Метрики ниже", чтобы менять месяц не скролля к "Сводке по блогерам".
+    const microKpiMonthSelect = document.getElementById("micro-kpi-month");
+    if(microKpiMonthSelect) microKpiMonthSelect.onchange = e=>{ UI.microSummaryMonth = e.target.value; UI.microSummaryExpanded = false; renderDeskTab(); };
     const microSummaryShowAllBtn = document.getElementById("micro-summary-show-all");
     if(microSummaryShowAllBtn) microSummaryShowAllBtn.onclick = ()=>{ UI.microSummaryExpanded = true; renderDeskTab(); };
     const microResponsibleSummaryMonthSelect = document.getElementById("micro-responsible-summary-month");
@@ -5684,6 +5698,44 @@ async function runSelfTests(){
       select.value = "2026-07";
       select.dispatchEvent(new Event("change"));
       if(UI.microSummaryMonth !== "2026-07") throw new Error("выбор месяца должен обновить UI.microSummaryMonth: "+UI.microSummaryMonth);
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+      UI.microFilter = JSON.parse(savedFilter);
+      UI.tab = savedTab;
+      UI.microSummaryMonth = savedSummaryMonth;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("wireDeskTab(microInfluencers): селект месяца у KPI-плашек ('Метрики ниже') синхронизирован с UI.microSummaryMonth (регрессия: раньше там был только текст-подсказка без своего контрола)", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    const savedTab = UI.tab;
+    const savedSummaryMonth = UI.microSummaryMonth;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9723, blogerName:"Дарина", cost:1000, factReachReels:1000, factReachTT:0, product:"Товар", publishDate:"2026-07-10"},
+        {id:9724, blogerName:"Дарина", cost:2000, factReachReels:1000, factReachTT:0, product:"Товар", publishDate:"2026-08-10"},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:""};
+      UI.microSummaryMonth = "";
+      UI.tab = "microInfluencers";
+      document.body.innerHTML = '<main id="main"></main><div id="toast"></div>';
+      document.getElementById("main").innerHTML = tplMicroInfluencers();
+      wireDeskTab();
+      const select = document.getElementById("micro-kpi-month");
+      if(!select) throw new Error("select 'micro-kpi-month' должен быть в DOM после wireDeskTab()");
+      if(select.value !== "") throw new Error("изначально (UI.microSummaryMonth='') селект должен показывать 'Весь период': "+select.value);
+      // Меняем месяц через НОВЫЙ селект у KPI-плашек — должен обновлять то же UI.microSummaryMonth,
+      // что и селект в "Сводке по блогерам" выше (общее состояние на всю вкладку).
+      select.value = "2026-08";
+      select.dispatchEvent(new Event("change"));
+      if(UI.microSummaryMonth !== "2026-08") throw new Error("выбор месяца в 'micro-kpi-month' должен обновить UI.microSummaryMonth: "+UI.microSummaryMonth);
+      // После перерисовки оба селекта ("Сводка по блогерам" и KPI-плашки) должны показывать один и тот же месяц.
+      document.getElementById("main").innerHTML = tplMicroInfluencers();
+      wireDeskTab();
+      const summarySelect = document.getElementById("micro-summary-month");
+      const kpiSelect = document.getElementById("micro-kpi-month");
+      if(summarySelect.value !== "2026-08" || kpiSelect.value !== "2026-08") throw new Error("оба селекта месяца должны совпадать после перерисовки: summary="+summarySelect.value+", kpi="+kpiSelect.value);
     } finally {
       DataManager.state.microInfluencerDeals = savedDeals;
       UI.microFilter = JSON.parse(savedFilter);
