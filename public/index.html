@@ -356,7 +356,7 @@ const Api = {
   syncBitrix: (id)=> apiFetch("/api/orders/"+id+"/sync-bitrix", {method:"POST"}),
   bulkAssign: (ids, driverCode)=> apiFetch("/api/orders/bulk-assign", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids, driverCode})}),
   bulkDelete: (ids)=> apiFetch("/api/orders/bulk-delete", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids})}),
-  importOrders: (rows)=> apiFetch("/api/orders/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
+  importOrders: (rows, campaignId)=> apiFetch("/api/orders/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows, campaignId})}),
   geocode: (address, city)=> apiFetch("/api/geocode", {method:"POST", headers:jsonHeaders, body:JSON.stringify({address, city})}),
 
   createReturn: (r)=> apiFetch("/api/returns", {method:"POST", headers:jsonHeaders, body:JSON.stringify(r)}),
@@ -2302,6 +2302,8 @@ function tplDeliveries(){
       <div class="login-hint" style="margin-bottom:12px">
         В шаблоне есть колонка «подписчики» — заполните её при загрузке базы блогеров, тогда после доставки и публикации
         охват можно будет оценить (15% от подписчиков), даже если блогер не поделится просмотрами сторис.
+        <b>Перед импортом CSV сначала выберите нужный проект в фильтре «Все проекты» ниже</b> — все строки
+        из файла попадут именно в него (если не выбрать, импорт не начнётся, чтобы доставки не свалились в чужой проект).
       </div>
       <div class="toolbar">
         <input type="search" class="fill" id="f-search" placeholder="Поиск: блогер, адрес, телефон" value="${escapeHtml(f.search)}">
@@ -4227,15 +4229,30 @@ function wireDeskTab(){
       toast("Шаблон скачан — заполните и загрузите через «Импорт CSV»");
     };
 
-    document.getElementById("import-csv-btn").onclick = ()=> document.getElementById("import-csv-input").click();
+    document.getElementById("import-csv-btn").onclick = ()=>{
+      // Импорт всегда должен целиться в конкретный проект — раньше это молча уезжало на
+      // самый первый проект в списке (на проде это был "Лимон вит с"), что и вызывало жалобы
+      // "почему список сам садится на витамин с". Теперь требуем явный выбор проекта в фильтре.
+      if(!UI.filters.campaign){
+        toast("Сначала выберите проект в фильтре «Все проекты» — импорт добавит все строки именно в него", true);
+        return;
+      }
+      document.getElementById("import-csv-input").click();
+    };
     document.getElementById("import-csv-input").onchange = (e)=>{
       const file = e.target.files[0];
       if(!file) return;
+      const campaignId = UI.filters.campaign;
+      if(!campaignId){
+        toast("Сначала выберите проект в фильтре «Все проекты» — импорт добавит все строки именно в него", true);
+        e.target.value = "";
+        return;
+      }
       const reader = new FileReader();
       reader.onload = async ()=>{
         const rows = parseCsv(String(reader.result));
         try{
-          const res = await Api.importOrders(rows);
+          const res = await Api.importOrders(rows, campaignId);
           toast(`Импортировано доставок: ${res.added}`);
         }catch(e){ toast(e.message, true); }
         e.target.value = "";
@@ -6480,6 +6497,55 @@ async function runSelfTests(){
       DataManager.state.campaigns = savedCampaigns; DataManager.state.publications = savedPubs;
       DataManager.state.influencerDeals = savedDeals; DataManager.state.microInfluencerDeals = savedMicro;
       UI.filters = JSON.parse(savedFilters); UI.inflFilter = JSON.parse(savedInflFilter); UI.microFilter = JSON.parse(savedMicroFilter);
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("Импорт CSV доставок: без выбранного проекта в фильтре блокируется (регрессия: раньше импорт молча уезжал на первый проект в списке, теперь требует явный выбор)", ()=>{
+    const savedRole = UI.role, savedTab = UI.tab, savedFilters = JSON.stringify(UI.filters);
+    const savedCampaigns = DataManager.state.campaigns, savedOrders = DataManager.state.orders, savedDrivers = DataManager.state.drivers;
+    const origImportOrders = Api.importOrders;
+    try{
+      UI.role = "manager"; UI.tab = "deliveries";
+      DataManager.state.campaigns = [{id:501, name:"Лимон вит с"}, {id:502, name:"Липкомбо"}, {id:503, name:"Лабубу"}];
+      DataManager.state.drivers = [];
+      DataManager.state.orders = [];
+      let capturedCampaignId;
+      // Возвращаем промис, который никогда не резолвится: нам нужен только сам факт вызова
+      // с правильным campaignId (он фиксируется синхронно ДО await), а не весь последующий
+      // асинхронный хвост обработчика (toast/DataManager.refresh/render — реальный запрос к серверу,
+      // которого в офлайн-окружении самотестов нет, и он уронил бы процесс необработанным отказом промиса).
+      Api.importOrders = (rows, campaignId)=>{ capturedCampaignId = campaignId; return new Promise(()=>{}); };
+
+      // Без выбранного проекта: клик по "Импорт CSV" не должен открывать file input и должен показать тост с ошибкой.
+      UI.filters = {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""};
+      renderDeskShell();
+      let inputClicked = false;
+      const input = document.getElementById("import-csv-input");
+      input.click = ()=>{ inputClicked = true; };
+      document.getElementById("import-csv-btn").onclick();
+      if(inputClicked) throw new Error("без выбранного проекта клик по 'Импорт CSV' не должен открывать диалог выбора файла");
+      const toastEl = document.getElementById("toast");
+      if(!toastEl.textContent.includes("выберите проект")) throw new Error("должен показаться тост с просьбой выбрать проект, получили: "+toastEl.textContent);
+
+      // С выбранным проектом ("Лабубу", id:503): campaignId должен уйти в Api.importOrders именно этот.
+      UI.filters.campaign = "503";
+      renderDeskShell();
+      const onchange = document.getElementById("import-csv-input").onchange;
+      const fakeEvent = {target:{files:[{}], value:"x"}};
+      const origFileReader = window.FileReader;
+      window.FileReader = function(){
+        this.readAsText = ()=>{ this.result = "блогер,подписчики,телефон,город,адрес,бокс,водитель\n@test,100,+7,Алматы,ул.1,,"; this.onload(); };
+      };
+      try{
+        onchange(fakeEvent);
+      } finally {
+        window.FileReader = origFileReader;
+      }
+      if(String(capturedCampaignId) !== "503") throw new Error("campaignId, отправленный в Api.importOrders, должен совпадать с выбранным в фильтре проектом (503/Лабубу), получили: "+capturedCampaignId);
+    } finally {
+      Api.importOrders = origImportOrders;
+      UI.role = savedRole; UI.tab = savedTab; UI.filters = JSON.parse(savedFilters);
+      DataManager.state.campaigns = savedCampaigns; DataManager.state.orders = savedOrders; DataManager.state.drivers = savedDrivers;
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
