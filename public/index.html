@@ -4543,7 +4543,11 @@ function wireDeskTab(){
       toast("Шаблон скачан");
     };
     document.getElementById("export-micro-csv-btn").onclick = ()=>{
-      const header = ["id","блогер","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий"];
+      // ВАЖНО: порядок и количество колонок здесь должны 1-в-1 совпадать с порядком полей,
+      // которые реально пушатся в lines.push(...) ниже — иначе заголовок "уезжает" относительно
+      // данных (была живая регрессия: сюда забыли добавить "ответственный"/"категория блогера",
+      // когда их добавили в сами строки — эти два столбца тихо съезжали на всё, что после блогера).
+      const header = ["id","ответственный","блогер","категория блогера","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий"];
       const lines = [header.map(csvEscape).join(",")];
       // "deals" — переменная из tplMicroInfluencers() (учитывает поиск/фильтр), а этот обработчик
       // живёт в wireDeskTab() — отдельной функции, где такой переменной нет. Раньше это падало
@@ -6273,6 +6277,89 @@ async function runSelfTests(){
       DataManager.state.microInfluencerDeals = savedDeals;
       UI.microFilter = JSON.parse(savedFilter);
       UI.tab = savedTab;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("Экспорт/шаблон CSV везде: число колонок в заголовке совпадает с числом колонок в строках данных (регрессия: у 'Экспорт CSV' микро/средних инфлюенс заголовку забыли добавить 'ответственный'/'категория блогера', когда эти поля добавили в сами строки — весь экспорт после 'блогера' съезжал на 2 колонки)", ()=>{
+    // Кликаем по-настоящему (через wireDeskTab + click), а не читаем текст функции — так ловим
+    // и расхождение количества колонок, и ReferenceError'ы вида "деньги не существует в этой области".
+    const origDownload = downloadFile;
+    const savedRole = UI.role, savedTab = UI.tab;
+    const savedOrders = DataManager.state.orders, savedDrivers = DataManager.state.drivers,
+      savedCampaigns = DataManager.state.campaigns, savedPubs = DataManager.state.publications,
+      savedDeals = DataManager.state.influencerDeals, savedMicro = DataManager.state.microInfluencerDeals;
+    const savedFilters = JSON.stringify(UI.filters), savedInflFilter = JSON.stringify(UI.inflFilter),
+      savedMicroFilter = JSON.stringify(UI.microFilter);
+    // Проверяет ОДНУ пару кнопок (экспорт и/или шаблон) на конкретной вкладке: кликает, ловит
+    // содержимое через подмену downloadFile, разбирает CSV quote-aware парсером самого приложения
+    // и сравнивает длину заголовка (первая запись) с длиной первой строки данных (вторая запись).
+    function checkButton(btnId, label){
+      const btn = document.getElementById(btnId);
+      if(!btn) throw new Error(`кнопка '${btnId}' (${label}) должна быть в DOM`);
+      const calls = [];
+      downloadFile = (filename, content)=>{ calls.push(content); };
+      try{ btn.onclick(); }
+      catch(e){ throw new Error(`клик по '${btnId}' (${label}) упал с ошибкой: ${e.message}`); }
+      if(calls.length !== 1) throw new Error(`клик по '${btnId}' (${label}) должен вызвать downloadFile ровно один раз, получили: ${calls.length}`);
+      const records = parseCsvRecords(calls[0].replace(/^﻿/, ""), ",").filter(r=>!(r.length===1 && r[0]===""));
+      if(records.length < 2) throw new Error(`'${btnId}' (${label}): нужно минимум 2 строки (заголовок + данные), получили ${records.length}`);
+      const headerLen = records[0].length, dataLen = records[1].length;
+      if(headerLen !== dataLen) throw new Error(`'${btnId}' (${label}): заголовок из ${headerLen} колонок, а строка данных — из ${dataLen}. Колонки съехали относительно заголовка.`);
+    }
+    try{
+      downloadFile = origDownload;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+
+      // Доставки ("Инфлюенс-рассылки")
+      UI.role = "manager"; UI.tab = "deliveries";
+      UI.filters = {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""};
+      DataManager.state.campaigns = [];
+      DataManager.state.drivers = [{code:"DRV-1", name:"Тест Водитель", phone:"", city:"Алматы", type:"свой", active:true}];
+      DataManager.state.orders = [{id:9801, blogger:"CSV Тест Доставка", followers:1000, city:"Алматы", address:"ул.1", phone:"+77001112233", box:"Бокс", driverCode:"DRV-1", status:"delivered", deliveredAt:"2026-07-01", assignedAt:"2026-06-30", closureType:"", bitrixSynced:false, driverComment:""}];
+      renderDeskShell();
+      checkButton("export-csv-btn", "Доставки: Экспорт отчёта");
+      checkButton("template-orders-csv-btn", "Доставки: Шаблон CSV");
+
+      // Публикации
+      UI.tab = "publications";
+      DataManager.state.publications = [];
+      renderDeskShell();
+      checkButton("export-pub-csv-btn", "Публикации: Экспорт CSV");
+      checkButton("template-pub-csv-btn", "Публикации: Шаблон CSV");
+
+      // Инфлюенс интеграции крупные
+      UI.tab = "influencerDeals";
+      UI.inflFilter = {search:"", sort:"default", month:""};
+      DataManager.state.influencerDeals = [{id:9802, blogerLogin:"@csv_test", platform:"Instagram Reels", product:"Товар", barcode:"", plannedDate:"2026-07-01", publishedDate:"2026-07-01", plannedReach:0, plannedClicks:0, reach:0, clicks:0, plannedCost:0, cost:1000, status:"Запланирована"}];
+      DataManager.state.sales = [];
+      renderDeskShell();
+      checkButton("export-deal-csv-btn", "Инфлюенс крупные: Экспорт CSV");
+      checkButton("template-deal-csv-btn", "Инфлюенс крупные: Шаблон CSV");
+      checkButton("template-sale-csv-btn", "Продажи: Шаблон CSV");
+
+      // Инфлюенс интеграции микро/средние
+      UI.tab = "microInfluencers";
+      UI.microFilter = {search:"", sort:"default", paymentStatus:"", month:"", responsible:""};
+      DataManager.state.microInfluencerDeals = [{id:9803, responsible:"Нина", blogerName:"CSV Микро Тест", bloggerCategory:"Бьюти", phone:"", city:"", address:"", instagramAccount:"", followers:0, er:0, avgReach:0, tiktokAccount:"", followersTT:0, erTT:0, avgReachTT:0, cost:1000, productCost:0, paymentStatus:"к оплате", paymentMethod:"", iin:"", conditions:"", product:"Товар", barcode:"", productCategory:"", productStatus:"товар заказан", videoStatus:"не опубликовано", reelsLink:"", factReachReels:0, tiktokVideoLink:"", factReachTT:0, plannedDate:"2026-07-01", publishDate:"", notes:""}];
+      renderDeskShell();
+      checkButton("export-micro-csv-btn", "Инфлюенс микро/средние: Экспорт CSV");
+      checkButton("template-micro-csv-btn", "Инфлюенс микро/средние: Шаблон CSV");
+
+      // Сводный отчёт
+      UI.role = "manager"; UI.tab = "report";
+      UI.filters = {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""};
+      DataManager.state.campaigns = [];
+      DataManager.state.orders = [{id:9804, blogger:"CSV Отчёт Тест", followers:1000, city:"Алматы", address:"", status:"delivered", deliveredAt:"2026-07-01", bitrixSynced:false}];
+      DataManager.state.publications = [{id:9805, orderId:9804, platform:"Instagram Reels", publishedAt:"2026-07-02", paidAmount:0, link:"", measurements:[{views:100, likes:0, comments:0, clicks:0, salesCount:0, salesRevenue:0}]}];
+      renderDeskShell();
+      checkButton("export-report-csv-btn", "Сводный отчёт: Экспорт CSV");
+    } finally {
+      downloadFile = origDownload;
+      UI.role = savedRole; UI.tab = savedTab;
+      DataManager.state.orders = savedOrders; DataManager.state.drivers = savedDrivers;
+      DataManager.state.campaigns = savedCampaigns; DataManager.state.publications = savedPubs;
+      DataManager.state.influencerDeals = savedDeals; DataManager.state.microInfluencerDeals = savedMicro;
+      UI.filters = JSON.parse(savedFilters); UI.inflFilter = JSON.parse(savedInflFilter); UI.microFilter = JSON.parse(savedMicroFilter);
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
