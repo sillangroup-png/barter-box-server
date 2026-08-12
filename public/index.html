@@ -1608,6 +1608,54 @@ function tplMicroBloggerSummary(){
     </div>
   `;
 }
+// Сводка нагрузки по ответственным менеджерам — сколько блогеров сейчас на ком висит.
+// Считаем по ВСЕМ интеграциям (без фильтра по месяцу — это снимок текущей загрузки, а не
+// показатель за период), группируя по d.responsible. "В работе" — видео ещё не опубликовано
+// (videoStatus !== "опубликовано"), т.е. блогер ещё в процессе, а не просто числится в истории.
+function microResponsibleSummary(){
+  const deals = DataManager.state.microInfluencerDeals;
+  const map = {};
+  deals.forEach(d=>{
+    const name = d.responsible || "Не указан";
+    if(!map[name]) map[name] = {responsible:name, bloggers:new Set(), dealsCount:0, inProgress:0, published:0};
+    const a = map[name];
+    a.bloggers.add(d.blogerName || "—");
+    a.dealsCount++;
+    if(d.videoStatus === "опубликовано") a.published++; else a.inProgress++;
+  });
+  return Object.values(map).map(a=>({
+    responsible: a.responsible,
+    uniqueBloggerCount: a.bloggers.size,
+    dealsCount: a.dealsCount,
+    inProgress: a.inProgress,
+    published: a.published,
+  })).sort((a,b)=> b.uniqueBloggerCount - a.uniqueBloggerCount);
+}
+function tplMicroResponsibleSummary(){
+  const rows = microResponsibleSummary();
+  return `
+    <div class="panel">
+      <div class="panel-title">
+        Сводка по ответственным
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">сколько блогеров сейчас в работе у каждого менеджера (снимок на сегодня, без фильтра по месяцу)</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Ответственный</th><th>Блогеров</th><th>В работе</th><th>Опубликовано</th><th>Всего интеграций</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r=>`<tr>
+            <td><b>${escapeHtml(r.responsible)}</b></td>
+            <td>${r.uniqueBloggerCount}</td>
+            <td>${r.inProgress}</td>
+            <td>${r.published}</td>
+            <td>${r.dealsCount}</td>
+          </tr>`).join("") || `<tr><td class="empty" colspan="5">Интеграций пока нет</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+  `;
+}
 function tplMicroInfluencerCompare(rows){
   const months = microAvailableMonths();
   if(!months.length) return "";
@@ -2772,6 +2820,7 @@ function tplMicroInfluencers(){
     ${tplMicroInfluencerBrandDashboard(s.romiRows)}
     ${tplMicroInfluencerCompare(s.romiRows)}
     ${tplMicroBloggerSummary()}
+    ${tplMicroResponsibleSummary()}
 
     <div class="login-hint" style="margin-bottom:6px">Метрики ниже — за ${summaryMonth?monthLabel(summaryMonth):'весь период'} (см. фильтр "Месяц" в сводке по блогерам выше)</div>
     <div class="grid-kpi">
@@ -5373,6 +5422,40 @@ async function runSelfTests(){
       DataManager.state.microInfluencerDeals = savedDeals;
       UI.microFilter = JSON.parse(savedFilter);
       UI.microSummaryMonth = savedSummaryMonth;
+    }
+  });
+  TestSuite.test("microResponsibleSummary()/tplMicroResponsibleSummary(): считает уникальных блогеров и деление на 'в работе'/'опубликовано' по каждому ответственному", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9740, blogerName:"Нинин Первый", responsible:"Нина", videoStatus:"не опубликовано"},
+        {id:9741, blogerName:"Нинин Второй", responsible:"Нина", videoStatus:"опубликовано"},
+        // Тот же блогер второй раз у Нины (пакет из 2 интеграций) — не должен задваивать уникальных блогеров.
+        {id:9742, blogerName:"Нинин Первый", responsible:"Нина", videoStatus:"не опубликовано"},
+        {id:9743, blogerName:"Аружанин Блогер", responsible:"Аружан", videoStatus:"не опубликовано"},
+      ];
+      const rows = microResponsibleSummary();
+      const nina = rows.find(r=>r.responsible==="Нина");
+      const aruzhan = rows.find(r=>r.responsible==="Аружан");
+      if(!nina) throw new Error("должна быть строка для 'Нина'");
+      if(nina.uniqueBloggerCount !== 2) throw new Error("у Нины должно быть 2 уникальных блогера (пакет не задваивается): "+nina.uniqueBloggerCount);
+      if(nina.dealsCount !== 3) throw new Error("у Нины должно быть 3 интеграции всего: "+nina.dealsCount);
+      if(nina.inProgress !== 2) throw new Error("у Нины 2 интеграции 'в работе' (не опубликовано): "+nina.inProgress);
+      if(nina.published !== 1) throw new Error("у Нины 1 опубликованная интеграция: "+nina.published);
+      if(!aruzhan || aruzhan.uniqueBloggerCount !== 1) throw new Error("у Аружан должен быть 1 уникальный блогер");
+
+      const html = tplMicroResponsibleSummary();
+      if(!html.includes("Сводка по ответственным")) throw new Error("должен быть заголовок 'Сводка по ответственным'");
+      if(!html.includes(">Нина<") || !html.includes(">Аружан<")) throw new Error("таблица должна перечислять обоих ответственных: "+html);
+
+      // Сводка по ответственным должна идти в разметке между 'Сводкой по блогерам' и основной таблицей интеграций.
+      const fullHtml = tplMicroInfluencers();
+      const bloggerSummaryPos = fullHtml.indexOf("Сводка по блогерам");
+      const responsibleSummaryPos = fullHtml.indexOf("Сводка по ответственным");
+      const detailPos = fullHtml.indexOf('id="micro-check-all"');
+      if(responsibleSummaryPos === -1 || responsibleSummaryPos <= bloggerSummaryPos || responsibleSummaryPos >= detailPos) throw new Error("'Сводка по ответственным' должна быть между 'Сводкой по блогерам' и основной таблицей интеграций");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
     }
   });
   TestSuite.test("wireDeskTab(microInfluencers): выбор месяца в 'Сводке по блогерам' обновляет UI.microSummaryMonth", ()=>{
