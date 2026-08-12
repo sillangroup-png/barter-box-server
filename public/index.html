@@ -1011,6 +1011,35 @@ function influencerSummary(from, to){
   return {rows, totalCost, plannedCost, totalReach, totalClicks, plannedReach, plannedClicks,
     totalSalesContribution, plannedPosts, actualPosts, avgRomi, top, count: rows.length};
 }
+// Та же детализация "Оплачено" / "В работе — ждём контент", что и у микро/средних (см.
+// microDetailStats) — только для крупных интеграций своя модель полей: нет отдельного
+// paymentStatus/videoStatus, вместо этого — status (Запланирована/Опубликована/Оплачена/Закрыта)
+// и отдельная дата publishedDate. "Оплачено" = status "Оплачена" или "Закрыта" (после них по
+// пайплайну оплата уже прошла). "В работе" — по ФАКТУ ПУБЛИКАЦИИ (publishedDate пусто), а не по
+// статусу: статус блогер-менеджер может забыть переключить, а дата публикации — это то, что
+// реально видно в отчёте (та же логика, что у actualPosts выше).
+function influencerDetailStats(rows){
+  const isPaidStatus = d => d.status==="Оплачена" || d.status==="Закрыта";
+  const paidRows = rows.filter(r=>isPaidStatus(r.deal));
+  const paidSum = paidRows.reduce((s,r)=>s+(r.deal.cost||0),0);
+  const paidReach = paidRows.reduce((s,r)=>s+(r.deal.reach||0),0);
+  const paidCpv = (paidSum>0 && paidReach>0) ? paidSum/paidReach : null;
+  const paidPublishedCount = paidRows.filter(r=>r.deal.publishedDate).length;
+  const paidBloggers = new Set(paidRows.map(r=>r.deal.blogerLogin||"—")).size;
+
+  const inProgress = rows.filter(r=>!r.deal.publishedDate);
+  // План.сумма — факт.расход, если уже согласован, иначе плановый бюджет (cost часто заполняют
+  // заранее, до фактической оплаты, поэтому это надёжнее, чем ждать статус "Оплачена").
+  const inProgressSum = inProgress.reduce((s,r)=>s+(r.deal.cost||r.deal.plannedCost||0),0);
+  const inProgressBloggers = new Set(inProgress.map(r=>r.deal.blogerLogin||"—")).size;
+  const inProgressPaidCount = inProgress.filter(r=>isPaidStatus(r.deal)).length;
+  const inProgressUnpaidCount = inProgress.length - inProgressPaidCount;
+
+  return {
+    paidCount: paidRows.length, paidBloggers, paidSum, paidReach, paidCpv, paidPublishedCount,
+    inProgressCount: inProgress.length, inProgressBloggers, inProgressSum, inProgressPaidCount, inProgressUnpaidCount,
+  };
+}
 // Агрегация по блогеру для рейтингов «Топ блогеров» среди платных инфлюенс-интеграций
 // (используется только база influencerDeals — крупные платные интеграции, не бартерные рассылки).
 // ---------- Инфлюенс интеграции микро/средние (отв. Нина) ----------
@@ -1092,6 +1121,35 @@ function microInfluencerSummary(from, to){
 
   return {deals, totalCost, totalFactReach, totalAvgReach, paidCount, unpaidCount, toPayCount, publishedCount, pendingCount, uniqueBloggerCount, avgCpv, count: deals.length,
     romiRows, totalSalesContribution, avgRomi, topRomi};
+}
+// Детализация KPI-плашек "Инфлюенс интеграции микро/средние" на две группы вместо одной общей
+// сводки: "Оплачено" (кому реально перечислили деньги) и "В работе / ждём контент" (видео ещё
+// не вышло — независимо от того, оплачено или нет). Раньше плашки просто суммировали ВСЁ подряд
+// (оплаченное и неоплаченное, вышедшее и невышедшее) в одних и тех же цифрах — по просьбе бухгалтерии/
+// маркетолога разделяем на "факт" (оплачено, с реальным охватом/CPV) и "план" (в работе, что ещё
+// предстоит либо оплатить, либо дождаться публикации).
+function microDetailStats(deals){
+  const paid = deals.filter(d=>d.paymentStatus==="оплачено");
+  const paidSum = paid.reduce((s,d)=>s+microDealTotalCost(d),0);
+  const paidReach = paid.reduce((s,d)=>s+microDealFactReach(d),0);
+  const paidCpv = (paidSum>0 && paidReach>0) ? paidSum/paidReach : null;
+  const paidPublishedCount = paid.filter(d=>d.videoStatus==="опубликовано").length;
+  const paidBloggers = new Set(paid.map(d=>d.blogerName||"—")).size;
+
+  // "В работе" — по статусу ПУБЛИКАЦИИ (не по оплате): пока видео не вышло, для маркетолога это
+  // всё ещё открытая задача "ждём контент от блогера", даже если оплата уже прошла заранее.
+  const inProgress = deals.filter(d=>d.videoStatus!=="опубликовано");
+  const inProgressSum = inProgress.reduce((s,d)=>s+microDealTotalCost(d),0);
+  const inProgressBloggers = new Set(inProgress.map(d=>d.blogerName||"—")).size;
+  const inProgressPaidCount = inProgress.filter(d=>d.paymentStatus==="оплачено").length;
+  const inProgressToPayCount = inProgress.filter(d=>d.paymentStatus==="к оплате").length;
+  const inProgressUnpaidCount = inProgress.filter(d=>d.paymentStatus==="не оплачено").length;
+
+  return {
+    paidCount: paid.length, paidBloggers, paidSum, paidReach, paidCpv, paidPublishedCount,
+    inProgressCount: inProgress.length, inProgressBloggers, inProgressSum,
+    inProgressPaidCount, inProgressToPayCount, inProgressUnpaidCount,
+  };
 }
 function influencerBloggerAgg(rows){
   const map = {};
@@ -1790,6 +1848,7 @@ const UI = {
   microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:""},
   inflDashMonth: "", // выбранный месяц в новом стилизованном дашборде "Платный инфлюенс" (см. tplInfluencerBrandDashboard)
   inflCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
+  inflDetailMonth: "", // выбранный месяц в блоках "Оплачено"/"В работе — ждём контент" (см. tplInfluencerDeals)
   microDashMonth: "", // выбранный месяц в дашборде "Микро/средние" (см. tplMicroInfluencerBrandDashboard)
   microCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
   microSummaryMonth: "", // выбранный месяц в сводке "по блогерам" перед таблицей интеграций (см. tplMicroBloggerSummary)
@@ -2719,9 +2778,52 @@ function tplInfluencerDeals(){
   const months = inflAvailableMonths();
   const rows = filteredInfluencerDealRows();
 
+  // "Оплачено" / "В работе — ждём контент" — та же детализация, что и на вкладке микро/средних
+  // (см. microDetailStats), своим селектом месяца (UI.inflDetailMonth), независимым от фильтра
+  // поиска/сортировки таблицы ниже (fi), чтобы переключение месяца в таблице не меняло эти цифры
+  // незаметно и наоборот.
+  const detailMonth = UI.inflDetailMonth;
+  const detailSummary = detailMonth ? influencerSummary(detailMonth+"-01", monthEnd(detailMonth)) : s;
+  const ds = influencerDetailStats(detailSummary.rows);
+
   return `
     ${tplInfluencerBrandDashboard(s.rows)}
     ${tplInfluencerCompare(s.rows)}
+
+    <div class="toolbar" style="margin-bottom:8px;align-items:center;flex-wrap:wrap">
+      <span style="color:var(--ink-mute);font-size:12px">Метрики ниже — за ${detailMonth?monthLabel(detailMonth):'весь период'}:</span>
+      <select id="infl-detail-month">
+        <option value="">Весь период</option>
+        ${months.map(m=>`<option value="${m}" ${detailMonth===m?'selected':''}>${escapeHtml(monthLabel(m))}</option>`).join("")}
+      </select>
+    </div>
+    <div class="panel" style="margin-bottom:12px">
+      <div class="panel-title">
+        Оплачено
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">интеграции в статусе «Оплачена»/«Закрыта»</span>
+      </div>
+      <div class="grid-kpi" style="margin-bottom:0">
+        <div class="kpi ok"><div class="num">${ds.paidCount}</div><div class="lbl">Интеграций оплачено</div></div>
+        <div class="kpi"><div class="num">${ds.paidBloggers}</div><div class="lbl">Уникальных блогеров</div></div>
+        <div class="kpi bad"><div class="num">${fmtNum(ds.paidSum)} ₸</div><div class="lbl">Сумма оплат</div></div>
+        <div class="kpi ok"><div class="num">${fmtNum(ds.paidReach)}</div><div class="lbl">Факт.охват</div></div>
+        <div class="kpi"><div class="num">${ds.paidCpv==null?'—':ds.paidCpv.toFixed(3)+' ₸'}</div><div class="lbl">Средний CPV</div></div>
+        <div class="kpi"><div class="num">${ds.paidPublishedCount}</div><div class="lbl">Из них уже опубликовано</div></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">
+        В работе — ждём контент
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">дата публикации ещё не проставлена, независимо от оплаты</span>
+      </div>
+      <div class="grid-kpi" style="margin-bottom:0">
+        <div class="kpi warn"><div class="num">${ds.inProgressCount}</div><div class="lbl">Интеграций в работе</div></div>
+        <div class="kpi"><div class="num">${ds.inProgressBloggers}</div><div class="lbl">Уникальных блогеров</div></div>
+        <div class="kpi"><div class="num">${fmtNum(ds.inProgressSum)} ₸</div><div class="lbl">План.сумма</div></div>
+        <div class="kpi ok"><div class="num">${ds.inProgressPaidCount}</div><div class="lbl">Уже оплачено, ждём контент</div></div>
+        <div class="kpi bad"><div class="num">${ds.inProgressUnpaidCount}</div><div class="lbl">Не оплачено</div></div>
+      </div>
+    </div>
 
     <div class="panel">
       <div class="panel-title">
@@ -2830,6 +2932,8 @@ function tplMicroInfluencers(){
   // чтобы выбор месяца в одном месте не переключал незаметно и содержимое другого.
   const summaryMonth = UI.microSummaryMonth;
   const kpi_s = summaryMonth ? microInfluencerSummary(summaryMonth+"-01", monthEnd(summaryMonth)) : s;
+  // Детализация "Оплачено" / "В работе — ждём контент" — см. комментарий у microDetailStats().
+  const ds = microDetailStats(kpi_s.deals);
   // Список месяцев для селекта фильтра прямо у KPI-плашек ниже — тот же UI.microSummaryMonth,
   // что и в "Сводке по блогерам" выше (микро-summary-month), просто продублированный контрол
   // здесь для удобства: маркетологу не нужно скроллить наверх, чтобы поменять месяц у этих цифр.
@@ -2903,14 +3007,33 @@ function tplMicroInfluencers(){
         ${kpiMonths.map(m=>`<option value="${m}" ${summaryMonth===m?'selected':''}>${escapeHtml(monthLabel(m))}</option>`).join("")}
       </select>
     </div>
-    <div class="grid-kpi">
-      <div class="kpi"><div class="num">${kpi_s.count}</div><div class="lbl">Всего интеграций</div></div>
-      <div class="kpi"><div class="num">${kpi_s.uniqueBloggerCount}</div><div class="lbl">Уникальных блогеров (один может продавать пакетом несколько интеграций)</div></div>
-      <div class="kpi bad"><div class="num">${fmtNum(kpi_s.totalCost)} ₸</div><div class="lbl">Сумма (${kpi_s.paidCount} оплачено, ${kpi_s.toPayCount} к оплате, ${kpi_s.unpaidCount} не оплачено)</div></div>
-      <div class="kpi ok"><div class="num">${fmtNum(kpi_s.totalFactReach)}</div><div class="lbl">Факт.охват (Reels+TikTok)</div></div>
-      <div class="kpi"><div class="num">${kpi_s.avgCpv==null?'—':kpi_s.avgCpv.toFixed(3)+' ₸'}</div><div class="lbl">Средний CPV (сумма/факт.охват)</div></div>
-      <div class="kpi"><div class="num">${kpi_s.publishedCount}</div><div class="lbl">Опубликовано видео (план ${kpi_s.count})</div></div>
-      <div class="kpi warn"><div class="num">${kpi_s.pendingCount}</div><div class="lbl">Ещё запланировано (не оплачено и не опубликовано)</div></div>
+    <div class="panel" style="margin-bottom:12px">
+      <div class="panel-title">
+        Оплачено
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">блогеры, которым уже перечислили деньги — сумма = оплата + себестоимость подаренного товара</span>
+      </div>
+      <div class="grid-kpi" style="margin-bottom:0">
+        <div class="kpi ok"><div class="num">${ds.paidCount}</div><div class="lbl">Интеграций оплачено</div></div>
+        <div class="kpi"><div class="num">${ds.paidBloggers}</div><div class="lbl">Уникальных блогеров</div></div>
+        <div class="kpi bad"><div class="num">${fmtNum(ds.paidSum)} ₸</div><div class="lbl">Сумма оплат</div></div>
+        <div class="kpi ok"><div class="num">${fmtNum(ds.paidReach)}</div><div class="lbl">Факт.охват (Reels+TikTok)</div></div>
+        <div class="kpi"><div class="num">${ds.paidCpv==null?'—':ds.paidCpv.toFixed(3)+' ₸'}</div><div class="lbl">Средний CPV</div></div>
+        <div class="kpi"><div class="num">${ds.paidPublishedCount}</div><div class="lbl">Из них уже опубликовано</div></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">
+        В работе — ждём контент
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">видео ещё не вышло, независимо от того, оплачено или нет</span>
+      </div>
+      <div class="grid-kpi" style="margin-bottom:0">
+        <div class="kpi warn"><div class="num">${ds.inProgressCount}</div><div class="lbl">Интеграций в работе</div></div>
+        <div class="kpi"><div class="num">${ds.inProgressBloggers}</div><div class="lbl">Уникальных блогеров</div></div>
+        <div class="kpi"><div class="num">${fmtNum(ds.inProgressSum)} ₸</div><div class="lbl">План.сумма (оплата + товар)</div></div>
+        <div class="kpi ok"><div class="num">${ds.inProgressPaidCount}</div><div class="lbl">Уже оплачено, ждём контент</div></div>
+        <div class="kpi"><div class="num">${ds.inProgressToPayCount}</div><div class="lbl">К оплате</div></div>
+        <div class="kpi bad"><div class="num">${ds.inProgressUnpaidCount}</div><div class="lbl">Не оплачено</div></div>
+      </div>
     </div>
     <div class="panel">
       <div class="panel-title">
@@ -4398,6 +4521,10 @@ function wireDeskTab(){
     wireSearchOnEnter(inflSearch, v=>{ UI.inflFilter.search = v; renderDeskTab(); });
     document.getElementById("infl-sort").onchange = e=>{ UI.inflFilter.sort = e.target.value; renderDeskTab(); };
     document.getElementById("infl-month").onchange = e=>{ UI.inflFilter.month = e.target.value; renderDeskTab(); };
+    // Селект месяца у блоков "Оплачено"/"В работе — ждём контент" — независим от infl-month
+    // (тот фильтрует таблицу интеграций ниже, этот — только сводные KPI-плашки выше неё).
+    const inflDetailMonthSelect = document.getElementById("infl-detail-month");
+    if(inflDetailMonthSelect) inflDetailMonthSelect.onchange = e=>{ UI.inflDetailMonth = e.target.value; renderDeskTab(); };
     document.querySelectorAll(".infl-dash-month-tab").forEach(btn=>{
       btn.onclick = ()=>{ UI.inflDashMonth = btn.dataset.month; renderDeskTab(); };
     });
@@ -5305,6 +5432,61 @@ async function runSelfTests(){
       DataManager.state.salesByDay = savedSales;
     }
   });
+  TestSuite.test("influencerDetailStats считает 'Оплачено'/'В работе — ждём контент' по status и publishedDate", ()=>{
+    const rows = [
+      {deal:{id:9938, blogerLogin:"@ds_paid_pub", status:"Оплачена", cost:1000, reach:500, publishedDate:"2026-08-05"}},
+      {deal:{id:9939, blogerLogin:"@ds_paid_wait", status:"Оплачена", cost:700, reach:0, publishedDate:""}},
+      {deal:{id:9940, blogerLogin:"@ds_unpaid_wait", status:"Запланирована", cost:300, reach:0, publishedDate:""}},
+      {deal:{id:9941, blogerLogin:"@ds_closed_pub", status:"Закрыта", cost:900, reach:400, publishedDate:"2026-06-01"}},
+    ];
+    const ds = influencerDetailStats(rows);
+    if(ds.paidCount !== 3) throw new Error("оплаченных (status Оплачена/Закрыта) должно быть 3: "+ds.paidCount);
+    if(ds.paidSum !== 2600) throw new Error("сумма оплат должна быть 1000+700+900=2600: "+ds.paidSum);
+    if(ds.paidReach !== 900) throw new Error("факт.охват оплаченных должен быть 500+400=900: "+ds.paidReach);
+    if(ds.paidPublishedCount !== 2) throw new Error("из оплаченных опубликовано должно быть 2: "+ds.paidPublishedCount);
+    if(ds.paidBloggers !== 3) throw new Error("уникальных блогеров среди оплаченных должно быть 3: "+ds.paidBloggers);
+    if(ds.inProgressCount !== 2) throw new Error("в работе (нет даты публикации) должно быть 2: "+ds.inProgressCount);
+    if(ds.inProgressSum !== 1000) throw new Error("план.сумма в работе должна быть 700+300=1000: "+ds.inProgressSum);
+    if(ds.inProgressPaidCount !== 1) throw new Error("из них уже оплачено (ждём контент) должно быть 1: "+ds.inProgressPaidCount);
+    if(ds.inProgressUnpaidCount !== 1) throw new Error("из них не оплачено должно быть 1: "+ds.inProgressUnpaidCount);
+  });
+  TestSuite.test("tplInfluencerDeals: панели 'Оплачено'/'В работе — ждём контент' и селект месяца (infl-detail-month)", ()=>{
+    const saved = DataManager.state.influencerDeals;
+    const savedSales = DataManager.state.salesByDay;
+    const savedFilter = JSON.stringify(UI.inflFilter);
+    const savedDetailMonth = UI.inflDetailMonth;
+    const savedTab = UI.tab;
+    try{
+      DataManager.state.influencerDeals = [
+        {id:9942, blogerLogin:"@ld_paid_aug", status:"Оплачена", cost:1000, reach:500, publishedDate:"2026-08-05", plannedDate:"2026-08-01"},
+        {id:9943, blogerLogin:"@ld_wait_aug", status:"Запланирована", cost:300, reach:0, publishedDate:"", plannedDate:"2026-08-10"},
+        {id:9944, blogerLogin:"@ld_paid_june", status:"Закрыта", cost:900, reach:400, publishedDate:"2026-06-01", plannedDate:"2026-06-01"},
+      ];
+      DataManager.state.salesByDay = [];
+      UI.inflFilter = {search:"", sort:"default", month:""};
+      UI.inflDetailMonth = "";
+      UI.tab = "influencerDeals";
+      document.body.innerHTML = '<main id="main"></main><div id="toast"></div>';
+      document.getElementById("main").innerHTML = tplInfluencerDeals();
+      if(!/<div class="num">2<\/div><div class="lbl">Интеграций оплачено/.test(document.getElementById("main").innerHTML)) throw new Error("оплаченных за весь период должно быть 2");
+      wireDeskTab();
+      const select = document.getElementById("infl-detail-month");
+      if(!select) throw new Error("должен быть селект 'infl-detail-month'");
+      select.value = "2026-08";
+      select.dispatchEvent(new Event("change"));
+      if(UI.inflDetailMonth !== "2026-08") throw new Error("выбор месяца должен обновить UI.inflDetailMonth: "+UI.inflDetailMonth);
+      const html2 = document.getElementById("main").innerHTML;
+      if(!/<div class="num">1<\/div><div class="lbl">Интеграций оплачено/.test(html2)) throw new Error("после фильтра 'август' оплаченных должно остаться 1: "+html2);
+      if(!/<div class="num">1<\/div><div class="lbl">Интеграций в работе/.test(html2)) throw new Error("в работе за август должно быть 1: "+html2);
+    } finally {
+      DataManager.state.influencerDeals = saved;
+      DataManager.state.salesByDay = savedSales;
+      UI.inflFilter = JSON.parse(savedFilter);
+      UI.inflDetailMonth = savedDetailMonth;
+      UI.tab = savedTab;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
   TestSuite.test("filteredInfluencerDealRows фильтрует по логину/месяцу и сортирует так же, как таблица", ()=>{
     const saved = DataManager.state.influencerDeals;
     const savedSales = DataManager.state.salesByDay;
@@ -5409,7 +5591,8 @@ async function runSelfTests(){
       if(!html.includes("Питательный бальзам для губ")) throw new Error("таблица должна показывать товар");
       if(!html.includes("new-micro-btn")) throw new Error("должна быть кнопка добавления интеграции");
       if(!html.includes("Уникальных блогеров")) throw new Error("должен быть KPI 'Уникальных блогеров'");
-      if(!html.includes("Ещё запланировано")) throw new Error("должен быть KPI 'Ещё запланировано'");
+      if(!html.includes("Интеграций оплачено")) throw new Error("должен быть блок 'Оплачено' с KPI 'Интеграций оплачено'");
+      if(!html.includes("Интеграций в работе")) throw new Error("должен быть блок 'В работе — ждём контент' с KPI 'Интеграций в работе'");
     } finally {
       DataManager.state.microInfluencerDeals = saved;
       UI.microFilter = JSON.parse(savedFilter);
@@ -5988,29 +6171,38 @@ async function runSelfTests(){
       UI.microFilter = JSON.parse(savedFilter);
     }
   });
-  TestSuite.test("tplMicroInfluencers: KPI-плашки (Всего интеграций и др.) пересчитываются по UI.microSummaryMonth, а не по всей истории", ()=>{
+  TestSuite.test("tplMicroInfluencers: блоки 'Оплачено'/'В работе — ждём контент' пересчитываются по UI.microSummaryMonth, а не по всей истории", ()=>{
     const saved = DataManager.state.microInfluencerDeals;
     const savedSummaryMonth = UI.microSummaryMonth;
     const savedFilter = JSON.stringify(UI.microFilter);
     try{
       DataManager.state.microInfluencerDeals = [
-        {id:9210, blogerName:"Августовский", cost:500, factReachReels:500, factReachTT:0, publishDate:"2026-08-05", plannedDate:"", paymentStatus:"оплачено"},
-        {id:9211, blogerName:"Июньский", cost:800, factReachReels:800, factReachTT:0, publishDate:"2026-06-05", plannedDate:"", paymentStatus:"оплачено"},
+        // Август: оплачено и уже опубликовано
+        {id:9210, blogerName:"АвгОплПубл", cost:500, factReachReels:500, factReachTT:0, publishDate:"2026-08-05", plannedDate:"", paymentStatus:"оплачено", videoStatus:"опубликовано"},
+        // Август: оплачено, но видео ещё не вышло — "в работе, ждём контент"
+        {id:9211, blogerName:"АвгОплВРаботе", cost:300, factReachReels:0, factReachTT:0, publishDate:"", plannedDate:"2026-08-10", paymentStatus:"оплачено", videoStatus:"не опубликовано"},
+        // Август: не оплачено, видео ещё не вышло
+        {id:9212, blogerName:"АвгНеОплВРаботе", cost:200, factReachReels:0, factReachTT:0, publishDate:"", plannedDate:"2026-08-12", paymentStatus:"не оплачено", videoStatus:"не опубликовано"},
+        // Июнь: оплачено и уже опубликовано — попадает только в "весь период", не в фильтр "август"
+        {id:9213, blogerName:"ИюньОплПубл", cost:800, factReachReels:800, factReachTT:0, publishDate:"2026-06-05", plannedDate:"", paymentStatus:"оплачено", videoStatus:"опубликовано"},
       ];
       UI.microFilter = {search:"", sort:"default", paymentStatus:"", month:""};
       const kpiGridOnly = h=> h.slice(0, h.indexOf("Инфлюенс интеграции микро/средние"));
 
       UI.microSummaryMonth = "";
       let html = kpiGridOnly(tplMicroInfluencers());
-      if(!/<div class="num">2<\/div><div class="lbl">Всего интеграций/.test(html)) throw new Error("при 'весь период' должны учитываться обе интеграции: "+html);
+      if(!/<div class="num">3<\/div><div class="lbl">Интеграций оплачено/.test(html)) throw new Error("при 'весь период' оплаченных должно быть 3 (АвгОплПубл+АвгОплВРаботе+ИюньОплПубл): "+html);
+      if(!html.includes("1 600")) throw new Error("сумма оплат за весь период должна быть 500+300+800=1600: "+html);
+      if(!/<div class="num">1 300<\/div><div class="lbl">Факт\.охват/.test(html)) throw new Error("факт.охват среди оплаченных за весь период должен быть 500+800=1300: "+html);
+      if(!/<div class="num">2<\/div><div class="lbl">Интеграций в работе/.test(html)) throw new Error("в работе (видео не вышло) должно быть 2 (АвгОплВРаботе+АвгНеОплВРаботе): "+html);
       if(!html.includes("за весь период")) throw new Error("подпись должна говорить 'за весь период' при пустом фильтре");
-      if(!html.includes("1 300")) throw new Error("сумма за весь период должна быть 500+800=1300: "+html);
 
       UI.microSummaryMonth = "2026-08";
       html = kpiGridOnly(tplMicroInfluencers());
-      if(!/<div class="num">1<\/div><div class="lbl">Всего интеграций/.test(html)) throw new Error("при фильтре 'август' должна остаться только 1 интеграция: "+html);
-      if(!html.includes("500")) throw new Error("сумма/охват должны пересчитаться по августу (500), а не по всей истории (1300): "+html);
-      if(html.includes("1 300")) throw new Error("при фильтре 'август' не должна показываться сумма за весь период (1300)");
+      if(!/<div class="num">2<\/div><div class="lbl">Интеграций оплачено/.test(html)) throw new Error("при фильтре 'август' оплаченных должно остаться 2 (без ИюньОплПубл): "+html);
+      if(!html.includes("800")) throw new Error("сумма оплат за август должна быть 500+300=800: "+html);
+      if(html.includes("1 600")) throw new Error("при фильтре 'август' не должна показываться сумма за весь период (1600)");
+      if(!/<div class="num">2<\/div><div class="lbl">Интеграций в работе/.test(html)) throw new Error("в работе за август тоже 2 — оба 'в работе' дела как раз из августа: "+html);
       if(html.includes("Август 2026") === false) throw new Error("подпись должна показывать выбранный месяц");
     } finally {
       DataManager.state.microInfluencerDeals = saved;
