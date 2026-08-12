@@ -1619,19 +1619,32 @@ function microResponsibleSummary(month){
   const map = {};
   deals.forEach(d=>{
     const name = d.responsible || "Не указан";
-    if(!map[name]) map[name] = {responsible:name, bloggers:new Set(), dealsCount:0, inProgress:0, published:0};
+    if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), dealsCount:0, inProgress:0, published:0};
     const a = map[name];
-    a.bloggers.add(d.blogerName || "—");
+    // Город/категория запоминаются по блогеру (не по интеграции), чтобы разбивка ниже (в
+    // развёрнутой карточке) считала тех же "уникальных блогеров", что и колонка "Блогеров" —
+    // если блогер продавал пакетом несколько интеграций, берём город/категорию с последней.
+    a.bloggers.set(d.blogerName || "—", {city: d.city || "Не указан", category: d.bloggerCategory || "Не указана"});
     a.dealsCount++;
     if(d.videoStatus === "опубликовано") a.published++; else a.inProgress++;
   });
-  return Object.values(map).map(a=>({
-    responsible: a.responsible,
-    uniqueBloggerCount: a.bloggers.size,
-    dealsCount: a.dealsCount,
-    inProgress: a.inProgress,
-    published: a.published,
-  })).sort((a,b)=> b.uniqueBloggerCount - a.uniqueBloggerCount);
+  return Object.values(map).map(a=>{
+    const byCity = {}, byCategory = {};
+    a.bloggers.forEach(info=>{
+      byCity[info.city] = (byCity[info.city]||0) + 1;
+      byCategory[info.category] = (byCategory[info.category]||0) + 1;
+    });
+    const toRows = (obj, key) => Object.entries(obj).map(([k,count])=>({[key]:k, count})).sort((x,y)=>y.count-x.count);
+    return {
+      responsible: a.responsible,
+      uniqueBloggerCount: a.bloggers.size,
+      dealsCount: a.dealsCount,
+      inProgress: a.inProgress,
+      published: a.published,
+      cityRows: toRows(byCity, "city"),
+      categoryRows: toRows(byCategory, "category"),
+    };
+  }).sort((a,b)=> b.uniqueBloggerCount - a.uniqueBloggerCount);
 }
 function tplMicroResponsibleSummary(){
   const months = microAvailableMonths();
@@ -1651,17 +1664,38 @@ function tplMicroResponsibleSummary(){
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
-          <th>Ответственный</th><th>Блогеров</th><th>В работе</th><th>Опубликовано</th><th>Всего интеграций</th>
+          <th style="width:28px"></th><th>Ответственный</th><th>Блогеров</th><th>В работе</th><th>Опубликовано</th><th>Всего интеграций</th>
         </tr></thead>
         <tbody>
-          ${rows.map(r=>`<tr>
-            <td><b>${escapeHtml(r.responsible)}</b></td>
-            <td>${r.uniqueBloggerCount}</td>
-            <td>${r.inProgress}</td>
-            <td>${r.published}</td>
-            <td>${r.dealsCount}</td>
-          </tr>`).join("") || `<tr><td class="empty" colspan="5">${month ? "Нет интеграций за выбранный месяц" : "Интеграций пока нет"}</td></tr>`}
+          ${rows.map(r=>{
+            const expanded = UI.expandedResponsible.has(r.responsible);
+            const miniTable = (title, items, key) => `
+              <div style="min-width:180px">
+                <div style="font-weight:600;font-size:12px;margin-bottom:6px;color:var(--ink-mute)">${title}</div>
+                ${items.length ? `<table style="width:100%">${items.map(it=>`<tr>
+                  <td style="padding:3px 10px 3px 0">${escapeHtml(it[key])}</td>
+                  <td style="padding:3px 0;text-align:right;font-weight:600">${it.count}</td>
+                </tr>`).join("")}</table>` : `<div class="login-hint">Нет данных</div>`}
+              </div>`;
+            return `<tr>
+              <td><button class="btn btn-ghost btn-sm responsible-toggle-btn" data-responsible="${escapeHtml(r.responsible)}" style="padding:2px 9px;line-height:1">${expanded?'−':'+'}</button></td>
+              <td><b>${escapeHtml(r.responsible)}</b></td>
+              <td>${r.uniqueBloggerCount}</td>
+              <td>${r.inProgress}</td>
+              <td>${r.published}</td>
+              <td>${r.dealsCount}</td>
+            </tr>${expanded ? `<tr>
+              <td></td>
+              <td colspan="5" style="padding:6px 0 16px 0">
+                <div style="display:flex;gap:36px;flex-wrap:wrap">
+                  ${miniTable("По городам", r.cityRows, "city")}
+                  ${miniTable("По категории блогера", r.categoryRows, "category")}
+                </div>
+              </td>
+            </tr>` : ""}`;
+          }).join("") || `<tr><td class="empty" colspan="6">${month ? "Нет интеграций за выбранный месяц" : "Интеграций пока нет"}</td></tr>`}
           ${rows.length ? `<tr style="font-weight:700;border-top:2px solid var(--line-2)">
+            <td></td>
             <td>Итого</td>
             <td>${rows.reduce((s,r)=>s+r.uniqueBloggerCount,0)}</td>
             <td>${rows.reduce((s,r)=>s+r.inProgress,0)}</td>
@@ -1746,6 +1780,7 @@ const UI = {
   microSummaryMonth: "", // выбранный месяц в сводке "по блогерам" перед таблицей интеграций (см. tplMicroBloggerSummary)
   microSummaryExpanded: false, // "Сводка по блогерам" свёрнута до 10 строк, пока не нажата "Показать все"
   microResponsibleMonth: "", // выбранный месяц в "Сводке по ответственным" (см. tplMicroResponsibleSummary) — "" = вся история (снимок загрузки на сегодня)
+  expandedResponsible: new Set(), // какие менеджеры развёрнуты в "Сводке по ответственным" (клик по "+" показывает разбивку по городам/категориям блогеров)
   calendarMonth: "", // выбранный месяц в "Планере блогеров" (см. tplMicroCalendar) — "YYYY-MM", пусто = текущий месяц
   calendarHiddenBloggers: new Set(), // блогеры, скрытые из календаря кликом по чипу-легенде (по умолчанию видны все)
   dashExpenseCampaign: "", // фильтр проекта в панели "Расходы на бартер" дашборда менеджера: "" = все проекты (с разрезом по каждому)
@@ -4473,6 +4508,14 @@ function wireDeskTab(){
     if(microSummaryShowAllBtn) microSummaryShowAllBtn.onclick = ()=>{ UI.microSummaryExpanded = true; renderDeskTab(); };
     const microResponsibleSummaryMonthSelect = document.getElementById("micro-responsible-summary-month");
     if(microResponsibleSummaryMonthSelect) microResponsibleSummaryMonthSelect.onchange = e=>{ UI.microResponsibleMonth = e.target.value; renderDeskTab(); };
+    document.querySelectorAll(".responsible-toggle-btn").forEach(btn=>{
+      btn.onclick = ()=>{
+        const name = btn.dataset.responsible;
+        if(UI.expandedResponsible.has(name)) UI.expandedResponsible.delete(name);
+        else UI.expandedResponsible.add(name);
+        renderDeskTab();
+      };
+    });
     ["micro-cmp-a-from","micro-cmp-a-to","micro-cmp-b-from","micro-cmp-b-to"].forEach(id=>{
       const el = document.getElementById(id);
       if(!el) return;
@@ -5475,7 +5518,7 @@ async function runSelfTests(){
       // Итоговая строка внизу таблицы: суммы по каждой колонке (2 уник.блогера у Нины + 1 у Аружан = 3,
       // 2 в работе у Нины + 1 у Аружан = 3, 1 опубликовано у Нины = 1, 3 интеграции у Нины + 1 у Аружан = 4).
       if(!html.includes(">Итого<")) throw new Error("должна быть итоговая строка 'Итого' внизу таблицы: "+html);
-      const totalRowMatch = html.match(/<tr[^>]*>\s*<td>Итого<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>/);
+      const totalRowMatch = html.match(/<tr[^>]*>\s*<td><\/td>\s*<td>Итого<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>/);
       if(!totalRowMatch) throw new Error("не удалось найти ячейки итоговой строки: "+html);
       const [, totalBloggers, totalInProgress, totalPublished, totalDeals] = totalRowMatch.map(Number);
       if(totalBloggers !== 3) throw new Error("итого блогеров должно быть 3 (2 у Нины + 1 у Аружан): "+totalBloggers);
@@ -5526,6 +5569,65 @@ async function runSelfTests(){
       DataManager.state.microInfluencerDeals = savedDeals;
       UI.microResponsibleMonth = savedMonth;
       UI.tab = savedTab;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("microResponsibleSummary(): считает разбивку по городам и категориям блогера (для развёрнутой карточки), tplMicroResponsibleSummary()/wireDeskTab(): '+' разворачивает и показывает эту разбивку", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedTab = UI.tab;
+    const savedExpanded = new Set(UI.expandedResponsible);
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9760, blogerName:"Блогер1", responsible:"Нина", city:"Алматы", bloggerCategory:"Бьюти", videoStatus:"не опубликовано"},
+        {id:9761, blogerName:"Блогер2", responsible:"Нина", city:"Алматы", bloggerCategory:"Лайфстайл", videoStatus:"не опубликовано"},
+        {id:9762, blogerName:"Блогер3", responsible:"Нина", city:"Астана", bloggerCategory:"Бьюти", videoStatus:"не опубликовано"},
+        // Блогер4 без города/категории — должен попасть в "Не указан"/"Не указана", а не потеряться.
+        {id:9763, blogerName:"Блогер4", responsible:"Нина", city:"", bloggerCategory:"", videoStatus:"не опубликовано"},
+      ];
+      UI.expandedResponsible = new Set();
+      const rows = microResponsibleSummary();
+      const nina = rows.find(r=>r.responsible==="Нина");
+      if(!nina) throw new Error("должна быть строка для 'Нина'");
+      const almaty = nina.cityRows.find(c=>c.city==="Алматы");
+      const astana = nina.cityRows.find(c=>c.city==="Астана");
+      const noCity = nina.cityRows.find(c=>c.city==="Не указан");
+      if(!almaty || almaty.count!==2) throw new Error("в Алматы должно быть 2 блогера: "+JSON.stringify(nina.cityRows));
+      if(!astana || astana.count!==1) throw new Error("в Астане должен быть 1 блогер: "+JSON.stringify(nina.cityRows));
+      if(!noCity || noCity.count!==1) throw new Error("без города должен быть 1 блогер (не должен теряться): "+JSON.stringify(nina.cityRows));
+      const beauty = nina.categoryRows.find(c=>c.category==="Бьюти");
+      const lifestyle = nina.categoryRows.find(c=>c.category==="Лайфстайл");
+      if(!beauty || beauty.count!==2) throw new Error("категория 'Бьюти' должна быть у 2 блогеров: "+JSON.stringify(nina.categoryRows));
+      if(!lifestyle || lifestyle.count!==1) throw new Error("категория 'Лайфстайл' должна быть у 1 блогера: "+JSON.stringify(nina.categoryRows));
+
+      // По умолчанию (не развёрнуто) разбивка не должна попадать в разметку.
+      let html = tplMicroResponsibleSummary();
+      if(!html.includes('data-responsible="Нина"')) throw new Error("должна быть кнопка-тоггл '+' с data-responsible='Нина'");
+      if(html.includes("По городам")) throw new Error("до разворачивания разбивка по городам не должна быть в разметке");
+
+      UI.tab = "microInfluencers";
+      document.body.innerHTML = '<main id="main"></main><div id="toast"></div>';
+      document.getElementById("main").innerHTML = tplMicroInfluencers();
+      wireDeskTab();
+      const toggleBtn = document.querySelector('.responsible-toggle-btn[data-responsible="Нина"]');
+      if(!toggleBtn) throw new Error("кнопка-тоггл для 'Нина' должна быть в DOM после wireDeskTab()");
+      toggleBtn.click();
+      if(!UI.expandedResponsible.has("Нина")) throw new Error("клик по '+' должен добавить 'Нина' в UI.expandedResponsible");
+      html = tplMicroResponsibleSummary();
+      if(!html.includes("По городам") || !html.includes("По категории блогера")) throw new Error("после разворачивания должны появиться заголовки разбивки: "+html);
+      if(!html.includes(">Алматы<") || !html.includes(">Астана<")) throw new Error("после разворачивания должны быть перечислены города: "+html);
+      if(!html.includes(">Бьюти<") || !html.includes(">Лайфстайл<")) throw new Error("после разворачивания должны быть перечислены категории: "+html);
+
+      // Повторный клик сворачивает обратно. Перерисовываем main ПОЛНОЙ разметкой вкладки
+      // (tplMicroInfluencers(), не только tplMicroResponsibleSummary()) — иначе wireDeskTab()
+      // падает на других элементах вкладки (фильтры/кнопки CSV), которых в частичной разметке нет.
+      document.getElementById("main").innerHTML = tplMicroInfluencers();
+      wireDeskTab();
+      document.querySelector('.responsible-toggle-btn[data-responsible="Нина"]').click();
+      if(UI.expandedResponsible.has("Нина")) throw new Error("повторный клик по '+'/'−' должен убрать 'Нина' из UI.expandedResponsible");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+      UI.tab = savedTab;
+      UI.expandedResponsible = savedExpanded;
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
