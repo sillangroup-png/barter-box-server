@@ -289,6 +289,9 @@ const DEAL_STATUSES = ["Запланирована","Опубликована","
 const MICRO_PAYMENT_STATUSES = ["не оплачено","к оплате","оплачено"];
 const MICRO_PRODUCT_STATUSES = ["товар заказан","товар доставлен"];
 const MICRO_VIDEO_STATUSES = ["не опубликовано","опубликовано"];
+// Категория (специализация) блогера — не путать с productCategory (категорией товара):
+// нужна, чтобы подбирать блогеров под тип продукта/задачи (напр. визажиста под декор.косметику).
+const MICRO_BLOGGER_CATEGORIES = ["Лайфстайл","Визажист","Бьюти","Дерматолог","Стилист","Нутрициолог","Фитнес","Мама-блогер","Врач","Другое"];
 // Акцентный цвет только для стилизованного дашборда "Платный инфлюенс" (не трогает остальной интерфейс).
 const INFL_BRAND = "#d6336c";
 const INFL_BRAND_LIGHT = "#f9d7e6";
@@ -1670,7 +1673,7 @@ const UI = {
   reportPeriod: {from:"", to:""}, // период (по дате публикации) для сводки "Сколько выложили" в верхней части "Сводного отчёта" — см. reportPeriodSummary()
   reportOnlyWaiting: false, // фильтр "Сводного отчёта": показывать только доставленные, но ещё не выложенные (чтобы обзванивать блогеров)
   inflFilter: {search:"", sort:"default", month:""},
-  microFilter: {search:"", sort:"default", paymentStatus:"", month:""},
+  microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:""},
   inflDashMonth: "", // выбранный месяц в новом стилизованном дашборде "Платный инфлюенс" (см. tplInfluencerBrandDashboard)
   inflCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
   microDashMonth: "", // выбранный месяц в дашборде "Микро/средние" (см. tplMicroInfluencerBrandDashboard)
@@ -2732,6 +2735,13 @@ function tplMicroInfluencers(){
   if(mf.month){
     deals = deals.filter(d=> microDealDate(d).slice(0,7)===mf.month);
   }
+  // Фильтр по ответственному менеджеру — список вариантов строится из реально встречающихся
+  // значений d.responsible (а не из фиксированного справочника), чтобы не рассинхронизироваться
+  // с тем, что девочки на самом деле вписывают в это поле.
+  const availableResponsibles = [...new Set(s.deals.map(d=>d.responsible).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ru"));
+  if(mf.responsible){
+    deals = deals.filter(d=> d.responsible===mf.responsible);
+  }
   // Вклад в продажи/ROMI посчитаны в microInfluencerSummary() через romiRows — раскладываем
   // по id сделки, чтобы показать в таблице рядом с каждой интеграцией (как в "Инфлюенс интеграции крупные").
   const romiById = {};
@@ -2801,6 +2811,10 @@ function tplMicroInfluencers(){
           <option value="">Все месяцы</option>
           ${microAvailableMonths().map(m=>`<option value="${m}" ${mf.month===m?'selected':''}>${escapeHtml(monthLabel(m))}</option>`).join("")}
         </select>
+        <select id="micro-responsible-filter">
+          <option value="">Все ответственные</option>
+          ${availableResponsibles.map(r=>`<option value="${escapeHtml(r)}" ${mf.responsible===r?'selected':''}>${escapeHtml(r)}</option>`).join("")}
+        </select>
         <select id="micro-sort">
           <option value="default" ${mf.sort==='default'?'selected':''}>Без сортировки</option>
           <option value="cost_desc" ${mf.sort==='cost_desc'?'selected':''}>Сумма: сначала больше</option>
@@ -2839,7 +2853,7 @@ function tplMicroInfluencers(){
         <thead><tr>
           <th class="rowcheck"><input type="checkbox" id="micro-check-all"></th>
           <th>#</th>
-          <th class="sticky-col">Блогер</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
+          <th class="sticky-col">Блогер</th><th>Категория блогера</th><th>Ответственный</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
           ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
           ${sortableTh("Вклад в продажи","sales",mf.sort)}${sortableTh("ROMI","romi",mf.sort)}
           <th>Статус товара</th><th>Статус видео</th><th>Плановая дата</th><th>Дата выкладки</th><th>Ссылка на Reels</th><th></th>
@@ -2854,6 +2868,8 @@ function tplMicroInfluencers(){
               <td class="rowcheck"><input type="checkbox" class="micro-row-check" data-id="${d.id}" ${UI.selectedMicroIds.has(d.id)?'checked':''}></td>
               <td>${i+1}</td>
               <td class="sticky-col">${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
+              <td>${inlineEditSpan(escapeHtml(d.bloggerCategory||"—"), d.id, 'bloggerCategory', d.bloggerCategory||'', 'select', MICRO_BLOGGER_CATEGORIES)}</td>
+              <td>${inlineEditSpan(escapeHtml(d.responsible||"—"), d.id, 'responsible', d.responsible||'', 'text')}</td>
               <td>${d.instagramAccount?`<a href="${escapeHtml(d.instagramAccount)}" target="_blank" rel="noopener">IG</a> `:""}${inlineEditSpan(fmtNum(d.followers||0), d.id, 'followers', d.followers||0, 'number')}</td>
               <td>${d.tiktokAccount?`<a href="${escapeHtml(d.tiktokAccount)}" target="_blank" rel="noopener">TT</a> `:""}${inlineEditSpan(fmtNum(d.followersTT||0), d.id, 'followersTT', d.followersTT||0, 'number')}</td>
               <td>${inlineEditSpan(escapeHtml(d.product||"—"), d.id, 'product', d.product||'', 'text')}<br><span style="color:var(--ink-mute);font-size:11px">ШК ${inlineEditSpan(escapeHtml(d.barcode||"—"), d.id, 'barcode', d.barcode||'', 'text')}</span></td>
@@ -2877,7 +2893,7 @@ function tplMicroInfluencers(){
                 <button class="btn btn-danger btn-sm del-micro-btn" data-id="${d.id}">✕</button>
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="20">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="22">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -3782,7 +3798,7 @@ function tplMicroCalendar(){
 function modalMicroDeal(existing, prefill){
   const isEdit = !!existing;
   const d = existing || Object.assign({
-    responsible:"Нина", blogerName:"", phone:"",
+    responsible:"Нина", blogerName:"", bloggerCategory:"", phone:"",
     instagramAccount:"", followers:0, er:0, avgReach:0,
     tiktokAccount:"", followersTT:0, erTT:0, avgReachTT:0,
     cost:0, productCost:0, paymentStatus: MICRO_PAYMENT_STATUSES[0],
@@ -3797,6 +3813,8 @@ function modalMicroDeal(existing, prefill){
     <h3>${isEdit?'Изменить':'Новая'} интеграция · Инфлюенс микро/средние</h3>
     <div class="form-row">
       <div class="field"><label>Блогер</label><input id="mm-name" placeholder="Имя / название аккаунта" value="${escapeHtml(d.blogerName)}"></div>
+      <div class="field"><label>Категория блогера</label><select id="mm-blogger-category"><option value="">—</option>${MICRO_BLOGGER_CATEGORIES.map(c=>`<option ${c===d.bloggerCategory?'selected':''}>${c}</option>`).join("")}</select></div>
+      <div class="field"><label>Ответственный</label><input id="mm-responsible" value="${escapeHtml(d.responsible||'')}"></div>
       <div class="field"><label>Телефон</label><input id="mm-phone" value="${escapeHtml(d.phone||'')}"></div>
       <div class="field"><label>Город</label><input id="mm-city" value="${escapeHtml(d.city||'')}"></div>
       <div class="field"><label>Адрес</label><input id="mm-address" value="${escapeHtml(d.address||'')}"></div>
@@ -3856,7 +3874,8 @@ function modalMicroDeal(existing, prefill){
     const blogerName = document.getElementById("mm-name").value.trim();
     if(!blogerName){ toast("Укажите блогера", true); return; }
     const payload = {
-      responsible: "Нина", blogerName,
+      responsible: document.getElementById("mm-responsible").value.trim() || "Нина", blogerName,
+      bloggerCategory: document.getElementById("mm-blogger-category").value,
       phone: document.getElementById("mm-phone").value.trim(),
       city: document.getElementById("mm-city").value.trim(),
       address: document.getElementById("mm-address").value.trim(),
@@ -4361,6 +4380,7 @@ function wireDeskTab(){
     wireSearchOnEnter(microSearch, v=>{ UI.microFilter.search = v; renderDeskTab(); });
     document.getElementById("micro-payment-filter").onchange = e=>{ UI.microFilter.paymentStatus = e.target.value; renderDeskTab(); };
     document.getElementById("micro-month-filter").onchange = e=>{ UI.microFilter.month = e.target.value; renderDeskTab(); };
+    document.getElementById("micro-responsible-filter").onchange = e=>{ UI.microFilter.responsible = e.target.value; renderDeskTab(); };
     document.getElementById("micro-sort").onchange = e=>{ UI.microFilter.sort = e.target.value; renderDeskTab(); };
     // Сортировка кликом по заголовку колонки ("как в Excel") — см. sortableTh(). Первый клик по
     // колонке ставит "сначала больше", повторный клик по той же колонке — переключает на
@@ -4454,8 +4474,8 @@ function wireDeskTab(){
     });
 
     document.getElementById("template-micro-csv-btn").onclick = ()=>{
-      const header = ["id","блогер","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий"];
-      const example = ["","@small_blogger","+77001234567","Алматы","","https://instagram.com/small_blogger","15000","3.2","2000","https://tiktok.com/@small_blogger","8000","4.1","1500","30000","5000","не оплачено","Kaspi","000000000000","1 сторис + 1 reels","Питательный бальзам для губ","4620400203663","Уход","товар заказан","не опубликовано","","0","","0","2026-07-15","2026-07-20",""];
+      const header = ["id","ответственный","блогер","категория блогера","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий"];
+      const example = ["","Нина","@small_blogger","Лайфстайл","+77001234567","Алматы","","https://instagram.com/small_blogger","15000","3.2","2000","https://tiktok.com/@small_blogger","8000","4.1","1500","30000","5000","не оплачено","Kaspi","000000000000","1 сторис + 1 reels","Питательный бальзам для губ","4620400203663","Уход","товар заказан","не опубликовано","","0","","0","2026-07-15","2026-07-20",""];
       const csv = [header, example].map(row=>row.map(csvEscape).join(",")).join("\n");
       downloadFile("barter-box-micro-influencers-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
       toast("Шаблон скачан");
@@ -4470,7 +4490,7 @@ function wireDeskTab(){
       // "Сводного отчёта" (там тоже выгружаются все заказы, а не только видимые на экране).
       DataManager.state.microInfluencerDeals.forEach(d=>{
         lines.push([
-          d.id, d.blogerName||"", d.phone||"", d.city||"", d.address||"",
+          d.id, d.responsible||"", d.blogerName||"", d.bloggerCategory||"", d.phone||"", d.city||"", d.address||"",
           d.instagramAccount||"", d.followers||0, d.er||0, d.avgReach||0,
           d.tiktokAccount||"", d.followersTT||0, d.erTT||0, d.avgReachTT||0,
           d.cost||0, d.productCost||0,
@@ -5680,6 +5700,74 @@ async function runSelfTests(){
       DataManager.state.microInfluencerDeals = saved;
       UI.microFilter = JSON.parse(savedFilter);
       UI.tab = savedTab;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("tplMicroInfluencers/wireDeskTab: колонки 'Ответственный' и 'Категория блогера' есть в таблице, фильтр по ответственному сузивает список и обновляет UI.microFilter.responsible", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    const savedTab = UI.tab;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9130, blogerName:"Нинин Блогер", responsible:"Нина", bloggerCategory:"Визажист", cost:1000},
+        {id:9131, blogerName:"Аружанин Блогер", responsible:"Аружан", bloggerCategory:"Бьюти", cost:2000},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:"", month:"", responsible:""};
+      let html = tplMicroInfluencers();
+      if(!html.includes("Категория блогера")) throw new Error("должна быть колонка 'Категория блогера'");
+      if(!html.includes(">Ответственный<")) throw new Error("должна быть колонка 'Ответственный'");
+      if(!html.includes('data-field="bloggerCategory"') || !html.includes('data-type="select"')) throw new Error("категория блогера должна быть inline-editable select");
+      if(!html.includes('data-field="responsible"')) throw new Error("ответственный должен быть inline-editable");
+      if(!html.includes('<option value="Нина"') || !html.includes('<option value="Аружан"')) throw new Error("фильтр должен предлагать варианты из реальных значений responsible: "+html);
+
+      UI.tab = "microInfluencers";
+      document.body.innerHTML = '<main id="main"></main><div id="toast"></div>';
+      document.getElementById("main").innerHTML = tplMicroInfluencers();
+      wireDeskTab();
+      const respSelect = document.getElementById("micro-responsible-filter");
+      if(!respSelect) throw new Error("фильтр 'micro-responsible-filter' должен быть в DOM после wireDeskTab()");
+      respSelect.value = "Нина";
+      respSelect.dispatchEvent(new Event("change"));
+      if(UI.microFilter.responsible !== "Нина") throw new Error("выбор ответственного должен обновить UI.microFilter.responsible: "+UI.microFilter.responsible);
+      const filteredHtml = tplMicroInfluencers();
+      // Проверяем именно строки детальной таблицы интеграций (по data-id сделки), а не весь html —
+      // блогер также может встретиться в панели "Сводка по блогерам" чуть выше, у которой свой,
+      // независимый фильтр по месяцу, и она намеренно не подчиняется mf.responsible.
+      if(!filteredHtml.includes('data-id="9130"')) throw new Error("после фильтра должна остаться строка сделки с ответственным 'Нина' (id 9130)");
+      if(filteredHtml.includes('data-id="9131"')) throw new Error("после фильтра по 'Нина' строка сделки с другим ответственным (id 9131) не должна показываться");
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+      UI.microFilter = JSON.parse(savedFilter);
+      UI.tab = savedTab;
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("modalMicroDeal(): форма содержит поля 'Ответственный' (mm-responsible) и 'Категория блогера' (mm-blogger-category), payload передаёт оба при сохранении", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const origFetch = window.fetch;
+    try{
+      DataManager.state.microInfluencerDeals = [];
+      document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+      modalMicroDeal(null);
+      const respInput = document.getElementById("mm-responsible");
+      const catSelect = document.getElementById("mm-blogger-category");
+      if(!respInput) throw new Error("в модалке должно быть поле mm-responsible");
+      if(!catSelect) throw new Error("в модалке должно быть поле mm-blogger-category");
+      const optionValues = [...catSelect.options].map(o=>o.value);
+      MICRO_BLOGGER_CATEGORIES.forEach(cat=>{
+        if(!optionValues.includes(cat)) throw new Error("выпадающий список категорий должен включать: "+cat);
+      });
+      document.getElementById("mm-name").value = "Категория Тест";
+      respInput.value = "Аружан";
+      catSelect.value = "Визажист";
+      let captured = null;
+      window.fetch = (url, opts)=>{ captured = {url, opts}; return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({id:1})}); };
+      document.getElementById("mm-save").onclick();
+      if(!captured || !captured.opts.body.includes('"responsible":"Аружан"')) throw new Error("payload сохранения должен включать responsible: "+(captured&&captured.opts.body));
+      if(!captured || !captured.opts.body.includes('"bloggerCategory":"Визажист"')) throw new Error("payload сохранения должен включать bloggerCategory: "+(captured&&captured.opts.body));
+    } finally {
+      window.fetch = origFetch;
+      DataManager.state.microInfluencerDeals = savedDeals;
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
   });
