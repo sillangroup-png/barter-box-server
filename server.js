@@ -498,9 +498,14 @@ app.post("/api/orders/bulk-delete", requireAuth, (req,res)=>{
 });
 
 app.post("/api/orders/import", requireAuth, (req,res)=>{
-  const {rows} = req.body || {};
+  const {rows, campaignId} = req.body || {};
   if(!Array.isArray(rows)) return res.status(400).json({error:"rows[] обязателен"});
-  const defaultCampaign = state.campaigns[0];
+  // Раньше тут всегда молча брался state.campaigns[0] — на проде первый проект в списке
+  // ("Лимон вит с"), из-за чего любой импорт списка доставок уезжал не в тот проект.
+  // Теперь клиент обязан передать campaignId выбранного проекта; без валидного campaignId
+  // импорт отклоняется, чтобы данные не попали в случайный проект.
+  const targetCampaign = campaignId!=null ? state.campaigns.find(c=>c.id===+campaignId) : null;
+  if(!targetCampaign) return res.status(400).json({error:"Не выбран проект для импорта — укажите campaignId существующего проекта"});
   const driverCodes = new Set(state.drivers.map(d=>d.code));
   let added = 0;
   rows.forEach(r=>{
@@ -511,7 +516,7 @@ app.post("/api/orders/import", requireAuth, (req,res)=>{
     const validDriver = driverCodes.has(driverCodeRaw) ? driverCodeRaw : null;
     const followers = parseInt(r["подписчики"] || r["followers"], 10) || 0;
     state.orders.push({
-      id: nextId("orders"), campaignId: defaultCampaign ? defaultCampaign.id : null,
+      id: nextId("orders"), campaignId: targetCampaign.id,
       driverCode: validDriver, blogger, phone: r["телефон"] || r["phone"] || "",
       city: r["город"] || r["city"] || "—", address, box: r["бокс"] || r["box"] || "",
       followers, logisticsCost: LOGISTICS_COST_DEFAULT,
