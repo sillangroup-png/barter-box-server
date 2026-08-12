@@ -1661,6 +1661,13 @@ function tplMicroResponsibleSummary(){
             <td>${r.published}</td>
             <td>${r.dealsCount}</td>
           </tr>`).join("") || `<tr><td class="empty" colspan="5">${month ? "Нет интеграций за выбранный месяц" : "Интеграций пока нет"}</td></tr>`}
+          ${rows.length ? `<tr style="font-weight:700;border-top:2px solid var(--line-2)">
+            <td>Итого</td>
+            <td>${rows.reduce((s,r)=>s+r.uniqueBloggerCount,0)}</td>
+            <td>${rows.reduce((s,r)=>s+r.inProgress,0)}</td>
+            <td>${rows.reduce((s,r)=>s+r.published,0)}</td>
+            <td>${rows.reduce((s,r)=>s+r.dealsCount,0)}</td>
+          </tr>` : ""}
         </tbody>
       </table></div>
     </div>
@@ -5464,6 +5471,17 @@ async function runSelfTests(){
       const html = tplMicroResponsibleSummary();
       if(!html.includes("Сводка по ответственным")) throw new Error("должен быть заголовок 'Сводка по ответственным'");
       if(!html.includes(">Нина<") || !html.includes(">Аружан<")) throw new Error("таблица должна перечислять обоих ответственных: "+html);
+
+      // Итоговая строка внизу таблицы: суммы по каждой колонке (2 уник.блогера у Нины + 1 у Аружан = 3,
+      // 2 в работе у Нины + 1 у Аружан = 3, 1 опубликовано у Нины = 1, 3 интеграции у Нины + 1 у Аружан = 4).
+      if(!html.includes(">Итого<")) throw new Error("должна быть итоговая строка 'Итого' внизу таблицы: "+html);
+      const totalRowMatch = html.match(/<tr[^>]*>\s*<td>Итого<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>/);
+      if(!totalRowMatch) throw new Error("не удалось найти ячейки итоговой строки: "+html);
+      const [, totalBloggers, totalInProgress, totalPublished, totalDeals] = totalRowMatch.map(Number);
+      if(totalBloggers !== 3) throw new Error("итого блогеров должно быть 3 (2 у Нины + 1 у Аружан): "+totalBloggers);
+      if(totalInProgress !== 3) throw new Error("итого 'в работе' должно быть 3 (2 у Нины + 1 у Аружан): "+totalInProgress);
+      if(totalPublished !== 1) throw new Error("итого 'опубликовано' должно быть 1 (у Нины): "+totalPublished);
+      if(totalDeals !== 4) throw new Error("итого интеграций должно быть 4 (3 у Нины + 1 у Аружан): "+totalDeals);
 
       // Сводка по ответственным должна идти в разметке между 'Сводкой по блогерам' и основной таблицей интеграций.
       const fullHtml = tplMicroInfluencers();
