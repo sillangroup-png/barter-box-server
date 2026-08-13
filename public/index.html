@@ -1716,6 +1716,15 @@ function microResponsibleSummary(month){
     };
   }).sort((a,b)=> b.uniqueBloggerCount - a.uniqueBloggerCount);
 }
+// Строка "Итого" должна показывать РЕАЛЬНОЕ число уникальных блогеров по всем ответственным
+// вместе, а не сумму uniqueBloggerCount по каждой строке (регрессия: если блогер за период
+// поработал с двумя разными менеджерами — например, его переназначили — он попадал в обе строки,
+// и при сложении "Итого" получалось больше, чем блогеров есть на самом деле: например 72 вместо 71).
+function microResponsibleTotalUniqueBloggers(month){
+  let deals = DataManager.state.microInfluencerDeals;
+  if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
+  return new Set(deals.map(d=>d.blogerName||"—")).size;
+}
 function tplMicroResponsibleSummary(){
   const months = microAvailableMonths();
   const month = UI.microResponsibleMonth;
@@ -1734,7 +1743,7 @@ function tplMicroResponsibleSummary(){
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
-          <th style="width:28px"></th><th>Ответственный</th><th>Блогеров</th><th>В работе</th><th>Опубликовано</th><th>Всего интеграций</th>
+          <th style="width:28px"></th><th>Ответственный</th><th>Блогеров</th><th>В работе (интеграций)</th><th>Опубликовано (интеграций)</th><th>Всего интеграций</th>
         </tr></thead>
         <tbody>
           ${rows.map(r=>{
@@ -1767,7 +1776,7 @@ function tplMicroResponsibleSummary(){
           ${rows.length ? `<tr style="font-weight:700;border-top:2px solid var(--line-2)">
             <td></td>
             <td>Итого</td>
-            <td>${rows.reduce((s,r)=>s+r.uniqueBloggerCount,0)}</td>
+            <td>${microResponsibleTotalUniqueBloggers(month)}</td>
             <td>${rows.reduce((s,r)=>s+r.inProgress,0)}</td>
             <td>${rows.reduce((s,r)=>s+r.published,0)}</td>
             <td>${rows.reduce((s,r)=>s+r.dealsCount,0)}</td>
@@ -2807,14 +2816,13 @@ function tplInfluencerDeals(){
         <div class="kpi"><div class="num">${ds.paidBloggers}</div><div class="lbl">Уникальных блогеров</div></div>
         <div class="kpi bad"><div class="num">${fmtNum(ds.paidSum)} ₸</div><div class="lbl">Сумма оплат</div></div>
         <div class="kpi ok"><div class="num">${fmtNum(ds.paidReach)}</div><div class="lbl">Факт.охват</div></div>
-        <div class="kpi"><div class="num">${ds.paidCpv==null?'—':ds.paidCpv.toFixed(3)+' ₸'}</div><div class="lbl">Средний CPV</div></div>
         <div class="kpi"><div class="num">${ds.paidPublishedCount}</div><div class="lbl">Из них уже опубликовано</div></div>
       </div>
     </div>
     <div class="panel">
       <div class="panel-title">
         В работе — ждём контент
-        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">дата публикации ещё не проставлена, независимо от оплаты</span>
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">дата публикации ещё не проставлена, независимо от оплаты — «Уже оплачено» ниже входит и в «Интеграций оплачено» в блоке выше</span>
       </div>
       <div class="grid-kpi" style="margin-bottom:0">
         <div class="kpi warn"><div class="num">${ds.inProgressCount}</div><div class="lbl">Интеграций в работе</div></div>
@@ -3012,19 +3020,23 @@ function tplMicroInfluencers(){
         Оплачено
         <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">блогеры, которым уже перечислили деньги — сумма = оплата + себестоимость подаренного товара</span>
       </div>
+      <div class="login-hint" style="margin-bottom:12px">
+        Здесь считаются ВСЕ оплаченные интеграции месяца — и уже вышедшие, и ещё снимающиеся. Поэтому
+        сумма/охват тут не совпадают с «Микро/средние · дашборд» выше: там — только уже опубликованные
+        (это и есть настоящий факт месяца, CPV оттуда — корректный).
+      </div>
       <div class="grid-kpi" style="margin-bottom:0">
         <div class="kpi ok"><div class="num">${ds.paidCount}</div><div class="lbl">Интеграций оплачено</div></div>
         <div class="kpi"><div class="num">${ds.paidBloggers}</div><div class="lbl">Уникальных блогеров</div></div>
         <div class="kpi bad"><div class="num">${fmtNum(ds.paidSum)} ₸</div><div class="lbl">Сумма оплат</div></div>
         <div class="kpi ok"><div class="num">${fmtNum(ds.paidReach)}</div><div class="lbl">Факт.охват (Reels+TikTok)</div></div>
-        <div class="kpi"><div class="num">${ds.paidCpv==null?'—':ds.paidCpv.toFixed(3)+' ₸'}</div><div class="lbl">Средний CPV</div></div>
         <div class="kpi"><div class="num">${ds.paidPublishedCount}</div><div class="lbl">Из них уже опубликовано</div></div>
       </div>
     </div>
     <div class="panel">
       <div class="panel-title">
         В работе — ждём контент
-        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">видео ещё не вышло, независимо от того, оплачено или нет</span>
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">видео ещё не вышло, независимо от того, оплачено или нет — «Уже оплачено» ниже входит и в «Интеграций оплачено» в блоке выше</span>
       </div>
       <div class="grid-kpi" style="margin-bottom:0">
         <div class="kpi warn"><div class="num">${ds.inProgressCount}</div><div class="lbl">Интеграций в работе</div></div>
@@ -5478,6 +5490,7 @@ async function runSelfTests(){
       const html2 = document.getElementById("main").innerHTML;
       if(!/<div class="num">1<\/div><div class="lbl">Интеграций оплачено/.test(html2)) throw new Error("после фильтра 'август' оплаченных должно остаться 1: "+html2);
       if(!/<div class="num">1<\/div><div class="lbl">Интеграций в работе/.test(html2)) throw new Error("в работе за август должно быть 1: "+html2);
+      if(html2.includes("Средний CPV")) throw new Error("блок 'Оплачено' больше не должен показывать 'Средний CPV' (искажённая метрика)");
     } finally {
       DataManager.state.influencerDeals = saved;
       DataManager.state.salesByDay = savedSales;
@@ -5742,6 +5755,10 @@ async function runSelfTests(){
 
       const html = tplMicroResponsibleSummary();
       if(!html.includes("Сводка по ответственным")) throw new Error("должен быть заголовок 'Сводка по ответственным'");
+      // Уточнение, что "в работе"/"опубликовано" — это счётчики ИНТЕГРАЦИЙ, а не блогеров (легко спутать
+      // с соседней колонкой "Блогеров").
+      if(!html.includes("В работе (интеграций)")) throw new Error("заголовок колонки должен явно говорить 'В работе (интеграций)': "+html);
+      if(!html.includes("Опубликовано (интеграций)")) throw new Error("заголовок колонки должен явно говорить 'Опубликовано (интеграций)': "+html);
       if(!html.includes(">Нина<") || !html.includes(">Аружан<")) throw new Error("таблица должна перечислять обоих ответственных: "+html);
 
       // Итоговая строка внизу таблицы: суммы по каждой колонке (2 уник.блогера у Нины + 1 у Аружан = 3,
@@ -5761,6 +5778,31 @@ async function runSelfTests(){
       const responsibleSummaryPos = fullHtml.indexOf("Сводка по ответственным");
       const detailPos = fullHtml.indexOf('id="micro-check-all"');
       if(responsibleSummaryPos === -1 || responsibleSummaryPos <= bloggerSummaryPos || responsibleSummaryPos >= detailPos) throw new Error("'Сводка по ответственным' должна быть между 'Сводкой по блогерам' и основной таблицей интеграций");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+    }
+  });
+  TestSuite.test("microResponsibleTotalUniqueBloggers()/tplMicroResponsibleSummary(): Итого показывает РЕАЛЬНОЕ число уникальных блогеров, а не сумму по менеджерам (регрессия: блогер, поработавший с двумя ответственными, задваивался в Итого)", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9744, blogerName:"Общий Блогер", responsible:"Нина", videoStatus:"не опубликовано"},
+        // Тот же блогер во ВТОРОЙ раз, но уже у ДРУГОГО ответственного (переназначили в течение месяца) —
+        // должен считаться ОДИН раз в Итого, а не дважды (по разу на каждого менеджера).
+        {id:9745, blogerName:"Общий Блогер", responsible:"Аружан", videoStatus:"не опубликовано"},
+        {id:9746, blogerName:"Ещё Один", responsible:"Аружан", videoStatus:"не опубликовано"},
+      ];
+      const totalReal = microResponsibleTotalUniqueBloggers();
+      if(totalReal !== 2) throw new Error("реальных уникальных блогеров должно быть 2 (Общий Блогер + Ещё Один), а не 3: "+totalReal);
+
+      const rows = microResponsibleSummary();
+      const sumOfRows = rows.reduce((s,r)=>s+r.uniqueBloggerCount,0);
+      if(sumOfRows !== 3) throw new Error("а сумма по менеджерам (наивный расчёт) должна дать 3 — именно эту разницу и чиним: "+sumOfRows);
+
+      const html = tplMicroResponsibleSummary();
+      const totalRowMatch = html.match(/<tr[^>]*>\s*<td><\/td>\s*<td>Итого<\/td>\s*<td>(\d+)<\/td>/);
+      if(!totalRowMatch) throw new Error("не удалось найти ячейку 'Блогеров' итоговой строки: "+html);
+      if(Number(totalRowMatch[1]) !== 2) throw new Error("в разметке 'Итого' по блогерам должно быть 2, а не сумма 3: "+totalRowMatch[1]);
     } finally {
       DataManager.state.microInfluencerDeals = savedDeals;
     }
@@ -6204,6 +6246,9 @@ async function runSelfTests(){
       if(html.includes("1 600")) throw new Error("при фильтре 'август' не должна показываться сумма за весь период (1600)");
       if(!/<div class="num">2<\/div><div class="lbl">Интеграций в работе/.test(html)) throw new Error("в работе за август тоже 2 — оба 'в работе' дела как раз из августа: "+html);
       if(html.includes("Август 2026") === false) throw new Error("подпись должна показывать выбранный месяц");
+      // Средний CPV убрали из блока "Оплачено" — считался по всей оплаченной сумме (включая ещё
+      // не вышедшие ролики), но по факт.охвату только вышедших, что давало искажённое число.
+      if(html.includes("Средний CPV")) throw new Error("блок 'Оплачено' больше не должен показывать 'Средний CPV' (искажённая метрика)");
     } finally {
       DataManager.state.microInfluencerDeals = saved;
       UI.microSummaryMonth = savedSummaryMonth;
