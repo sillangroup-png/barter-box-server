@@ -212,10 +212,15 @@ select.inline-edit-input{cursor:pointer}
 .driver-stats .n{font-size:17px;font-weight:700}
 .driver-stats .l{font-size:10.5px;opacity:.9}
 .order-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px;margin-bottom:10px;display:flex;flex-direction:column;gap:6px}
+.order-card.is-delivered{opacity:.72}
 .order-card .top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
 .order-card .blogger{font-weight:700;font-size:14px}
+.order-card .proj{display:inline-flex;align-items:center;gap:4px;background:#eef3f7;color:var(--ink-soft);border-radius:7px;padding:2px 7px;font-size:11.5px;font-weight:600;margin-top:2px}
 .order-card .addr{color:var(--ink-soft);font-size:12.5px}
 .order-card .actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.driver-section-toggle{display:flex;align-items:center;justify-content:space-between;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 13px;margin-bottom:10px;font-weight:700;font-size:13px;color:var(--ink-soft);cursor:pointer}
+.driver-section-toggle .arrow{transition:transform .15s}
+.driver-section-toggle.open .arrow{transform:rotate(180deg)}
 .icon-btn{background:#eef3f7;color:var(--ink);border:none;border-radius:8px;padding:8px 10px;font-size:12px;font-weight:600;flex:1;text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:5px}
 .icon-btn.call{background:#e8f7ec;color:var(--ok)}
 .icon-btn.map{background:#e5eefb;color:var(--action)}
@@ -1873,6 +1878,8 @@ const UI = {
   selectedPubIds: new Set(),
   selectedMicroIds: new Set(),
   openOrderId: null, driverAwaiting: null, driverReasonCode: null,
+  driverShowDelivered: false, // сворачиваем секцию "Доставлено" у водителя по умолчанию, чтобы не мешала активным доставкам
+  driverEditingComment: false, // редактирование комментария водителя в уже закрытом заказе (исправление ошибки после закрытия)
 };
 function loadSession(){
   try{
@@ -5049,20 +5056,18 @@ function renderDriverShell(){
   renderDriverList();
 }
 
-function renderDriverList(){
-  const list = document.getElementById("driver-list");
-  const all = driverOrders();
-  // Доставленные заказы убираются из списка сразу после подтверждения — водителю
-  // незачем листать уже закрытые доставки, актуальны только те, что ещё в работе.
-  const own = all.filter(o=>o.status!=="delivered").slice().sort((a,b)=>{
-    const rank = s => (STATUS_META[s]||{}).group==="problem" ? 1 : 0;
-    return rank(a.status)-rank(b.status);
-  });
-  list.innerHTML = own.map(o=>`
-    <div class="order-card">
+// Карточка одной доставки в списке водителя. Показываем проект (кампанию) и бокс прямо
+// в списке, а не только внутри модалки — у одного водителя часто одновременно в работе
+// несколько проектов (например бокс "Витамин С" и бокс "Лабубу"), и по одному адресу/имени
+// блогера не всегда понятно, какой именно бокс туда везти.
+function driverOrderCardHTML(o, {delivered}={}){
+  const projLabel = [campaignName(o.campaignId), o.box].filter(Boolean).join(" · ");
+  return `
+    <div class="order-card${delivered ? " is-delivered" : ""}">
       <div class="top">
         <div>
           <div class="blogger">${escapeHtml(o.blogger)}</div>
+          ${projLabel ? `<div class="proj">📦 ${escapeHtml(projLabel)}</div>` : ""}
           <div class="addr">${escapeHtml(o.city)}, ${escapeHtml(o.address)}</div>
         </div>
         ${statusBadge(o.status)}
@@ -5073,11 +5078,41 @@ function renderDriverList(){
         <button class="icon-btn open-order-btn" data-id="${o.id}">Открыть</button>
       </div>
     </div>
-  `).join("") || (all.length ? `<div class="empty">Все доставки выполнены 🎉</div>` : `<div class="empty">Вам пока не назначено ни одной доставки</div>`);
+  `;
+}
+
+function renderDriverList(){
+  const list = document.getElementById("driver-list");
+  const all = driverOrders();
+  // Активные — всё, что ещё не закрыто доставкой; проблемные поднимаем наверх.
+  const active = all.filter(o=>o.status!=="delivered").slice().sort((a,b)=>{
+    const rank = s => (STATUS_META[s]||{}).group==="problem" ? 1 : 0;
+    return rank(a.status)-rank(b.status);
+  });
+  // Доставленные — свёрнуты по умолчанию (не мешают активным доставкам), но доступны:
+  // водитель иногда закрывает доставку с ошибкой в комментарии и должен суметь её найти
+  // и поправить, а не только видеть в общем реестре у менеджера.
+  const delivered = all.filter(o=>o.status==="delivered").slice().sort((a,b)=>
+    String(b.deliveredAt||"").localeCompare(String(a.deliveredAt||"")));
+
+  const activeHTML = active.map(o=>driverOrderCardHTML(o)).join("")
+    || (all.length ? `<div class="empty">Все доставки выполнены 🎉</div>` : `<div class="empty">Вам пока не назначено ни одной доставки</div>`);
+
+  const deliveredHTML = delivered.length ? `
+    <div class="driver-section-toggle${UI.driverShowDelivered ? " open" : ""}" id="driver-delivered-toggle">
+      <span>✅ Доставлено (${delivered.length})</span>
+      <span class="arrow">▾</span>
+    </div>
+    ${UI.driverShowDelivered ? `<div id="driver-delivered-list">${delivered.map(o=>driverOrderCardHTML(o,{delivered:true})).join("")}</div>` : ""}
+  ` : "";
+
+  list.innerHTML = activeHTML + deliveredHTML;
 
   document.querySelectorAll(".open-order-btn").forEach(btn=>{
-    btn.onclick = ()=>{ UI.openOrderId = parseInt(btn.dataset.id,10); UI.driverAwaiting=null; UI.driverReasonCode=null; renderDriverOrderModal(); };
+    btn.onclick = ()=>{ UI.openOrderId = parseInt(btn.dataset.id,10); UI.driverAwaiting=null; UI.driverReasonCode=null; UI.driverEditingComment=false; renderDriverOrderModal(); };
   });
+  const deliveredToggle = document.getElementById("driver-delivered-toggle");
+  if(deliveredToggle) deliveredToggle.onclick = ()=>{ UI.driverShowDelivered = !UI.driverShowDelivered; renderDriverList(); };
 }
 
 function renderDriverOrderModal(){
@@ -5168,14 +5203,47 @@ function renderDriverOrderModal(){
     return;
   }
 
+  // Комментарий можно поправить у любого уже закрытого заказа (доставлен или зафиксирована
+  // проблема) — водитель иногда ошибается при закрытии и должен суметь это исправить сам,
+  // не дожидаясь менеджера.
+  const isClosed = isDelivered || (STATUS_META[o.status]||{}).group==="problem";
+  const projLabel = [campaignName(o.campaignId), o.box].filter(Boolean).join(" · ");
+
+  if(UI.driverEditingComment){
+    openModal(`
+      <h3>Доставка #${o.id} · комментарий</h3>
+      <div class="field"><label>Комментарий</label>
+        <textarea id="d-comment-edit" placeholder="Комментарий по доставке…">${escapeHtml(o.driverComment||"")}</textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="m-cancel-comment">Отмена</button>
+        <button class="btn btn-primary" id="m-save-comment">Сохранить</button>
+      </div>
+    `);
+    document.getElementById("m-cancel-comment").onclick = ()=>{ UI.driverEditingComment=false; closeModal(); renderDriverOrderModal(); };
+    document.getElementById("m-save-comment").onclick = async ()=>{
+      const btn = document.getElementById("m-save-comment");
+      const val = document.getElementById("d-comment-edit").value.trim();
+      try{
+        await withBusy(btn, ()=> Api.updateOrder(o.id, {driverComment: val}));
+        UI.driverEditingComment=false;
+        closeModal(); toast("Комментарий сохранён");
+        await DataManager.refresh(); renderDriverShell();
+      }catch(e){ toast(e.message, true); }
+    };
+    return;
+  }
+
   openModal(`
     <h3>Доставка #${o.id}</h3>
     <p><b>${escapeHtml(o.blogger)}</b></p>
+    ${projLabel ? `<div class="proj" style="margin:4px 0">📦 ${escapeHtml(projLabel)}</div>` : ""}
     <p class="addr" style="margin:4px 0">${escapeHtml(o.city)}, ${escapeHtml(o.address)}</p>
-    <p style="margin-bottom:6px">📞 ${escapeHtml(o.phone)} · 📦 ${escapeHtml(o.box)}</p>
+    <p style="margin-bottom:6px">📞 ${escapeHtml(o.phone)}</p>
     <div style="margin:10px 0">${statusBadge(o.status)}</div>
     ${o.photo ? `<img src="${o.photo}" class="photo-preview">` : ""}
     ${o.driverComment ? `<p style="margin-top:8px;color:var(--ink-soft)"><i>${escapeHtml(o.driverComment)}</i></p>` : ""}
+    ${isClosed ? `<button class="btn btn-ghost btn-sm" id="btn-edit-comment" style="margin-top:6px">✏️ ${o.driverComment ? "Изменить" : "Добавить"} комментарий</button>` : ""}
     <div class="actions" style="margin-top:10px">
       <a class="icon-btn call" href="${telLink(o.phone)}">📞 Позвонить</a>
       <a class="icon-btn map" href="${mapsLink(o.address,o.city)}" target="_blank" rel="noopener">🗺️ Карта</a>
@@ -5192,6 +5260,8 @@ function renderDriverOrderModal(){
   if(bd) bd.onclick = ()=>{ UI.driverAwaiting="photo"; closeModal(); renderDriverOrderModal(); };
   const bp = document.getElementById("btn-problem");
   if(bp) bp.onclick = ()=>{ UI.driverAwaiting="reason"; closeModal(); renderDriverOrderModal(); };
+  const be = document.getElementById("btn-edit-comment");
+  if(be) be.onclick = ()=>{ UI.driverEditingComment=true; closeModal(); renderDriverOrderModal(); };
 }
 
 /* =========================================================================
@@ -5303,25 +5373,37 @@ async function runSelfTests(){
     if(own.some(o=>o.driverCode!==UI.driverCode)) throw new Error("leak of foreign orders");
     UI.driverCode = before;
   });
-  TestSuite.test("renderDriverList(): доставленный заказ пропадает из списка водителя сразу после подтверждения", ()=>{
+  TestSuite.test("renderDriverList(): доставленный заказ уходит из активного списка в свёрнутую секцию 'Доставлено', а не исчезает совсем", ()=>{
     const savedOrders = DataManager.state.orders;
     const savedCode = UI.driverCode;
+    const savedShowDelivered = UI.driverShowDelivered;
     const div = document.createElement("div");
     div.id = "driver-list";
     document.body.appendChild(div);
     try{
       UI.driverCode = "DRV-TEST";
+      UI.driverShowDelivered = false;
       DataManager.state.orders = [
         {id:9801, driverCode:"DRV-TEST", blogger:"Ещё в пути", city:"Алматы", address:"ул. Тест 1", phone:"+77001112233", box:"Бокс", status:"assigned"},
-        {id:9802, driverCode:"DRV-TEST", blogger:"Уже доставлено", city:"Алматы", address:"ул. Тест 2", phone:"+77001112233", box:"Бокс", status:"delivered"},
+        {id:9802, driverCode:"DRV-TEST", blogger:"Уже доставлено", city:"Алматы", address:"ул. Тест 2", phone:"+77001112233", box:"Бокс", status:"delivered", deliveredAt:"01.08.2026, 10:00:00"},
       ];
       renderDriverList();
       const html = document.getElementById("driver-list").innerHTML;
-      if(!html.includes("Ещё в пути")) throw new Error("недоставленный заказ должен остаться в списке");
-      if(html.includes("Уже доставлено")) throw new Error("доставленный заказ должен исчезать из списка водителя");
-      // если ВСЕ заказы доставлены — список пуст, но сообщение должно отличаться от 'нет назначенных'
+      if(!html.includes("Ещё в пути")) throw new Error("недоставленный заказ должен остаться в активном списке");
+      if(html.includes("Уже доставлено")) throw new Error("доставленный заказ не должен быть виден в свёрнутом виде (по умолчанию)");
+      if(!html.includes("Доставлено (1)")) throw new Error("должен быть виден переключатель секции 'Доставлено' со счётчиком: "+html);
+      // разворачиваем секцию кликом по переключателю — доставленный заказ должен появиться,
+      // водителю нужно суметь найти уже закрытую доставку, чтобы поправить ошибочный комментарий
+      document.getElementById("driver-delivered-toggle").click();
+      const htmlExpanded = document.getElementById("driver-list").innerHTML;
+      if(!htmlExpanded.includes("Уже доставлено")) throw new Error("после клика по 'Доставлено' закрытый заказ должен показываться: "+htmlExpanded);
+      // сворачиваем обратно повторным кликом
+      document.getElementById("driver-delivered-toggle").click();
+      const htmlCollapsed = document.getElementById("driver-list").innerHTML;
+      if(htmlCollapsed.includes("Уже доставлено")) throw new Error("повторный клик должен снова свернуть секцию");
+      // если ВСЕ заказы доставлены — активный список пуст, но сообщение должно отличаться от 'нет назначенных'
       DataManager.state.orders = [
-        {id:9803, driverCode:"DRV-TEST", blogger:"Финал", city:"Алматы", address:"ул. Тест 3", phone:"+77001112233", box:"Бокс", status:"delivered"},
+        {id:9803, driverCode:"DRV-TEST", blogger:"Финал", city:"Алматы", address:"ул. Тест 3", phone:"+77001112233", box:"Бокс", status:"delivered", deliveredAt:"01.08.2026, 11:00:00"},
       ];
       renderDriverList();
       const html2 = document.getElementById("driver-list").innerHTML;
@@ -5329,7 +5411,70 @@ async function runSelfTests(){
     } finally {
       DataManager.state.orders = savedOrders;
       UI.driverCode = savedCode;
+      UI.driverShowDelivered = savedShowDelivered;
       div.remove();
+    }
+  });
+  TestSuite.test("driverOrderCardHTML()/renderDriverList(): карточка показывает проект (кампанию) и бокс — у одного водителя может быть несколько проектов одновременно", ()=>{
+    const savedOrders = DataManager.state.orders;
+    const savedCampaigns = DataManager.state.campaigns;
+    const savedCode = UI.driverCode;
+    const div = document.createElement("div");
+    div.id = "driver-list";
+    document.body.appendChild(div);
+    try{
+      UI.driverCode = "DRV-TEST";
+      DataManager.state.campaigns = [{id:701, name:"Витамин C"}, {id:702, name:"Лабубу"}];
+      DataManager.state.orders = [
+        {id:9811, driverCode:"DRV-TEST", campaignId:701, blogger:"Аружан", city:"Алматы", address:"ул. Первая 1", phone:"+77001112233", box:"Бокс с витаминами", status:"assigned"},
+        {id:9812, driverCode:"DRV-TEST", campaignId:702, blogger:"Данияр", city:"Алматы", address:"ул. Вторая 2", phone:"+77001112233", box:"Бокс лабубу", status:"assigned"},
+      ];
+      renderDriverList();
+      const html = document.getElementById("driver-list").innerHTML;
+      if(!html.includes("Витамин C") || !html.includes("Бокс с витаминами")) throw new Error("карточка первого заказа должна показывать проект и бокс: "+html);
+      if(!html.includes("Лабубу") || !html.includes("Бокс лабубу")) throw new Error("карточка второго заказа должна показывать свой проект и бокс: "+html);
+    } finally {
+      DataManager.state.orders = savedOrders;
+      DataManager.state.campaigns = savedCampaigns;
+      UI.driverCode = savedCode;
+      div.remove();
+    }
+  });
+  TestSuite.test("renderDriverOrderModal(): у закрытого заказа есть кнопка редактирования комментария водителя, сохранение уходит через Api.updateOrder({driverComment})", ()=>{
+    const savedOrders = DataManager.state.orders;
+    const savedOpenId = UI.openOrderId;
+    const savedEditing = UI.driverEditingComment;
+    const origFetch = window.fetch;
+    try{
+      DataManager.state.orders = [
+        {id:9821, driverCode:"DRV-TEST", campaignId:null, blogger:"Сая", city:"Алматы", address:"ул. Третья 3", phone:"+77001112233", box:"Бокс", status:"delivered", driverComment:"Оставил на ресепшене", deliveredAt:"01.08.2026, 12:00:00"},
+      ];
+      UI.openOrderId = 9821;
+      UI.driverEditingComment = false;
+      renderDriverOrderModal();
+      let html = document.body.innerHTML;
+      if(!html.includes("Изменить") || !html.includes("Оставил на ресепшене")) throw new Error("у доставленного заказа должна быть кнопка 'Изменить комментарий' и виден текущий комментарий: "+html);
+      const editBtn = document.getElementById("btn-edit-comment");
+      if(!editBtn) throw new Error("не найдена кнопка редактирования комментария");
+      editBtn.click();
+      if(!UI.driverEditingComment) throw new Error("клик по кнопке должен включать режим редактирования комментария");
+      html = document.body.innerHTML;
+      const textarea = document.getElementById("d-comment-edit");
+      if(!textarea) throw new Error("должно появиться текстовое поле для редактирования комментария");
+      if(textarea.value !== "Оставил на ресепшене") throw new Error("поле должно быть предзаполнено текущим комментарием");
+      textarea.value = "Исправлено: отдал лично в руки";
+      let captured = null;
+      window.fetch = (url, opts)=>{ captured = {url, opts}; return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({id:9821})}); };
+      document.getElementById("m-save-comment").click();
+      if(!captured || !captured.url.includes("/api/orders/9821")) throw new Error("сохранение должно уходить PATCH-ем на /api/orders/:id: "+JSON.stringify(captured));
+      const body = JSON.parse(captured.opts.body);
+      if(body.driverComment !== "Исправлено: отдал лично в руки") throw new Error("в теле запроса должен быть новый driverComment: "+JSON.stringify(body));
+    } finally {
+      window.fetch = origFetch;
+      DataManager.state.orders = savedOrders;
+      UI.openOrderId = savedOpenId;
+      UI.driverEditingComment = savedEditing;
+      closeModal();
     }
   });
   TestSuite.test("computeInfluencerRomi делит прирост между активными интеграциями и обнуляет остаточный эффект", ()=>{
