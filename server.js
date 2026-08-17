@@ -61,6 +61,10 @@ const AUTH = {
 // логин/пароль не должны попадать в публичный репозиторий).
 const MARKETER_VIEWERS = [
   {name:"Анна", login: process.env.ANNA_LOGIN || null, password: process.env.ANNA_PASSWORD || null},
+  // Служебная учётка для автоматической ежедневной синхронизации со вторым проектом
+  // (аналитика маркетплейса Kaspi/MIXIT, marketplace-server) — читает /api/state по расписанию,
+  // ничего не пишет. Отдельная от Анны учётка, чтобы не путать человека и синхронизацию в логах.
+  {name:"Kaspi-sync", login: process.env.KASPI_SYNC_LOGIN || null, password: process.env.KASPI_SYNC_PASSWORD || null},
 ];
 const authTokens = new Map(); // token -> {role, driverCode?, readOnly?}
 
