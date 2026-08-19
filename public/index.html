@@ -1681,7 +1681,7 @@ function microResponsibleSummary(month){
   const map = {};
   deals.forEach(d=>{
     const name = d.responsible || "Не указан";
-    if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), dealsCount:0, inProgress:0, published:0};
+    if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), dealsCount:0, inProgress:0, published:0, totalReach:0};
     const a = map[name];
     // Город/категория запоминаются по блогеру (не по интеграции), чтобы разбивка ниже (в
     // развёрнутой карточке) считала тех же "уникальных блогеров", что и колонка "Блогеров" —
@@ -1689,6 +1689,10 @@ function microResponsibleSummary(month){
     a.bloggers.set(d.blogerName || "—", {city: d.city || "Не указан", category: d.bloggerCategory || "Не указана"});
     a.dealsCount++;
     if(d.videoStatus === "опубликовано") a.published++; else a.inProgress++;
+    // Охваты — факт (Reels+TikTok), как и везде в приложении; считаем по ВСЕМ интеграциям
+    // менеджера за период (не только опубликованным), но у неопубликованных факт.охват обычно 0,
+    // так что на итог это не влияет.
+    a.totalReach += microDealFactReach(d);
   });
   return Object.values(map).map(a=>{
     const byCity = {}, byCategory = {};
@@ -1703,6 +1707,7 @@ function microResponsibleSummary(month){
       dealsCount: a.dealsCount,
       inProgress: a.inProgress,
       published: a.published,
+      totalReach: a.totalReach,
       cityRows: toRows(byCity, "city"),
       categoryRows: toRows(byCategory, "category"),
     };
@@ -1735,7 +1740,7 @@ function tplMicroResponsibleSummary(){
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
-          <th style="width:28px"></th><th>Ответственный</th><th>Блогеров</th><th>В работе (интеграций)</th><th>Опубликовано (интеграций)</th><th>Всего интеграций</th>
+          <th style="width:28px"></th><th>Ответственный</th><th>Блогеров</th><th>В работе (интеграций)</th><th>Опубликовано (интеграций)</th><th>Всего интеграций</th><th>Охваты</th>
         </tr></thead>
         <tbody>
           ${rows.map(r=>{
@@ -1755,16 +1760,17 @@ function tplMicroResponsibleSummary(){
               <td>${r.inProgress}</td>
               <td>${r.published}</td>
               <td>${r.dealsCount}</td>
+              <td>${fmtNum(r.totalReach)}</td>
             </tr>${expanded ? `<tr>
               <td></td>
-              <td colspan="5" style="padding:6px 0 16px 0">
+              <td colspan="6" style="padding:6px 0 16px 0">
                 <div style="display:flex;gap:36px;flex-wrap:wrap">
                   ${miniTable("По городам", r.cityRows, "city")}
                   ${miniTable("По категории блогера", r.categoryRows, "category")}
                 </div>
               </td>
             </tr>` : ""}`;
-          }).join("") || `<tr><td class="empty" colspan="6">${month ? "Нет интеграций за выбранный месяц" : "Интеграций пока нет"}</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="7">${month ? "Нет интеграций за выбранный месяц" : "Интеграций пока нет"}</td></tr>`}
           ${rows.length ? `<tr style="font-weight:700;border-top:2px solid var(--line-2)">
             <td></td>
             <td>Итого</td>
@@ -1772,6 +1778,7 @@ function tplMicroResponsibleSummary(){
             <td>${rows.reduce((s,r)=>s+r.inProgress,0)}</td>
             <td>${rows.reduce((s,r)=>s+r.published,0)}</td>
             <td>${rows.reduce((s,r)=>s+r.dealsCount,0)}</td>
+            <td>${fmtNum(rows.reduce((s,r)=>s+r.totalReach,0))}</td>
           </tr>` : ""}
         </tbody>
       </table></div>
@@ -5857,11 +5864,11 @@ async function runSelfTests(){
     const savedDeals = DataManager.state.microInfluencerDeals;
     try{
       DataManager.state.microInfluencerDeals = [
-        {id:9740, blogerName:"Нинин Первый", responsible:"Нина", videoStatus:"не опубликовано"},
-        {id:9741, blogerName:"Нинин Второй", responsible:"Нина", videoStatus:"опубликовано"},
+        {id:9740, blogerName:"Нинин Первый", responsible:"Нина", videoStatus:"не опубликовано", factReachReels:100, factReachTT:0},
+        {id:9741, blogerName:"Нинин Второй", responsible:"Нина", videoStatus:"опубликовано", factReachReels:200, factReachTT:50},
         // Тот же блогер второй раз у Нины (пакет из 2 интеграций) — не должен задваивать уникальных блогеров.
-        {id:9742, blogerName:"Нинин Первый", responsible:"Нина", videoStatus:"не опубликовано"},
-        {id:9743, blogerName:"Аружанин Блогер", responsible:"Аружан", videoStatus:"не опубликовано"},
+        {id:9742, blogerName:"Нинин Первый", responsible:"Нина", videoStatus:"не опубликовано", factReachReels:0, factReachTT:300},
+        {id:9743, blogerName:"Аружанин Блогер", responsible:"Аружан", videoStatus:"не опубликовано", factReachReels:500, factReachTT:0},
       ];
       const rows = microResponsibleSummary();
       const nina = rows.find(r=>r.responsible==="Нина");
@@ -5871,7 +5878,11 @@ async function runSelfTests(){
       if(nina.dealsCount !== 3) throw new Error("у Нины должно быть 3 интеграции всего: "+nina.dealsCount);
       if(nina.inProgress !== 2) throw new Error("у Нины 2 интеграции 'в работе' (не опубликовано): "+nina.inProgress);
       if(nina.published !== 1) throw new Error("у Нины 1 опубликованная интеграция: "+nina.published);
+      // Охваты — сумма факт.охвата (Reels+TikTok) по всем интеграциям ответственного: у Нины
+      // 100+0 + 200+50 + 0+300 = 650.
+      if(nina.totalReach !== 650) throw new Error("у Нины суммарный охват должен быть 650: "+nina.totalReach);
       if(!aruzhan || aruzhan.uniqueBloggerCount !== 1) throw new Error("у Аружан должен быть 1 уникальный блогер");
+      if(aruzhan.totalReach !== 500) throw new Error("у Аружан суммарный охват должен быть 500: "+aruzhan.totalReach);
 
       const html = tplMicroResponsibleSummary();
       if(!html.includes("Сводка по ответственным")) throw new Error("должен быть заголовок 'Сводка по ответственным'");
@@ -5879,18 +5890,22 @@ async function runSelfTests(){
       // с соседней колонкой "Блогеров").
       if(!html.includes("В работе (интеграций)")) throw new Error("заголовок колонки должен явно говорить 'В работе (интеграций)': "+html);
       if(!html.includes("Опубликовано (интеграций)")) throw new Error("заголовок колонки должен явно говорить 'Опубликовано (интеграций)': "+html);
+      if(!html.includes("<th>Охваты</th>")) throw new Error("должна быть колонка 'Охваты': "+html);
       if(!html.includes(">Нина<") || !html.includes(">Аружан<")) throw new Error("таблица должна перечислять обоих ответственных: "+html);
 
       // Итоговая строка внизу таблицы: суммы по каждой колонке (2 уник.блогера у Нины + 1 у Аружан = 3,
-      // 2 в работе у Нины + 1 у Аружан = 3, 1 опубликовано у Нины = 1, 3 интеграции у Нины + 1 у Аружан = 4).
+      // 2 в работе у Нины + 1 у Аружан = 3, 1 опубликовано у Нины = 1, 3 интеграции у Нины + 1 у Аружан = 4,
+      // охваты 650 у Нины + 500 у Аружан = 1150).
       if(!html.includes(">Итого<")) throw new Error("должна быть итоговая строка 'Итого' внизу таблицы: "+html);
-      const totalRowMatch = html.match(/<tr[^>]*>\s*<td><\/td>\s*<td>Итого<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>/);
+      const totalRowMatch = html.match(/<tr[^>]*>\s*<td><\/td>\s*<td>Итого<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>([\d\s]+)<\/td>/);
       if(!totalRowMatch) throw new Error("не удалось найти ячейки итоговой строки: "+html);
-      const [, totalBloggers, totalInProgress, totalPublished, totalDeals] = totalRowMatch.map(Number);
+      const [, totalBloggers, totalInProgress, totalPublished, totalDeals] = totalRowMatch.slice(0,5).map(Number);
+      const totalReach = Number(totalRowMatch[5].replace(/\s/g,""));
       if(totalBloggers !== 3) throw new Error("итого блогеров должно быть 3 (2 у Нины + 1 у Аружан): "+totalBloggers);
       if(totalInProgress !== 3) throw new Error("итого 'в работе' должно быть 3 (2 у Нины + 1 у Аружан): "+totalInProgress);
       if(totalPublished !== 1) throw new Error("итого 'опубликовано' должно быть 1 (у Нины): "+totalPublished);
       if(totalDeals !== 4) throw new Error("итого интеграций должно быть 4 (3 у Нины + 1 у Аружан): "+totalDeals);
+      if(totalReach !== 1150) throw new Error("итого охват должен быть 1150 (650 у Нины + 500 у Аружан): "+totalReach);
 
       // Сводка по ответственным должна идти в разметке между 'Сводкой по блогерам' и основной таблицей интеграций.
       const fullHtml = tplMicroInfluencers();
