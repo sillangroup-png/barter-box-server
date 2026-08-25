@@ -1211,6 +1211,16 @@ function influencerBrandStats(monthRows){
   const withBaseline = monthRows.filter(r=>r.hasBaseline);
   const totalCost = monthRows.reduce((s,r)=>s+(r.deal.cost||0),0);
   const plannedCost = monthRows.reduce((s,r)=>s+(r.deal.plannedCost||0),0);
+  // "Всего за месяц": берём факт.расход, а если он ещё не проставлен — плановый бюджет по этой же
+  // интеграции. Раньше рядом стояли две несопоставимые цифры: "Расходы" (только там, где заполнен
+  // факт) и "План затрат" (только там, где заполнен план) — колонки в таблице заполняют вразнобой,
+  // поэтому одна цифра недосчитывала уже потраченное, а вторая не видела часть интеграций вовсе,
+  // и сравнивать их между собой было нельзя. Такой fallback уже используется в панели
+  // "Интеграции за месяц" (см. influencerDetailStats) — считаем одинаково во всём приложении.
+  const expectedCost = monthRows.reduce((s,r)=>s+(r.deal.cost||r.deal.plannedCost||0),0);
+  // Сколько интеграций попало в "Всего за месяц" по плану (факта ещё нет) — показываем в подписи,
+  // чтобы было видно, насколько цифра ещё может измениться.
+  const byPlanCount = monthRows.filter(r=>!r.deal.cost && r.deal.plannedCost).length;
   const totalReach = monthRows.reduce((s,r)=>s+(r.deal.reach||0),0);
   const plannedReach = monthRows.reduce((s,r)=>s+(r.deal.plannedReach||0),0);
   const totalClicks = monthRows.reduce((s,r)=>s+(r.deal.clicks||0),0);
@@ -1240,7 +1250,7 @@ function influencerBrandStats(monthRows){
   const bestDeal = dealProfit.slice().sort((a,b)=>b.profit-a.profit)[0] || null;
   const worstDeal = dealProfit.length>1 ? dealProfit.slice().sort((a,b)=>a.profit-b.profit)[0] : null;
 
-  return {totalCost, plannedCost, totalReach, plannedReach, totalClicks, plannedClicks,
+  return {totalCost, plannedCost, expectedCost, byPlanCount, totalReach, plannedReach, totalClicks, plannedClicks,
     totalContribution, dealsCount, publishedCount, romi, roasPct, drrPct, cpv, upliftPerView, upliftPerDeal,
     bloggerAgg, bestBlogger, worstBlogger, bestDeal, worstDeal};
 }
@@ -1273,7 +1283,7 @@ function tplInfluencerBrandDashboard(allRows){
     return multiYear ? `${short} '${m.slice(2,4)}` : short;
   };
 
-  const kpi = (label, value) => `<div class="kpi"><div class="num" style="color:${INFL_BRAND}">${value}</div><div class="lbl">${label}</div></div>`;
+  const kpi = (label, value, note) => `<div class="kpi"><div class="num" style="color:${INFL_BRAND}">${value}</div><div class="lbl">${label}</div>${note?`<div style="font-size:10px;color:var(--ink-mute);margin-top:3px;line-height:1.35">${note}</div>`:""}</div>`;
   const fmtSigned = (v) => (v>=0?"+":"−") + fmtNum(Math.abs(Math.round(v))) + " ₸";
 
   const card = (title, borderColor, bg, body) => `
@@ -1359,8 +1369,8 @@ function tplInfluencerBrandDashboard(allRows){
     </div>
 
     <div class="grid-kpi">
-      ${kpi("Расходы", fmtNum(s.totalCost)+" ₸")}
-      ${kpi("План затрат на конец месяца", fmtNum(s.plannedCost)+" ₸")}
+      ${kpi("Расходы (факт)", fmtNum(s.totalCost)+" ₸", "сумма колонки «факт расход» — сколько уже реально потратили")}
+      ${kpi("План", fmtNum(s.plannedCost)+" ₸", "сумма колонки «план расход» — только там, где план заполнен")}
       ${kpi("Выручка (вклад)", fmtNum(Math.round(s.totalContribution))+" ₸")}
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2))}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%")}
@@ -8464,8 +8474,15 @@ async function runSelfTests(){
       if(!html.includes("@best2") || !html.includes("@worst2")) throw new Error("лучший/худший блогер не показаны");
       if(!html.includes("3\u00a0000") && !html.includes("3 000")) throw new Error("суммарные расходы не отрисованы");
       if(!html.includes(escapeHtml("Опубликована"))) throw new Error("воронка стадий не отрисована");
-      if(!html.includes("План затрат на конец месяца")) throw new Error("должен быть KPI 'План затрат на конец месяца'");
-      if(!html.includes("2 800") && !html.includes("2 800")) throw new Error("план затрат на конец месяца посчитан неверно (ожидали 2 800 ₸, т.е. 1000+1800)");
+      // Три денежные плашки считают РАЗНОЕ, проверяем каждую отдельно.
+      // Фикстуры: план 1000 и 1800, факт 1000 и 2000.
+      const card = (label) => {
+        const m = html.match(new RegExp('<div class="num"[^>]*>([^<]+)</div><div class="lbl">'+label+'</div>'));
+        if(!m) throw new Error("не нашли плашку '"+label+"'");
+        return m[1];
+      };
+      if(!/3[\s\u00a0]000/.test(card("Расходы \\(факт\\)"))) throw new Error("«Расходы (факт)» = 1000+2000 = 3 000 ₸: "+card("Расходы \\(факт\\)"));
+      if(!/2[\s\u00a0]800/.test(card("План"))) throw new Error("«План» = 1000+1800 = 2 800 ₸ (только плановая колонка): "+card("План"));
     } finally {
       DataManager.state.influencerDeals = savedDeals;
       UI.inflDashMonth = savedDashMonth;
