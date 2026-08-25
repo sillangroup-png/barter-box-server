@@ -981,17 +981,29 @@ function computeUnifiedInfluencerRomi(){
   const byProduct = {};
   salesByDay.forEach(s=>{ const key = saleMatchKey(s); (byProduct[key] = byProduct[key] || []).push(s); });
 
-  function isCleanDay(matchKey, dateStr){
-    return !units.some(u=>{
-      if(u.matchKey!==matchKey || !u.date) return false;
-      const diff = daysBetween(dateStr, u.date);
-      return diff>=0 && diff<=2;
-    });
-  }
+  // Базовая линия товара = средняя дневная выручка ДО первой выкладки по этому товару.
+  //
+  // Раньше база считалась по всем "чистым" дням (где рядом нет ни одной выкладки) — в том числе
+  // по дням ПОСЛЕ кампании. Но после выкладки ещё несколько дней катится хвост, и такие дни
+  // "чистые" только формально: база из-за них задиралась, а вклад блогеров занижался.
+  // Реальный пример (Hair Combo, август 2026): чистыми оказались 19–24 августа, база вышла
+  // 92 254 ₸/день, хотя до первой выкладки товар продавал 38 783 ₸/день — почти в 2,4 раза меньше.
+  //
+  // Если продаж до первой выкладки не было вовсе (новинку и запускали блогерами) — база = 0,
+  // тогда весь объём считается приростом. База null остаётся только у товаров, по которым
+  // продаж нет в принципе: для них вклад по-прежнему не считается (см. hasBaseline).
+  const firstUnitDateByProduct = {};
+  units.forEach(u=>{
+    if(!u.date) return;
+    const cur = firstUnitDateByProduct[u.matchKey];
+    if(!cur || u.date < cur) firstUnitDateByProduct[u.matchKey] = u.date;
+  });
   const baselineByProduct = {};
   Object.keys(byProduct).forEach(matchKey=>{
-    const clean = byProduct[matchKey].filter(s=>isCleanDay(matchKey, s.date));
-    baselineByProduct[matchKey] = clean.length ? clean.reduce((a,s)=>a+s.revenue,0)/clean.length : null;
+    const firstDate = firstUnitDateByProduct[matchKey];
+    // Нет ни одной выкладки по товару — брать "до старта" не от чего, берём всю историю.
+    const pre = firstDate ? byProduct[matchKey].filter(s=>s.date < firstDate) : byProduct[matchKey];
+    baselineByProduct[matchKey] = pre.length ? pre.reduce((a,s)=>a+s.revenue,0)/pre.length : 0;
   });
 
   const contribution = {};
@@ -5872,6 +5884,46 @@ async function runSelfTests(){
       if(Math.abs(micro.netContribution-100)>1) throw new Error("вклад микро блогера должен делиться пополам с крупным: "+micro.netContribution);
       const totalContribution = large.netContribution + micro.netContribution;
       if(Math.abs(totalContribution-200)>1) throw new Error("суммарный вклад должен равняться приросту продаж (200), а не задваиваться: "+totalContribution);
+    } finally {
+      DataManager.state.influencerDeals = savedDeals;
+      DataManager.state.microInfluencerDeals = savedMicro;
+      DataManager.state.salesByDay = savedSales;
+    }
+  });
+  TestSuite.test("computeUnifiedInfluencerRomi: база считается по дням ДО первой выкладки, а хвост после кампании её не задирает", ()=>{
+    const savedDeals = DataManager.state.influencerDeals;
+    const savedMicro = DataManager.state.microInfluencerDeals;
+    const savedSales = DataManager.state.salesByDay;
+    try{
+      DataManager.state.influencerDeals = [
+        {id:9105, blogerLogin:"@hair", platform:"Instagram Reels", product:"ХвостТовар", publishedDate:"2026-03-10", cost:1000, status:"Опубликована"},
+      ];
+      DataManager.state.microInfluencerDeals = [];
+      DataManager.state.salesByDay = [
+        // до выкладки товар продавал по 100 в день — вот это и есть настоящая база
+        {id:9301, date:"2026-03-08", product:"ХвостТовар", revenue:100},
+        {id:9302, date:"2026-03-09", product:"ХвостТовар", revenue:100},
+        // день выкладки
+        {id:9303, date:"2026-03-10", product:"ХвостТовар", revenue:600},
+        // хвост: формально "чистые" дни (diff>2), но продажи ещё держатся высоко.
+        // По старой логике они попадали в базу и задирали её до ~433, съедая почти весь вклад.
+        {id:9304, date:"2026-03-14", product:"ХвостТовар", revenue:500},
+        {id:9305, date:"2026-03-15", product:"ХвостТовар", revenue:500},
+      ];
+      const {baselineByProduct, contribution} = computeUnifiedInfluencerRomi();
+      const base = baselineByProduct["ХвостТовар"];
+      if(Math.abs(base-100)>0.01) throw new Error("база должна считаться только по дням до выкладки (100), а не по хвосту: "+base);
+      // uplift дня выкладки = 600-100 = 500, вся выкладка одна — весь прирост её
+      if(Math.abs(contribution["large:9105"]-500)>1) throw new Error("вклад должен считаться от базы 'до старта' и равняться 500: "+contribution["large:9105"]);
+
+      // Новинка: продаж до первой выкладки не было вовсе — база 0, весь объём в окне считается приростом.
+      DataManager.state.salesByDay = [
+        {id:9311, date:"2026-03-10", product:"ХвостТовар", revenue:600},
+        {id:9312, date:"2026-03-11", product:"ХвостТовар", revenue:200},
+      ];
+      const novelty = computeUnifiedInfluencerRomi();
+      if(novelty.baselineByProduct["ХвостТовар"]!==0) throw new Error("у новинки без истории продаж база должна быть 0: "+novelty.baselineByProduct["ХвостТовар"]);
+      if(Math.abs(novelty.contribution["large:9105"]-800)>1) throw new Error("у новинки весь объём окна должен идти в вклад (600+200=800): "+novelty.contribution["large:9105"]);
     } finally {
       DataManager.state.influencerDeals = savedDeals;
       DataManager.state.microInfluencerDeals = savedMicro;
