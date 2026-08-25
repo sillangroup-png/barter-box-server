@@ -1252,8 +1252,10 @@ function tplInfluencerBrandDashboard(allRows){
       <div class="login-hint">Добавьте интеграции с датой (план или факт публикации), чтобы увидеть сводку по месяцам.</div>
     </div>`;
   }
-  const month = (UI.inflDashMonth && months.includes(UI.inflDashMonth)) ? UI.inflDashMonth : months[months.length-1];
-  const monthRows = allRows.filter(r=>inflDealDate(r.deal).slice(0,7)===month);
+  // Единый месяц вкладки (см. UI.inflMonth): "" = весь период, иначе конкретный "YYYY-MM".
+  const month = ensureMonthInitialized("inflMonth", months);
+  const allPeriod = !month || !months.includes(month);
+  const monthRows = allRows.filter(r=> allPeriod || inflDealDate(r.deal).slice(0,7)===month);
   const s = influencerBrandStats(monthRows);
   const trend = influencerReachTrend(allRows);
   const funnel = influencerFunnelCounts(allRows);
@@ -1263,7 +1265,7 @@ function tplInfluencerBrandDashboard(allRows){
   // доступны через выпадающий список рядом. Если годов несколько — подписываем месяц годом,
   // иначе "Июль" повторится и для 2025, и для 2026 без возможности их отличить.
   const MAX_MONTH_TABS = 6;
-  const recentMonths = Array.from(new Set([...months.slice(-MAX_MONTH_TABS), month])).sort();
+  const recentMonths = Array.from(new Set([...months.slice(-MAX_MONTH_TABS), ...(allPeriod?[]:[month])])).sort();
   const hasMoreMonths = months.length > recentMonths.length;
   const multiYear = new Set(months.map(m=>m.slice(0,4))).size > 1;
   const tabLabel = (m) => {
@@ -1345,11 +1347,15 @@ function tplInfluencerBrandDashboard(allRows){
       Платный инфлюенс · дашборд
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         ${recentMonths.map(m=>`<button class="btn btn-sm infl-dash-month-tab" data-month="${m}" style="background:${m===month?INFL_BRAND:INFL_BRAND_LIGHT};color:${m===month?'#fff':INFL_BRAND}">${escapeHtml(tabLabel(m))}</button>`).join("")}
+        <button class="btn btn-sm infl-dash-month-tab" data-month="" style="background:${allPeriod?INFL_BRAND:INFL_BRAND_LIGHT};color:${allPeriod?'#fff':INFL_BRAND}">Весь период</button>
         ${hasMoreMonths ? `<select id="infl-dash-month-select" style="border:1px solid ${INFL_BRAND};border-radius:8px;padding:6px 8px;color:${INFL_BRAND};font-weight:600;font-size:12px;background:#fff">
           <option value="">Ещё месяцы…</option>
           ${months.map(m=>`<option value="${m}" ${m===month?'selected':''}>${escapeHtml(monthLabel(m))}</option>`).join("")}
         </select>` : ""}
       </div>
+    </div>
+    <div class="login-hint" style="margin-bottom:12px">
+      <b>Выбранный месяц действует на всю страницу</b> — дашборд, сводные KPI-плашки и таблицу интеграций ниже. Сейчас: ${allPeriod?"весь период":escapeHtml(monthLabel(month))}.
     </div>
 
     <div class="grid-kpi">
@@ -1537,17 +1543,19 @@ function tplMicroInfluencerBrandDashboard(allRows){
       <div class="login-hint">Добавьте интеграции с датой выкладки, чтобы увидеть сводку по месяцам.</div>
     </div>`;
   }
-  const month = (UI.microDashMonth && months.includes(UI.microDashMonth)) ? UI.microDashMonth : months[months.length-1];
+  // Единый месяц вкладки (см. UI.microMonth): "" = весь период, иначе конкретный "YYYY-MM".
+  const month = ensureMonthInitialized("microMonth", months);
+  const allPeriod = !month || !months.includes(month);
   // Считаем только уже ОПУБЛИКОВАННЫЕ интеграции (videoStatus==="опубликовано"). Раньше сюда попадали
   // и оплаченные, но ещё не выложенные интеграции (через план-дату в microDealDate) — расход по ним
   // уже учитывался, а вклада в продажи/охвата ещё не было, и статистика "на сегодня" получалась
   // завышенной по расходам и заниженной по ROMI/CPV. Как только блогер публикует пост и появляется
   // факт.охват — интеграция сама попадёт в статистику месяца публикации.
-  const monthRows = allRows.filter(r=>r.deal.videoStatus==="опубликовано" && microDealDate(r.deal).slice(0,7)===month);
+  const monthRows = allRows.filter(r=>r.deal.videoStatus==="опубликовано" && (allPeriod || microDealDate(r.deal).slice(0,7)===month));
   const s = microInfluencerBrandStats(monthRows);
 
   const MAX_MONTH_TABS = 6;
-  const recentMonths = Array.from(new Set([...months.slice(-MAX_MONTH_TABS), month])).sort();
+  const recentMonths = Array.from(new Set([...months.slice(-MAX_MONTH_TABS), ...(allPeriod?[]:[month])])).sort();
   const hasMoreMonths = months.length > recentMonths.length;
   const multiYear = new Set(months.map(m=>m.slice(0,4))).size > 1;
   const tabLabel = (m) => {
@@ -1574,6 +1582,7 @@ function tplMicroInfluencerBrandDashboard(allRows){
       Микро/средние · дашборд
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         ${recentMonths.map(m=>`<button class="btn btn-sm micro-dash-month-tab" data-month="${m}" style="background:${m===month?MICRO_BRAND:MICRO_BRAND_LIGHT};color:${m===month?'#fff':MICRO_BRAND}">${escapeHtml(tabLabel(m))}</button>`).join("")}
+        <button class="btn btn-sm micro-dash-month-tab" data-month="" style="background:${allPeriod?MICRO_BRAND:MICRO_BRAND_LIGHT};color:${allPeriod?'#fff':MICRO_BRAND}">Весь период</button>
         ${hasMoreMonths ? `<select id="micro-dash-month-select" style="border:1px solid ${MICRO_BRAND};border-radius:8px;padding:6px 8px;color:${MICRO_BRAND};font-weight:600;font-size:12px;background:#fff">
           <option value="">Ещё месяцы…</option>
           ${months.map(m=>`<option value="${m}" ${m===month?'selected':''}>${escapeHtml(monthLabel(m))}</option>`).join("")}
@@ -1581,6 +1590,7 @@ function tplMicroInfluencerBrandDashboard(allRows){
       </div>
     </div>
     <div class="login-hint" style="margin-bottom:12px">
+      <b>Выбранный месяц действует на всю страницу</b> — дашборд, сводку по блогерам, сводку по ответственным и таблицу интеграций ниже. Сейчас: ${allPeriod?"весь период":escapeHtml(monthLabel(month))}.<br>
       Показаны только уже опубликованные интеграции (оплаченные, но ещё не выложенные — не учитываются, появятся сами после выкладки).
       ROMI считается только там, где у интеграции есть ШК (или совпадает название товара) и в «Продажи по дням (1С)» есть история продаж этого товара.
     </div>
@@ -1906,14 +1916,17 @@ const UI = {
   reportOnlyWaiting: false, // фильтр "Сводного отчёта": показывать только доставленные, но ещё не выложенные (чтобы обзванивать блогеров)
   inflFilter: {search:"", sort:"default", month:""},
   microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:""},
-  inflDashMonth: "", // выбранный месяц в новом стилизованном дашборде "Платный инфлюенс" (см. tplInfluencerBrandDashboard)
+  // ЕДИНЫЙ месяц на всю вкладку. Раньше на каждой вкладке было 3-4 независимых фильтра месяца
+  // (дашборд / сводка по блогерам / сводка по ответственным / таблица интеграций), и месяц
+  // приходилось выбирать в каждом блоке отдельно — цифры на одном экране легко оказывались за
+  // РАЗНЫЕ периоды. Теперь любой контрол месяца на странице пишет сюда, и все блоки читают отсюда.
+  // null = ещё не инициализировано (при первом рендере подставляем последний месяц с данными),
+  // "" = весь период, "YYYY-MM" = конкретный месяц.
+  microMonth: null, // единый месяц вкладки "Инфлюенс интеграции микро/средние"
+  inflMonth: null,  // единый месяц вкладки "Инфлюенс интеграции крупные"
   inflCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
-  inflDetailMonth: "", // выбранный месяц в блоках "Оплачено"/"В работе — ждём контент" (см. tplInfluencerDeals)
-  microDashMonth: "", // выбранный месяц в дашборде "Микро/средние" (см. tplMicroInfluencerBrandDashboard)
   microCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
-  microSummaryMonth: "", // выбранный месяц в сводке "по блогерам" перед таблицей интеграций (см. tplMicroBloggerSummary)
   microSummaryExpanded: false, // "Сводка по блогерам" свёрнута до 10 строк, пока не нажата "Показать все"
-  microResponsibleMonth: "", // выбранный месяц в "Сводке по ответственным" (см. tplMicroResponsibleSummary) — "" = вся история (снимок загрузки на сегодня)
   expandedResponsible: new Set(), // какие менеджеры развёрнуты в "Сводке по ответственным" (клик по "+" показывает разбивку по городам/категориям блогеров)
   calendarMonth: "", // выбранный месяц в "Планере блогеров" (см. tplMicroCalendar) — "YYYY-MM", пусто = текущий месяц
   calendarHiddenBloggers: new Set(), // блогеры, скрытые из календаря кликом по чипу-легенде (по умолчанию видны все)
@@ -1927,6 +1940,52 @@ const UI = {
   driverShowDelivered: false, // сворачиваем секцию "Доставлено" у водителя по умолчанию, чтобы не мешала активным доставкам
   driverEditingComment: false, // редактирование комментария водителя в уже закрытом заказе (исправление ошибки после закрытия)
 };
+// Старые имена полей месяца (по одному на каждый блок страницы) остаются рабочими, но теперь это
+// СИНОНИМЫ единого UI.microMonth / UI.inflMonth — читают и пишут одно и то же значение. Благодаря
+// этому любой контрол месяца на вкладке (вкладки-месяцы дашборда, селект в сводке по блогерам,
+// селект в сводке по ответственным, фильтр таблицы интеграций) пересчитывает СРАЗУ ВСЮ страницу,
+// а не только свой блок. Снаружи (в шаблонах, обработчиках и тестах) ничего менять не нужно.
+function defineMonthAlias(obj, key, store, enumerable){
+  Object.defineProperty(obj, key, {
+    get(){ return UI[store] == null ? "" : UI[store]; },
+    set(v){ UI[store] = v; },
+    enumerable: !!enumerable, configurable: true,
+  });
+}
+["microDashMonth","microSummaryMonth","microResponsibleMonth"].forEach(k=> defineMonthAlias(UI, k, "microMonth"));
+["inflDashMonth","inflDetailMonth"].forEach(k=> defineMonthAlias(UI, k, "inflMonth"));
+// Фильтр месяца в самой таблице интеграций живёт внутри microFilter/inflFilter. Эти объекты
+// местами пересоздаются целиком (например, тесты восстанавливают их через JSON.parse), поэтому
+// алиас переустанавливаем через сеттер на самом UI, а не один раз при загрузке. При КАЖДОЙ такой
+// замене объекта месяц страницы берём из нового объекта (нет поля month — значит "весь период"),
+// иначе от предыдущего состояния остался бы «залипший» месяц, которого в новом фильтре нет.
+function bindFilterMonth(filterKey, store){
+  let inner = UI[filterKey];
+  let initial = true;
+  const attach = obj => {
+    if(!obj) return obj;
+    const own = Object.getOwnPropertyDescriptor(obj, "month");
+    if(own && own.get) return obj; // уже алиас — повторно не трогаем
+    if(!initial) UI[store] = own ? (own.value || "") : "";
+    initial = false;
+    defineMonthAlias(obj, "month", store, true);
+    return obj;
+  };
+  attach(inner);
+  Object.defineProperty(UI, filterKey, {
+    get(){ return inner; },
+    set(v){ inner = attach(v); },
+    enumerable: true, configurable: true,
+  });
+}
+bindFilterMonth("microFilter", "microMonth");
+bindFilterMonth("inflFilter", "inflMonth");
+// Первый заход на вкладку: месяц ещё не выбирали — показываем последний месяц, по которому есть
+// данные (так же, как раньше вёл себя дашборд), а не пустую страницу за "весь период".
+function ensureMonthInitialized(store, months){
+  if(UI[store] == null) UI[store] = months.length ? months[months.length-1] : "";
+  return UI[store];
+}
 function loadSession(){
   try{
     const raw = localStorage.getItem(SESSION_KEY);
@@ -4573,8 +4632,8 @@ function wireDeskTab(){
     wireSearchOnEnter(inflSearch, v=>{ UI.inflFilter.search = v; renderDeskTab(); });
     document.getElementById("infl-sort").onchange = e=>{ UI.inflFilter.sort = e.target.value; renderDeskTab(); };
     document.getElementById("infl-month").onchange = e=>{ UI.inflFilter.month = e.target.value; renderDeskTab(); };
-    // Селект месяца у блоков "Оплачено"/"В работе — ждём контент" — независим от infl-month
-    // (тот фильтрует таблицу интеграций ниже, этот — только сводные KPI-плашки выше неё).
+    // Все контролы месяца на вкладке пишут в один UI.inflMonth (см. defineMonthAlias), поэтому
+    // любой из них пересчитывает страницу целиком, а не только свой блок.
     const inflDetailMonthSelect = document.getElementById("infl-detail-month");
     if(inflDetailMonthSelect) inflDetailMonthSelect.onchange = e=>{ UI.inflDetailMonth = e.target.value; renderDeskTab(); };
     document.querySelectorAll(".infl-dash-month-tab").forEach(btn=>{
@@ -6181,6 +6240,60 @@ async function runSelfTests(){
     } finally {
       DataManager.state.microInfluencerDeals = savedDeals;
       UI.microSummaryMonth = savedSummaryMonth;
+    }
+  });
+  TestSuite.test("Единый месяц вкладки: любой контрол месяца (вкладка дашборда, сводка по блогерам, сводка по ответственным, фильтр таблицы) меняет ОДНО состояние и пересчитывает всю страницу", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedFilter = JSON.stringify(UI.microFilter);
+    const savedMonth = UI.microMonth;
+    const savedInflMonth = UI.inflMonth;
+    const savedTab = UI.tab;
+    try{
+      // Все старые имена — синонимы UI.microMonth: пишем в одно, читаем во всех.
+      UI.microMonth = "2026-07";
+      if(UI.microDashMonth !== "2026-07" || UI.microSummaryMonth !== "2026-07" || UI.microResponsibleMonth !== "2026-07" || UI.microFilter.month !== "2026-07"){
+        throw new Error("все контролы месяца микро-вкладки должны читать один UI.microMonth");
+      }
+      // ...и наоборот: запись через любой из них меняет общий месяц.
+      UI.microResponsibleMonth = "2026-08";
+      if(UI.microMonth !== "2026-08" || UI.microDashMonth !== "2026-08" || UI.microFilter.month !== "2026-08"){
+        throw new Error("запись в любой из контролов должна менять общий UI.microMonth: "+UI.microMonth);
+      }
+      // Вкладка "крупные" — свой независимый месяц (микро на неё не влияет).
+      UI.inflMonth = "2026-06";
+      if(UI.inflDashMonth !== "2026-06" || UI.inflDetailMonth !== "2026-06" || UI.inflFilter.month !== "2026-06"){
+        throw new Error("контролы месяца крупной вкладки должны читать один UI.inflMonth");
+      }
+      if(UI.microMonth !== "2026-08") throw new Error("месяц крупной вкладки не должен затирать месяц микро-вкладки");
+
+      // Смена месяца реально сужает данные во ВСЕХ блоках сразу, а не только в одном.
+      DataManager.state.microInfluencerDeals = [
+        {id:9790, blogerName:"Июльская", responsible:"Нина", product:"Т", cost:1000, factReachReels:100, factReachTT:0, videoStatus:"опубликовано", publishDate:"2026-07-10"},
+        {id:9791, blogerName:"Августовская", responsible:"Аружан", product:"Т", cost:2000, factReachReels:200, factReachTT:0, videoStatus:"опубликовано", publishDate:"2026-08-10"},
+      ];
+      UI.microFilter = {search:"", sort:"default", paymentStatus:"", responsible:""};
+      UI.microMonth = "2026-07";
+      const bloggersJuly = microBloggerSummary(UI.microSummaryMonth).map(r=>r.blogerName);
+      const responsibleJuly = microResponsibleSummary(UI.microResponsibleMonth).map(r=>r.responsible);
+      if(bloggersJuly.length !== 1 || bloggersJuly[0] !== "Июльская") throw new Error("сводка по блогерам должна сузиться до июля: "+JSON.stringify(bloggersJuly));
+      if(responsibleJuly.length !== 1 || responsibleJuly[0] !== "Нина") throw new Error("сводка по ответственным должна сузиться до июля: "+JSON.stringify(responsibleJuly));
+
+      UI.microMonth = "2026-08";
+      const bloggersAug = microBloggerSummary(UI.microSummaryMonth).map(r=>r.blogerName);
+      const responsibleAug = microResponsibleSummary(UI.microResponsibleMonth).map(r=>r.responsible);
+      if(bloggersAug.length !== 1 || bloggersAug[0] !== "Августовская") throw new Error("после смены месяца сводка по блогерам должна показать август: "+JSON.stringify(bloggersAug));
+      if(responsibleAug.length !== 1 || responsibleAug[0] !== "Аружан") throw new Error("после смены месяца сводка по ответственным должна показать август: "+JSON.stringify(responsibleAug));
+
+      // "Весь период" — оба месяца снова видны.
+      UI.microMonth = "";
+      if(microBloggerSummary(UI.microSummaryMonth).length !== 2) throw new Error("'весь период' должен вернуть обе интеграции");
+      if(microResponsibleSummary(UI.microResponsibleMonth).length !== 2) throw new Error("'весь период' должен вернуть обоих ответственных");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+      UI.microFilter = JSON.parse(savedFilter);
+      UI.microMonth = savedMonth;
+      UI.inflMonth = savedInflMonth;
+      UI.tab = savedTab;
     }
   });
   TestSuite.test("tplMicroBloggerSummary(): строка 'Итого / в среднем' — суммы постов/охватов/затрат и общий CPV (затраты÷охват, а не среднее по строкам)", ()=>{
@@ -8032,10 +8145,15 @@ async function runSelfTests(){
         rows.push({deal, netContribution:200, romi:2, hasBaseline:true});
       }
       DataManager.state.influencerDeals = deals;
-      UI.inflDashMonth = ""; // по умолчанию — последний месяц
+      UI.inflMonth = null; // ещё не выбирали — подставится последний месяц с данными
       const html = tplInfluencerBrandDashboard(rows);
+      // Вкладок-месяцев максимум 6 + отдельная кнопка "Весь период" (единый фильтр страницы),
+      // поэтому кнопок с классом infl-dash-month-tab допустимо 7, а месяцев среди них — 6.
       const tabCount = (html.match(/infl-dash-month-tab/g)||[]).length;
-      if(tabCount > 6) throw new Error("вкладок месяцев больше 6 — при годах данных они не влезут: "+tabCount);
+      const monthTabCount = (html.match(/infl-dash-month-tab" data-month="\d{4}-\d{2}"/g)||[]).length;
+      if(monthTabCount > 6) throw new Error("вкладок месяцев больше 6 — при годах данных они не влезут: "+monthTabCount);
+      if(tabCount !== monthTabCount + 1) throw new Error("должна быть ровно одна кнопка 'Весь период' помимо месяцев: "+tabCount+" всего, "+monthTabCount+" месяцев");
+      if(!html.includes('data-month=""')) throw new Error("должна быть кнопка 'Весь период' (data-month=\"\")");
       if(!html.includes("infl-dash-month-select")) throw new Error("выпадающий список 'ещё месяцы' не появился при длинной истории");
       // apostrophe уходит через escapeHtml() как &#39; — проверяем экранированную форму.
       if(!html.includes("&#39;24") || !html.includes("&#39;25") || !html.includes("&#39;26")) throw new Error("год не подписан у месяцев, хотя данных больше одного года");
@@ -8126,8 +8244,11 @@ document.addEventListener("DOMContentLoaded", async ()=>{
   // к первому реальному рендеру там могла остаться дата из тестового фикстура, а не посчитанная из
   // настоящих данных — например, "Сравнение периодов" показывало один и тот же месяц дважды.
   // Сбрасываем перед передачей управления реальному приложению, чтобы они посчитались заново.
-  UI.microDashMonth = "";
+  // null (а не "") — чтобы месяц вкладки заново подставился из реальных данных, см. ensureMonthInitialized.
+  UI.microMonth = null;
+  UI.inflMonth = null;
   UI.microCompare = {aFrom:"", aTo:"", bFrom:"", bTo:""};
+  UI.inflCompare = {aFrom:"", aTo:"", bFrom:"", bTo:""};
   render();
   startPolling();
 });
