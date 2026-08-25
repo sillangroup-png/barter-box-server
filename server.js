@@ -66,41 +66,64 @@ const MARKETER_VIEWERS = [
   // ничего не пишет. Отдельная от Анны учётка, чтобы не путать человека и синхронизацию в логах.
   {name:"Kaspi-sync", login: process.env.KASPI_SYNC_LOGIN || null, password: process.env.KASPI_SYNC_PASSWORD || null},
 ];
-// ---------- сессии ----------
-// Раньше это была просто `new Map()` в памяти процесса: любой перезапуск (передеплой, а на Render
-// ещё и автоматическое усыпление сервиса при простое с последующим холодным стартом) стирал ВСЕ
-// выданные токены, и всех разом выбрасывало на экран логина — при том, что сами данные лежат на
-// постоянном диске и никуда не деваются. Теперь сессии живут на том же диске (DATA_DIR), поэтому
-// перезапуск сервера больше не разлогинивает людей.
-const SESSIONS_PATH = path.join(DATA_DIR, "sessions.json");
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 дней с последнего обращения
-const authTokens = new Map(); // token -> {role, driverCode?, readOnly?, name?, lastSeen}
-(function loadSessions(){
-  try{
-    if(!fs.existsSync(SESSIONS_PATH)) return;
-    const raw = JSON.parse(fs.readFileSync(SESSIONS_PATH, "utf8"));
-    const now = Date.now();
-    Object.entries(raw || {}).forEach(([token, s])=>{
-      if(s && typeof s === "object" && (now - (s.lastSeen || 0)) < SESSION_TTL_MS) authTokens.set(token, s);
-    });
-    console.log("Восстановлено сессий:", authTokens.size);
-  }catch(e){ console.error("Не удалось прочитать sessions.json:", e.message); }
-})();
-// ВАЖНО: пишем СИНХРОННО, а не через setImmediate + fs.writeFile, как state.json.
-// Первая версия была асинхронной — и сессии всё равно терялись при каждом передеплое: Render
-// убивает процесс почти сразу после команды деплоя, отложенная запись просто не успевала дойти
-// до диска. У state.json этой проблемы нет, потому что он переписывается постоянно (на каждое
-// изменение данных), а sessions.json пишется редко — по сути только в момент входа, и терять
-// именно эту запись нельзя. Файл крошечный (несколько сотен байт на сессию), так что синхронная
-// запись на скорости ответа не сказывается.
-function persistSessions(){
-  try{
-    const now = Date.now();
-    const obj = {};
-    authTokens.forEach((s, token)=>{ if((now - (s.lastSeen || 0)) < SESSION_TTL_MS) obj[token] = s; });
-    fs.writeFileSync(SESSIONS_PATH, JSON.stringify(obj));
-  }catch(e){ console.error("Ошибка сохранения sessions.json:", e.message); }
+// ---------- сессии (самодостаточный подписанный токен, БЕЗ хранения на сервере) ----------
+// История вопроса: сначала токены жили в обычной `new Map()` в памяти процесса — любой перезапуск
+// (передеплой; на Render ещё и автоусыпление сервиса при простое с холодным стартом) стирал их все
+// и разом выбрасывал людей на экран логина. Потом я стал складывать их в файл на DATA_DIR — и это
+// ТОЖЕ не помогло: сессии продолжали слетать после каждого деплоя, хотя state.json на том же диске
+// переживает всё прекрасно. Разбираться, почему именно (не смонтирован диск? другой путь? гонка при
+// остановке?), — долго и ненадёжно.
+//
+// Поэтому убираем зависимость от хранилища вообще. Токен теперь самодостаточный:
+//   base64url(payload) + "." + HMAC-SHA256(payload, ключ)
+// Сервер ничего не помнит — при каждом запросе он заново считает подпись и сравнивает. Подделать
+// payload нельзя, не зная ключа. Такой токен переживает любой перезапуск по определению.
+//
+// Ключ берём из уже существующих секретов окружения (пароли ролей): он стабилен между перезапусками,
+// не лежит в публичном репозитории и никуда не отдаётся. Если задать SESSION_SECRET в Render —
+// возьмётся он (это чище, но не обязательно).
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 дней с момента входа
+const SESSION_KEY = crypto.createHash("sha256").update(
+  process.env.SESSION_SECRET
+  || [process.env.MANAGER_PASSWORD, process.env.MARKETER_PASSWORD, process.env.ANNA_PASSWORD].filter(Boolean).join("|")
+  || "barter-box-fallback-key"
+).digest();
+function b64u(buf){ return Buffer.from(buf).toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
+function signSession(payload){
+  const body = b64u(JSON.stringify({...payload, iat: Date.now()}));
+  const sig = b64u(crypto.createHmac("sha256", SESSION_KEY).update(body).digest());
+  return body + "." + sig;
 }
+function verifySession(token){
+  if(!token || typeof token !== "string") return null;
+  const dot = token.lastIndexOf(".");
+  if(dot < 1) return null;
+  const body = token.slice(0, dot), sig = token.slice(dot+1);
+  const expected = b64u(crypto.createHmac("sha256", SESSION_KEY).update(body).digest());
+  // timingSafeEqual требует одинаковой длины — иначе сразу отказ.
+  if(sig.length !== expected.length) return null;
+  if(!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+  let payload;
+  try{ payload = JSON.parse(Buffer.from(body.replace(/-/g,"+").replace(/_/g,"/"), "base64").toString("utf8")); }
+  catch(e){ return null; }
+  if(!payload || (Date.now() - (payload.iat || 0)) >= SESSION_TTL_MS) return null;
+  return payload;
+}
+// Кнопка "Выйти" должна закрывать сессию немедленно. У самодостаточного токена нет серверной
+// записи, которую можно удалить, поэтому держим небольшой список отозванных — только он и хранится
+// на диске. Список крошечный и заполняется редко; если он всё же потеряется при перезапуске,
+// худшее последствие — токен, по которому уже вышли, снова заработает до истечения 30 дней.
+const REVOKED_PATH = path.join(DATA_DIR, "revoked-tokens.json");
+let revokedTokens = new Set();
+try{
+  if(fs.existsSync(REVOKED_PATH)) revokedTokens = new Set(JSON.parse(fs.readFileSync(REVOKED_PATH, "utf8")) || []);
+}catch(e){ console.error("Не удалось прочитать revoked-tokens.json:", e.message); }
+function revokeToken(token){
+  revokedTokens.add(token);
+  try{ fs.writeFileSync(REVOKED_PATH, JSON.stringify([...revokedTokens].slice(-500))); }
+  catch(e){ console.error("Ошибка сохранения revoked-tokens.json:", e.message); }
+}
+function persistSessions(){ /* хранить нечего — токен самодостаточный, оставлено для совместимости вызовов */ }
 
 // ---------- проверка сессии на сервере (никогда не доверяем localStorage/фронтенду) ----------
 // До этого места токен из /api/auth/login выдавался, но ни один маршрут его не
@@ -115,18 +138,10 @@ function getToken(req){
 }
 function requireAuth(req, res, next){
   const token = getToken(req);
-  const session = token ? authTokens.get(token) : null;
+  // Подпись проверяется на лету — серверу не нужно ничего помнить, поэтому перезапуск
+  // (передеплой, автоусыпление Render) больше не разлогинивает людей.
+  const session = (token && !revokedTokens.has(token)) ? verifySession(token) : null;
   if(!session) return res.status(401).json({error:"Требуется авторизация"});
-  // Протухание считаем от ПОСЛЕДНЕГО обращения, а не от момента входа: пока человек пользуется
-  // приложением, его не разлогинит; бросил на месяц — сессия закроется сама.
-  const now = Date.now();
-  if((now - (session.lastSeen || 0)) >= SESSION_TTL_MS){
-    authTokens.delete(token); persistSessions();
-    return res.status(401).json({error:"Требуется авторизация"});
-  }
-  // lastSeen пишем на диск не чаще раза в час — иначе запись шла бы на каждый запрос.
-  if(now - (session.lastSeen || 0) > 60*60*1000){ session.lastSeen = now; persistSessions(); }
-  else session.lastSeen = now;
   // "Только просмотр" (см. MARKETER_VIEWERS) — читать (GET) можно всё как обычному
   // маркетологу, а любой другой метод (создание/правка/удаление/импорт) блокируется
   // здесь же, централизованно, чтобы не забыть проверку на каком-то одном из маршрутов.
@@ -334,9 +349,7 @@ app.post("/api/auth/login", (req,res)=>{
   if(role === "marketer"){
     const viewer = MARKETER_VIEWERS.find(v=> v.login && v.password && v.login===login && v.password===password);
     if(viewer){
-      const token = crypto.randomBytes(24).toString("hex");
-      authTokens.set(token, {role, readOnly:true, name: viewer.name, lastSeen: Date.now()});
-      persistSessions();
+      const token = signSession({role, readOnly:true, name: viewer.name});
       return res.json({ok:true, token, readOnly:true});
     }
   }
@@ -346,9 +359,7 @@ app.post("/api/auth/login", (req,res)=>{
   if(login !== cfg.login || password !== cfg.password){
     return res.status(401).json({error:"Неверный логин или пароль"});
   }
-  const token = crypto.randomBytes(24).toString("hex");
-  authTokens.set(token, {role, lastSeen: Date.now()});
-  persistSessions();
+  const token = signSession({role});
   res.json({ok:true, token});
 });
 
@@ -362,15 +373,13 @@ app.post("/api/auth/driver-login", (req,res)=>{
   const drv = findDriverByPhoneOrCode(input);
   if(!drv) return res.status(404).json({error:"Телефон не найден. Проверьте у диспетчера."});
   if(!drv.active) return res.status(403).json({error:"Этот водитель деактивирован."});
-  const token = crypto.randomBytes(24).toString("hex");
-  authTokens.set(token, {role:"driver", driverCode: drv.code, lastSeen: Date.now()});
-  persistSessions();
+  const token = signSession({role:"driver", driverCode: drv.code});
   res.json({ok:true, token, driverCode: drv.code, name: drv.name});
 });
 
 app.post("/api/auth/logout", (req,res)=>{
   const token = getToken(req);
-  if(token){ authTokens.delete(token); persistSessions(); }
+  if(token) revokeToken(token);
   res.json({ok:true});
 });
 
