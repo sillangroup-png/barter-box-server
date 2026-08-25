@@ -86,21 +86,20 @@ const authTokens = new Map(); // token -> {role, driverCode?, readOnly?, name?, 
     console.log("Восстановлено сессий:", authTokens.size);
   }catch(e){ console.error("Не удалось прочитать sessions.json:", e.message); }
 })();
-let sessionsScheduled = false;
+// ВАЖНО: пишем СИНХРОННО, а не через setImmediate + fs.writeFile, как state.json.
+// Первая версия была асинхронной — и сессии всё равно терялись при каждом передеплое: Render
+// убивает процесс почти сразу после команды деплоя, отложенная запись просто не успевала дойти
+// до диска. У state.json этой проблемы нет, потому что он переписывается постоянно (на каждое
+// изменение данных), а sessions.json пишется редко — по сути только в момент входа, и терять
+// именно эту запись нельзя. Файл крошечный (несколько сотен байт на сессию), так что синхронная
+// запись на скорости ответа не сказывается.
 function persistSessions(){
-  // Пишем не чаще одного раза за тик, как и state.json — на каждый запрос обновляется lastSeen,
-  // и синхронная запись на диск при каждом обращении была бы лишней нагрузкой.
-  if(sessionsScheduled) return;
-  sessionsScheduled = true;
-  setImmediate(()=>{
-    sessionsScheduled = false;
+  try{
     const now = Date.now();
     const obj = {};
     authTokens.forEach((s, token)=>{ if((now - (s.lastSeen || 0)) < SESSION_TTL_MS) obj[token] = s; });
-    fs.writeFile(SESSIONS_PATH, JSON.stringify(obj), (err)=>{
-      if(err) console.error("Ошибка сохранения sessions.json:", err.message);
-    });
-  });
+    fs.writeFileSync(SESSIONS_PATH, JSON.stringify(obj));
+  }catch(e){ console.error("Ошибка сохранения sessions.json:", e.message); }
 }
 
 // ---------- проверка сессии на сервере (никогда не доверяем localStorage/фронтенду) ----------
@@ -941,6 +940,18 @@ app.use("/api", (req,res)=> res.status(404).json({error:"not found"}));
 // SPA fallback — всё остальное отдаём как index.html
 app.get(/^(?!\/api).*/, (req,res)=>{
   res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+// Render при деплое сначала посылает процессу SIGTERM и только потом убивает. Успеваем сбросить
+// на диск и данные, и сессии — страховка на случай, если что-то поменялось в памяти, но ещё не
+// было записано (у state.json запись отложенная, см. persist()).
+["SIGTERM","SIGINT"].forEach(sig=>{
+  process.on(sig, ()=>{
+    try{ fs.writeFileSync(STATE_PATH, JSON.stringify(state)); }catch(e){ console.error("Ошибка сохранения state.json при остановке:", e.message); }
+    persistSessions();
+    console.log("Получен "+sig+" — состояние и сессии сохранены, выходим.");
+    process.exit(0);
+  });
 });
 
 const PORT = process.env.PORT || 3001;
