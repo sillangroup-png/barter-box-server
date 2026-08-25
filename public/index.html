@@ -2080,6 +2080,8 @@ const UI = {
   microDashCategory: "", // фильтр категории блогера на дашборде "Микро/средние": "" = все категории
   calendarMonth: "", // выбранный месяц в "Планере блогеров" (см. tplMicroCalendar) — "YYYY-MM", пусто = текущий месяц
   calendarHiddenBloggers: new Set(), // блогеры, скрытые из календаря кликом по чипу-легенде (по умолчанию видны все)
+  calendarSource: "micro", // какая база показана в "Планере блогеров": "micro" (микро/средние) или "large" (платный инфлюенс)
+  calendarResponsible: "", // фильтр планера по ответственному менеджеру: "" = все менеджеры
   dashExpenseCampaign: "", // фильтр проекта в панели "Расходы на бартер" дашборда менеджера: "" = все проекты (с разрезом по каждому)
   inflTopFilter: {from:"", to:""},
   dashPeriod: {from:"", to:""}, // фильтр по периоду на главном дашборде маркетолога (диапазон/неделя/конкретная дата)
@@ -4118,7 +4120,7 @@ function knownProductNames(){
 }
 function modalDeal(existing){
   const isEdit = !!existing;
-  const d = existing || {blogerLogin:"", platform:PLATFORMS[0], product:"", barcode:"", plannedDate:"", publishedDate:"", plannedReach:0, plannedClicks:0, reach:0, clicks:0, likes:0, comments:0, saves:0, cost:0, plannedCost:0, notes:""};
+  const d = existing || {blogerLogin:"", platform:PLATFORMS[0], product:"", barcode:"", responsible:"", plannedDate:"", publishedDate:"", plannedReach:0, plannedClicks:0, reach:0, clicks:0, likes:0, comments:0, saves:0, cost:0, plannedCost:0, notes:""};
   const botHint = d.lastUpdatedFrom==="telegram"
     ? `<div class="login-hint">Последнее обновление — из Telegram-бота (${escapeHtml((d.lastUpdatedAt||"").replace("T"," ").slice(0,16))}). Лайки/комментарии/сохранения ниже — из распознанного скриншота.</div>`
     : "";
@@ -4127,6 +4129,7 @@ function modalDeal(existing){
     <div class="form-row">
       <div class="field"><label>Логин блогера (Instagram)</label><input id="m-login" placeholder="@username" value="${escapeHtml(d.blogerLogin)}"></div>
       <div class="field"><label>Платформа</label><select id="m-platform">${PLATFORMS.map(p=>`<option ${p===d.platform?'selected':''}>${p}</option>`).join("")}</select></div>
+      <div class="field"><label>Ответственный</label><input id="m-responsible" list="responsible-suggestions" placeholder="Имя менеджера" value="${escapeHtml(d.responsible||'')}"></div>
       <div class="field"><label>Продукт</label><input id="m-product" list="product-suggestions" placeholder="Название товара как в 1С" value="${escapeHtml(d.product||'')}"></div>
       <div class="field"><label>Штрихкод (ШК) товара</label><input id="m-barcode" placeholder="необязательно, но надёжнее" value="${escapeHtml(d.barcode||'')}"></div>
       <div class="field"><label>Дата план</label><input id="m-planned-date" type="date" value="${d.plannedDate||''}"></div>
@@ -4158,6 +4161,7 @@ function modalDeal(existing){
     const payload = {
       blogerLogin, platform: document.getElementById("m-platform").value, product: document.getElementById("m-product").value.trim(),
       barcode: document.getElementById("m-barcode").value.trim(),
+      responsible: document.getElementById("m-responsible").value.trim(),
       plannedDate: document.getElementById("m-planned-date").value, publishedDate: document.getElementById("m-published-date").value,
       plannedReach: parseInt(document.getElementById("m-planned-reach").value,10)||0,
       plannedClicks: parseInt(document.getElementById("m-planned-clicks").value,10)||0,
@@ -4245,43 +4249,92 @@ function monthGridDates(ym){
 }
 // Группирует интеграции микро/средних блогеров по дате календаря (microDealDate — план, если
 // есть, иначе факт), чтобы разложить их по ячейкам сетки.
-function calendarEntriesByDate(){
+// Планер умеет показывать ДВЕ разные базы: микро/средние (microInfluencerDeals) и платный
+// инфлюенс (influencerDeals). У них разные названия полей, поэтому приводим к общему виду:
+// name — что писать на карточке, date — в какой день её положить, link — куда ведёт клик по имени.
+function calendarDeals(source){
+  if(source === "large"){
+    return DataManager.state.influencerDeals.map(d=>({
+      id: d.id, raw: d, source: "large",
+      name: d.blogerLogin || "—",
+      product: d.product || "",
+      date: inflDealDate(d),
+      done: !!d.publishedDate,
+      responsible: d.responsible || "",
+      link: "",
+    }));
+  }
+  return DataManager.state.microInfluencerDeals.map(d=>({
+    id: d.id, raw: d, source: "micro",
+    name: d.blogerName || "—",
+    product: d.product || "",
+    date: microDealDate(d),
+    done: !!d.publishDate,
+    responsible: d.responsible || "",
+    link: d.instagramAccount || d.tiktokAccount || "",
+  }));
+}
+function calendarEntriesByDate(source, responsible){
   const map = {};
-  DataManager.state.microInfluencerDeals.forEach(d=>{
-    const dt = microDealDate(d);
-    if(!dt) return;
-    (map[dt] = map[dt] || []).push(d);
+  calendarDeals(source).forEach(e=>{
+    if(!e.date) return;
+    if(responsible && e.responsible !== responsible) return;
+    (map[e.date] = map[e.date] || []).push(e);
   });
   return map;
 }
 function tplMicroCalendar(){
   if(!UI.calendarMonth) UI.calendarMonth = todayStr().slice(0,7);
   const ym = UI.calendarMonth;
+  const source = UI.calendarSource === "large" ? "large" : "micro";
   const days = monthGridDates(ym);
-  const entriesByDate = calendarEntriesByDate();
-  const allBloggers = [...new Set(DataManager.state.microInfluencerDeals.map(d=>d.blogerName).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ru"));
+  const allDeals = calendarDeals(source);
+  // Список менеджеров строим из реально встречающихся значений выбранной базы, а не из справочника,
+  // чтобы не предлагать пустые варианты и не терять тех, кого вписали руками.
+  const responsibles = [...new Set(allDeals.map(e=>e.responsible).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ru"));
+  const resp = responsibles.includes(UI.calendarResponsible) ? UI.calendarResponsible : "";
+  const entriesByDate = calendarEntriesByDate(source, resp);
+  // Легенда — только по блогерам, попавшим в текущий фильтр: если менеджер выбрал себя, чужие
+  // блогеры не должны загромождать список (их там были сотни).
+  const visibleDeals = resp ? allDeals.filter(e=>e.responsible===resp) : allDeals;
+  const allBloggers = [...new Set(visibleDeals.map(e=>e.name).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ru"));
   const hidden = UI.calendarHiddenBloggers;
   const today = todayStr();
   const [y,m] = ym.split("-").map(Number);
   const prevYm = m===1 ? `${y-1}-12` : `${y}-${String(m-1).padStart(2,"0")}`;
   const nextYm = m===12 ? `${y+1}-01` : `${y}-${String(m+1).padStart(2,"0")}`;
   const dowLabels = ["ПН","ВТ","СР","ЧТ","ПТ","СБ","ВС"];
+  const srcTab = (key,label,color,light) => `<button class="btn btn-sm cal-source-tab" data-source="${key}" style="background:${source===key?color:light};color:${source===key?'#fff':color}">${label}</button>`;
+  const withoutResp = allDeals.filter(e=>!e.responsible).length;
 
   return `
     <div class="panel">
       <div class="panel-title">
         📅 Планер блогеров
-        <div style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${srcTab("micro","Микро/средние",MICRO_BRAND,MICRO_BRAND_LIGHT)}
+          ${srcTab("large","Платный инфлюенс",INFL_BRAND,INFL_BRAND_LIGHT)}
+          <span style="width:10px"></span>
           <button class="btn btn-ghost btn-sm" id="cal-prev" data-ym="${prevYm}">‹</button>
           <b style="min-width:130px;text-align:center;font-size:13.5px">${monthLabel(ym)}</b>
           <button class="btn btn-ghost btn-sm" id="cal-next" data-ym="${nextYm}">›</button>
           <button class="btn btn-primary btn-sm" id="cal-add">+ Добавить</button>
         </div>
       </div>
+      <div class="toolbar" style="margin-bottom:10px">
+        <span style="align-self:center;color:var(--ink-mute);font-size:12px">Ответственный:</span>
+        <select id="cal-responsible">
+          <option value="">Все менеджеры</option>
+          ${responsibles.map(r=>`<option value="${escapeHtml(r)}" ${r===resp?'selected':''}>${escapeHtml(r)}</option>`).join("")}
+        </select>
+        ${resp ? `<span style="align-self:center;color:var(--ink-mute);font-size:11.5px">показаны только блогеры ${escapeHtml(resp)} — ${allBloggers.length} шт.</span>` : ""}
+      </div>
       <div class="login-hint" style="margin-bottom:10px">
         Дата ячейки — плановая дата публикации, а если её ещё нет — фактическая дата выкладки.
         Клик по «+» на дне добавляет интеграцию сразу с этой плановой датой; клик по карточке — открывает её на редактирование;
         ✕ на карточке снимает интеграцию с плана (дата очищается, сама запись не удаляется).
+        ${!responsibles.length ? `<br><b>Ответственный пока никому не проставлен</b> в этой базе — заполните поле «Ответственный» в карточке интеграции, и здесь появится выбор менеджера.`
+          : (withoutResp ? `<br>У ${withoutResp} интеграций ответственный не указан — они видны только при «Все менеджеры».` : "")}
       </div>
       ${allBloggers.length ? `
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
@@ -4298,23 +4351,21 @@ function tplMicroCalendar(){
           const inMonth = dateStr.slice(0,7)===ym;
           const isToday = dateStr===today;
           const dayNum = parseInt(dateStr.slice(8,10),10);
-          const items = (entriesByDate[dateStr]||[]).filter(d=>!hidden.has(d.blogerName||"—"));
+          const items = (entriesByDate[dateStr]||[]).filter(e=>!hidden.has(e.name));
           return `<div class="planner-day ${inMonth?'':'out'} ${isToday?'today':''}">
             <div class="planner-day-head">
               <span>${dayNum}</span>
               <button class="planner-day-add" data-add-date="${dateStr}" title="Добавить интеграцию на эту дату">+</button>
             </div>
-            ${items.map(d=>{
-              const col = bloggerColor(d.blogerName||"—");
-              const isDone = !!d.publishDate;
-              const link = d.instagramAccount || d.tiktokAccount || "";
-              const nameHtml = link
-                ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener"><span class="dot"></span>${escapeHtml(d.blogerName||"—")}</a>`
-                : `<span class="dot"></span>${escapeHtml(d.blogerName||"—")}`;
-              return `<div class="planner-card ${isDone?'done':''}" style="--c:${col.c};${isDone?'':`background:${col.bg}`}" data-open-deal="${d.id}">
+            ${items.map(e=>{
+              const col = bloggerColor(e.name);
+              const nameHtml = e.link
+                ? `<a href="${escapeHtml(e.link)}" target="_blank" rel="noopener"><span class="dot"></span>${escapeHtml(e.name)}</a>`
+                : `<span class="dot"></span>${escapeHtml(e.name)}`;
+              return `<div class="planner-card ${e.done?'done':''}" style="--c:${col.c};${e.done?'':`background:${col.bg}`}" data-open-deal="${e.id}" data-source="${e.source}">
                 <b>${nameHtml}</b>
-                <div class="prod">${escapeHtml(d.product||"—")}</div>
-                ${!isDone?`<button class="rm" data-unschedule="${d.id}" title="Снять с плана">✕</button>`:""}
+                <div class="prod">${escapeHtml(e.product||"—")}</div>
+                ${!e.done?`<button class="rm" data-unschedule="${e.id}" data-source="${e.source}" title="Снять с плана">✕</button>`:""}
               </div>`;
             }).join("")}
           </div>`;
@@ -5100,8 +5151,21 @@ function wireDeskTab(){
   }
 
   else if(UI.tab==="microCalendar"){
+    const isLarge = UI.calendarSource === "large";
+    // Переключатель базы: микро/средние или платный инфлюенс. Меняем источник и сбрасываем
+    // скрытых блогеров — в разных базах блогеры разные, чужие "скрытия" тут только мешают.
+    document.querySelectorAll(".cal-source-tab").forEach(btn=>{
+      btn.onclick = ()=>{
+        UI.calendarSource = btn.dataset.source;
+        UI.calendarHiddenBloggers = new Set();
+        UI.calendarResponsible = "";
+        renderDeskTab();
+      };
+    });
+    const calResp = document.getElementById("cal-responsible");
+    if(calResp) calResp.onchange = e=>{ UI.calendarResponsible = e.target.value; UI.calendarHiddenBloggers = new Set(); renderDeskTab(); };
     const calAddBtn = document.getElementById("cal-add");
-    if(calAddBtn) calAddBtn.onclick = ()=> modalMicroDeal(null);
+    if(calAddBtn) calAddBtn.onclick = ()=> isLarge ? modalDeal(null) : modalMicroDeal(null);
     const calPrev = document.getElementById("cal-prev");
     if(calPrev) calPrev.onclick = ()=>{ UI.calendarMonth = calPrev.dataset.ym; renderDeskTab(); };
     const calNext = document.getElementById("cal-next");
@@ -5120,7 +5184,7 @@ function wireDeskTab(){
 
     // "+" на дне календаря — новая интеграция сразу с плановой датой этого дня.
     document.querySelectorAll(".planner-day-add").forEach(btn=>{
-      btn.onclick = ()=> modalMicroDeal(null, {plannedDate: btn.dataset.addDate});
+      btn.onclick = ()=> isLarge ? modalDeal(null) : modalMicroDeal(null, {plannedDate: btn.dataset.addDate});
     });
 
     // "✕" на карточке — снять с плана: очищаем плановую дату (сама интеграция остаётся,
@@ -5129,8 +5193,9 @@ function wireDeskTab(){
       btn.onclick = async (e)=>{
         e.stopPropagation();
         const id = parseInt(btn.dataset.unschedule,10);
+        const src = btn.dataset.source;
         try{
-          await withBusy(btn, ()=> Api.updateMicroDeal(id, {plannedDate:""}));
+          await withBusy(btn, ()=> src==="large" ? Api.updateDeal(id, {plannedDate:""}) : Api.updateMicroDeal(id, {plannedDate:""}));
           toast("Снято с плана");
           await DataManager.refresh(); render();
         }catch(err){ toast(err.message, true); }
@@ -5141,8 +5206,14 @@ function wireDeskTab(){
     document.querySelectorAll(".planner-card").forEach(card=>{
       card.onclick = (e)=>{
         if(e.target.closest("a") || e.target.closest(".rm")) return;
-        const deal = DataManager.state.microInfluencerDeals.find(d=>d.id===parseInt(card.dataset.openDeal,10));
-        if(deal) modalMicroDeal(deal);
+        const id = parseInt(card.dataset.openDeal,10);
+        if(card.dataset.source === "large"){
+          const deal = DataManager.state.influencerDeals.find(d=>d.id===id);
+          if(deal) modalDeal(deal);
+        } else {
+          const deal = DataManager.state.microInfluencerDeals.find(d=>d.id===id);
+          if(deal) modalMicroDeal(deal);
+        }
       };
     });
   }
@@ -6528,6 +6599,57 @@ async function runSelfTests(){
       UI.microFilter = JSON.parse(savedFilter);
       UI.tab = savedTab;
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
+    }
+  });
+  TestSuite.test("tplMicroCalendar(): две вкладки (микро/средние и платный инфлюенс) + фильтр по ответственному менеджеру", ()=>{
+    const savedMicro = DataManager.state.microInfluencerDeals;
+    const savedLarge = DataManager.state.influencerDeals;
+    const savedMonth = UI.calendarMonth, savedSrc = UI.calendarSource, savedResp = UI.calendarResponsible;
+    const savedHidden = UI.calendarHiddenBloggers, savedTab = UI.tab;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:9850, blogerName:"МикроНины", responsible:"Нина", product:"Т", plannedDate:"2026-08-10"},
+        {id:9851, blogerName:"МикроСаи", responsible:"Сая", product:"Т", plannedDate:"2026-08-11"},
+      ];
+      DataManager.state.influencerDeals = [
+        {id:9852, blogerLogin:"@крупныйНины", responsible:"Нина", product:"Т", plannedDate:"2026-08-12", publishedDate:"", status:"Запланирована"},
+      ];
+      UI.calendarMonth = "2026-08";
+      UI.calendarHiddenBloggers = new Set();
+      UI.calendarResponsible = "";
+
+      // Вкладка "микро/средние" — только микро-интеграции, крупных быть не должно.
+      UI.calendarSource = "micro";
+      let html = tplMicroCalendar();
+      if(!html.includes('data-source="micro"')) throw new Error("должна быть кнопка вкладки микро/средних");
+      if(!html.includes('data-source="large"')) throw new Error("должна быть кнопка вкладки платного инфлюенса");
+      if(!html.includes("МикроНины") || !html.includes("МикроСаи")) throw new Error("на вкладке микро должны быть обе микро-интеграции");
+      if(html.includes("@крупныйНины")) throw new Error("крупная интеграция не должна попадать на вкладку микро");
+
+      // Фильтр по менеджеру сужает и календарь, и легенду блогеров.
+      UI.calendarResponsible = "Нина";
+      html = tplMicroCalendar();
+      if(!html.includes("МикроНины")) throw new Error("при фильтре 'Нина' её блогер должен остаться");
+      if(html.includes("МикроСаи")) throw new Error("при фильтре 'Нина' блогер Саи попадать не должен");
+
+      // Вкладка "платный инфлюенс" — только крупные; фильтр сбрасывается обработчиком, но сама
+      // функция при неизвестном для базы менеджере обязана вернуться к "все".
+      UI.calendarSource = "large";
+      UI.calendarResponsible = "";
+      html = tplMicroCalendar();
+      if(!html.includes("@крупныйНины")) throw new Error("на вкладке платного инфлюенса должна быть крупная интеграция");
+      if(html.includes("МикроНины")) throw new Error("микро-интеграция не должна попадать на вкладку крупных");
+      if(!html.includes('data-source="large"')) throw new Error("карточка крупной интеграции должна помечаться data-source=large");
+
+      // Неизвестный менеджер — тихо показываем всех, а не пустой календарь.
+      UI.calendarResponsible = "Такого-нет";
+      html = tplMicroCalendar();
+      if(!html.includes("@крупныйНины")) throw new Error("при неизвестном менеджере планер должен вернуться к 'все менеджеры'");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedMicro;
+      DataManager.state.influencerDeals = savedLarge;
+      UI.calendarMonth = savedMonth; UI.calendarSource = savedSrc; UI.calendarResponsible = savedResp;
+      UI.calendarHiddenBloggers = savedHidden; UI.tab = savedTab;
     }
   });
   TestSuite.test("tplInfluencerDeals: колонка 'Блогер' закреплена (sticky-col) при горизонтальном скролле широкой таблицы", ()=>{
