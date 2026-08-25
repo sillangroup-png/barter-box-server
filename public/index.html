@@ -2983,14 +2983,17 @@ function tplInfluencerDeals(){
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
-          <th>Блогер</th><th>Платформа</th><th>Продукт</th><th>Дата план</th><th>Дата факт</th>
+          <!-- Колонка "Блогер" закреплена (sticky-col): таблица широкая, и при горизонтальном
+               скролле вправо без этого не видно, чья строка. Так же сделано в микро/средних и в
+               "Сводном отчёте". -->
+          <th class="sticky-col">Блогер</th><th>Платформа</th><th>Продукт</th><th>Дата план</th><th>Дата факт</th>
           <th>План охват/клики</th><th>Факт охват/клики</th><th>План/факт расход</th><th>Вклад в продажи</th><th>ROMI</th><th>Статус</th><th></th>
         </tr></thead>
         <tbody>
           ${rows.map(r=>{
             const d = r.deal;
             return `<tr>
-              <td><b>${escapeHtml(d.blogerLogin)}</b>${d.lastUpdatedFrom==="telegram"?' <span class="badge badge-progress" title="Обновлено через Telegram-бота">TG</span>':''}</td>
+              <td class="sticky-col"><b>${escapeHtml(d.blogerLogin)}</b>${d.lastUpdatedFrom==="telegram"?' <span class="badge badge-progress" title="Обновлено через Telegram-бота">TG</span>':''}</td>
               <td>${escapeHtml(d.platform)}</td>
               <td>${escapeHtml(d.product)}${d.barcode?`<br><span style="color:var(--ink-mute);font-size:11px">ШК ${escapeHtml(d.barcode)}</span>`:""}</td>
               <td>${escapeHtml(d.plannedDate||"—")}</td>
@@ -6252,6 +6255,28 @@ async function runSelfTests(){
     } finally {
       DataManager.state.microInfluencerDeals = savedDeals;
       UI.microSummaryMonth = savedSummaryMonth;
+    }
+  });
+  TestSuite.test("tplInfluencerDeals: колонка 'Блогер' закреплена (sticky-col) при горизонтальном скролле широкой таблицы", ()=>{
+    const saved = DataManager.state.influencerDeals;
+    const savedSales = DataManager.state.salesByDay;
+    const savedFilter = JSON.stringify(UI.inflFilter);
+    const savedMonth = UI.inflMonth;
+    try{
+      DataManager.state.influencerDeals = [
+        {id:9820, blogerLogin:"@sticky_test", platform:"Instagram Reels", product:"Товар", plannedDate:"2026-08-01", publishedDate:"2026-08-01", reach:100, clicks:1, cost:1000, status:"Опубликована"},
+      ];
+      DataManager.state.salesByDay = [];
+      UI.inflFilter = {search:"", sort:"default"};
+      UI.inflMonth = "";
+      const html = tplInfluencerDeals();
+      if(!html.includes('<th class="sticky-col">Блогер</th>')) throw new Error("заголовок 'Блогер' должен быть sticky-col: "+html.slice(0,400));
+      if(!/<td class="sticky-col"><b>@sticky_test<\/b>/.test(html)) throw new Error("ячейка с логином блогера должна иметь класс sticky-col");
+    } finally {
+      DataManager.state.influencerDeals = saved;
+      DataManager.state.salesByDay = savedSales;
+      UI.inflFilter = JSON.parse(savedFilter);
+      UI.inflMonth = savedMonth;
     }
   });
   TestSuite.test("tplInfluencerTopBloggers(): по умолчанию следует за месяцем страницы (UI.inflMonth), ручные даты переопределяют его", ()=>{
