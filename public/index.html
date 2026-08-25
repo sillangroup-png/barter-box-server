@@ -2745,18 +2745,30 @@ function tplTopBloggers(){
 /* ---------- Топ блогеров среди платных инфлюенс-интеграций (только influencerDeals) ---------- */
 function tplInfluencerTopBloggers(allRows){
   const tf = UI.inflTopFilter;
-  const rows = (tf.from || tf.to)
-    ? allRows.filter(r => inDateRange(inflDealDate(r.deal), tf.from, tf.to))
+  // По умолчанию панель следует за ЕДИНЫМ месяцем страницы (UI.inflMonth) — как и все остальные
+  // блоки вкладки. Раньше у неё был свой независимый период, и при выбранном августе рейтинг
+  // продолжал показывать всю историю. Ручные даты остаются как необязательное переопределение:
+  // заполнил — считаем по ним, "Сбросить" — снова следуем за месяцем страницы.
+  const custom = !!(tf.from || tf.to);
+  const pageMonth = UI.inflMonth;
+  const from = custom ? tf.from : (pageMonth ? pageMonth+"-01" : "");
+  const to   = custom ? tf.to   : (pageMonth ? monthEnd(pageMonth) : "");
+  const rows = (from || to)
+    ? allRows.filter(r => inDateRange(inflDealDate(r.deal), from, to))
     : allRows;
   const agg = influencerBloggerAgg(rows);
   const medals = ["🥇","🥈","🥉"];
+  const periodNote = custom
+    ? `<span style="align-self:center;color:var(--ink-mute);font-size:11.5px">свой период (не зависит от месяца страницы)</span>`
+    : `<span style="align-self:center;color:var(--ink-mute);font-size:11.5px">за ${pageMonth?escapeHtml(monthLabel(pageMonth)):"весь период"} — как и вся страница; можно задать свой период</span>`;
   const periodPicker = `
     <div class="toolbar" style="gap:8px">
       <span style="align-self:center;color:var(--ink-mute);font-size:12px">Период</span>
       <input type="date" id="infl-top-from" value="${tf.from}">
       <span style="align-self:center;color:var(--ink-mute);font-size:12px">—</span>
       <input type="date" id="infl-top-to" value="${tf.to}">
-      ${(tf.from || tf.to) ? `<button class="btn btn-ghost btn-sm" id="infl-top-clear">Сбросить</button>` : ""}
+      ${custom ? `<button class="btn btn-ghost btn-sm" id="infl-top-clear">Сбросить</button>` : ""}
+      ${periodNote}
     </div>`;
   if(!agg.length){
     return `
@@ -6240,6 +6252,48 @@ async function runSelfTests(){
     } finally {
       DataManager.state.microInfluencerDeals = savedDeals;
       UI.microSummaryMonth = savedSummaryMonth;
+    }
+  });
+  TestSuite.test("tplInfluencerTopBloggers(): по умолчанию следует за месяцем страницы (UI.inflMonth), ручные даты переопределяют его", ()=>{
+    const savedDeals = DataManager.state.influencerDeals;
+    const savedSales = DataManager.state.salesByDay;
+    const savedTop = JSON.stringify(UI.inflTopFilter);
+    const savedMonth = UI.inflMonth;
+    try{
+      DataManager.state.influencerDeals = [
+        {id:9810, blogerLogin:"@июльский", platform:"Reels", product:"Т", plannedDate:"2026-07-05", publishedDate:"2026-07-05", reach:1000, clicks:10, cost:100, status:"Опубликована"},
+        {id:9811, blogerLogin:"@августовский", platform:"Reels", product:"Т", plannedDate:"2026-08-05", publishedDate:"2026-08-05", reach:2000, clicks:20, cost:200, status:"Опубликована"},
+      ];
+      DataManager.state.salesByDay = [];
+      UI.inflTopFilter = {from:"", to:""};
+      const rows = computeInfluencerRomi();
+
+      UI.inflMonth = "2026-07";
+      let html = tplInfluencerTopBloggers(rows);
+      if(!html.includes("@июльский")) throw new Error("при выбранном июле должен показываться июльский блогер");
+      if(html.includes("@августовский")) throw new Error("при выбранном июле августовский блогер попадать не должен — панель обязана следовать за месяцем страницы");
+
+      UI.inflMonth = "2026-08";
+      html = tplInfluencerTopBloggers(rows);
+      if(!html.includes("@августовский")) throw new Error("после смены месяца на август должен показываться августовский блогер");
+      if(html.includes("@июльский")) throw new Error("после смены месяца на август июльский блогер попадать не должен");
+
+      // "Весь период" — оба блогера.
+      UI.inflMonth = "";
+      html = tplInfluencerTopBloggers(rows);
+      if(!html.includes("@июльский") || !html.includes("@августовский")) throw new Error("'весь период' должен показать обоих блогеров");
+
+      // Ручные даты переопределяют месяц страницы.
+      UI.inflMonth = "2026-08";
+      UI.inflTopFilter = {from:"2026-07-01", to:"2026-07-31"};
+      html = tplInfluencerTopBloggers(rows);
+      if(!html.includes("@июльский") || html.includes("@августовский")) throw new Error("ручной период должен переопределять месяц страницы");
+      if(!html.includes("infl-top-clear")) throw new Error("при ручном периоде должна быть кнопка 'Сбросить'");
+    } finally {
+      DataManager.state.influencerDeals = savedDeals;
+      DataManager.state.salesByDay = savedSales;
+      UI.inflTopFilter = JSON.parse(savedTop);
+      UI.inflMonth = savedMonth;
     }
   });
   TestSuite.test("Единый месяц вкладки: любой контрол месяца (вкладка дашборда, сводка по блогерам, сводка по ответственным, фильтр таблицы) меняет ОДНО состояние и пересчитывает всю страницу", ()=>{
