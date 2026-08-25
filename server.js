@@ -736,6 +736,9 @@ app.post("/api/influencer-deals", requireAuth, (req,res)=>{
     plannedReach: b.plannedReach || 0, plannedClicks: b.plannedClicks || 0,
     reach: b.reach || 0, clicks: b.clicks || 0, cost: b.cost || 0, plannedCost: b.plannedCost || 0,
     barcode: (b.barcode || "").trim(),
+    // Ответственный менеджер — как у микро/средних интеграций. Нужен, чтобы в "Планере блогеров"
+    // каждый менеджер мог открыть календарь только по своим блогерам.
+    responsible: b.responsible || "",
     likes: b.likes || 0, comments: b.comments || 0, saves: b.saves || 0,
     lastUpdatedFrom: "", lastUpdatedAt: "",
     status: b.status || DEAL_STATUSES[0], notes: b.notes || "",
