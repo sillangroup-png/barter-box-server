@@ -1551,7 +1551,20 @@ function tplMicroInfluencerBrandDashboard(allRows){
   // уже учитывался, а вклада в продажи/охвата ещё не было, и статистика "на сегодня" получалась
   // завышенной по расходам и заниженной по ROMI/CPV. Как только блогер публикует пост и появляется
   // факт.охват — интеграция сама попадёт в статистику месяца публикации.
-  const monthRows = allRows.filter(r=>r.deal.videoStatus==="опубликовано" && (allPeriod || microDealDate(r.deal).slice(0,7)===month));
+  // Фильтр по КАТЕГОРИИ блогера (бьюти / визажисты / дерматологи...): по умолчанию "" — считаем
+  // все категории вместе, как раньше. Выбрал категорию — ВСЕ показатели дашборда (расходы, ROMI,
+  // ROAS, ДРР, CPV, охват, лучший/худший блогер и интеграция) пересчитываются только по ней.
+  // Список вариантов строим из реально встречающихся значений, а не из справочника, — чтобы не
+  // предлагать пустые категории и не терять те, что вписали руками.
+  const catOf = r => normalizeBloggerCategory(r.deal.bloggerCategory);
+  const periodRows = allRows.filter(r=>r.deal.videoStatus==="опубликовано" && (allPeriod || microDealDate(r.deal).slice(0,7)===month));
+  const availableCategories = [...new Set(periodRows.map(catOf))].sort((a,b)=>{
+    if(a==="Не указана") return 1;            // служебную строку всегда в конец списка
+    if(b==="Не указана") return -1;
+    return a.localeCompare(b,"ru");
+  });
+  const dashCategory = availableCategories.includes(UI.microDashCategory) ? UI.microDashCategory : "";
+  const monthRows = dashCategory ? periodRows.filter(r=>catOf(r)===dashCategory) : periodRows;
   const s = microInfluencerBrandStats(monthRows);
 
   const MAX_MONTH_TABS = 6;
@@ -1587,10 +1600,17 @@ function tplMicroInfluencerBrandDashboard(allRows){
           <option value="">Ещё месяцы…</option>
           ${months.map(m=>`<option value="${m}" ${m===month?'selected':''}>${escapeHtml(monthLabel(m))}</option>`).join("")}
         </select>` : ""}
+        ${availableCategories.length>1 ? `<select id="micro-dash-category" style="border:1px solid ${MICRO_BRAND};border-radius:8px;padding:6px 8px;color:${MICRO_BRAND};font-weight:600;font-size:12px;background:#fff">
+          <option value="">Все категории</option>
+          ${availableCategories.map(c=>`<option value="${escapeHtml(c)}" ${c===dashCategory?'selected':''}>${escapeHtml(c)}</option>`).join("")}
+        </select>` : ""}
       </div>
     </div>
     <div class="login-hint" style="margin-bottom:12px">
       <b>Выбранный месяц действует на всю страницу</b> — дашборд, сводку по блогерам, сводку по ответственным и таблицу интеграций ниже. Сейчас: ${allPeriod?"весь период":escapeHtml(monthLabel(month))}.<br>
+      ${dashCategory
+        ? `<b>Показатели ниже — только по категории «${escapeHtml(dashCategory)}»</b> (${monthRows.length} из ${periodRows.length} опубликованных интеграций месяца). Остальные блоки страницы фильтр категории не затрагивает.<br>`
+        : `Показатели ниже — по всем категориям блогеров; чтобы посмотреть отдельно (лайфстайл, бьюти, эксперты…), выберите категорию в списке справа.<br>`}
       Показаны только уже опубликованные интеграции (оплаченные, но ещё не выложенные — не учитываются, появятся сами после выкладки).
       ROMI считается только там, где у интеграции есть ШК (или совпадает название товара) и в «Продажи по дням (1С)» есть история продаж этого товара.
     </div>
@@ -2047,6 +2067,7 @@ const UI = {
   microSummaryExpanded: false, // "Сводка по блогерам" свёрнута до 10 строк, пока не нажата "Показать все"
   expandedResponsible: new Set(), // какие менеджеры развёрнуты в "Сводке по ответственным" (клик по "+" показывает разбивку по городам/категориям блогеров)
   expandedCategory: new Set(), // какие категории блогеров развёрнуты в "Сводке по категориям" (клик по "+" показывает, кто из менеджеров её ведёт)
+  microDashCategory: "", // фильтр категории блогера на дашборде "Микро/средние": "" = все категории
   calendarMonth: "", // выбранный месяц в "Планере блогеров" (см. tplMicroCalendar) — "YYYY-MM", пусто = текущий месяц
   calendarHiddenBloggers: new Set(), // блогеры, скрытые из календаря кликом по чипу-легенде (по умолчанию видны все)
   dashExpenseCampaign: "", // фильтр проекта в панели "Расходы на бартер" дашборда менеджера: "" = все проекты (с разрезом по каждому)
@@ -4913,6 +4934,8 @@ function wireDeskTab(){
     document.querySelectorAll(".micro-dash-month-tab").forEach(btn=>{
       btn.onclick = ()=>{ UI.microDashMonth = btn.dataset.month; renderDeskTab(); };
     });
+    const microDashCategorySelect = document.getElementById("micro-dash-category");
+    if(microDashCategorySelect) microDashCategorySelect.onchange = e=>{ UI.microDashCategory = e.target.value; renderDeskTab(); };
     const microDashMonthSelect = document.getElementById("micro-dash-month-select");
     if(microDashMonthSelect) microDashMonthSelect.onchange = ()=>{
       if(microDashMonthSelect.value){ UI.microDashMonth = microDashMonthSelect.value; renderDeskTab(); }
@@ -6383,6 +6406,49 @@ async function runSelfTests(){
     } finally {
       DataManager.state.microInfluencerDeals = savedDeals;
       UI.microSummaryMonth = savedSummaryMonth;
+    }
+  });
+  TestSuite.test("tplMicroInfluencerBrandDashboard: фильтр по категории блогера пересчитывает ВСЕ показатели дашборда, по умолчанию — все категории", ()=>{
+    const savedDeals = DataManager.state.microInfluencerDeals;
+    const savedSales = DataManager.state.salesByDay;
+    const savedMonth = UI.microMonth;
+    const savedCat = UI.microDashCategory;
+    try{
+      const beauty = {id:9840, blogerName:"Бьютик", bloggerCategory:"Бьюти", cost:1000, productCost:0, factReachReels:1000, factReachTT:0, product:"Т", publishDate:"2026-08-05", videoStatus:"опубликовано", paymentStatus:"оплачено"};
+      const life   = {id:9841, blogerName:"Лайфер", bloggerCategory:"Лайфстайл", cost:4000, productCost:0, factReachReels:200, factReachTT:0, product:"Т", publishDate:"2026-08-06", videoStatus:"опубликовано", paymentStatus:"оплачено"};
+      DataManager.state.microInfluencerDeals = [beauty, life];
+      DataManager.state.salesByDay = [];
+      UI.microMonth = "2026-08";
+      const rows = [
+        {deal:beauty, netContribution:0, romi:null, hasBaseline:false},
+        {deal:life,   netContribution:0, romi:null, hasBaseline:false},
+      ];
+
+      // По умолчанию — обе категории: расход 5000, охват 1200.
+      UI.microDashCategory = "";
+      let html = tplMicroInfluencerBrandDashboard(rows);
+      if(!html.includes('id="micro-dash-category"')) throw new Error("должен быть селект категории на дашборде");
+      if(!html.includes("Все категории")) throw new Error("в селекте должен быть вариант 'Все категории'");
+      if(!/5\s?000/.test(html)) throw new Error("без фильтра расход должен быть 5000 (1000+4000): "+html.slice(0,600));
+      if(!/1\s?200/.test(html)) throw new Error("без фильтра охват должен быть 1200 (1000+200)");
+
+      // Выбрали "Бьюти" — только её цифры: расход 1000, охват 1000.
+      UI.microDashCategory = "Бьюти";
+      html = tplMicroInfluencerBrandDashboard(rows);
+      if(!html.includes("только по категории «Бьюти»")) throw new Error("должна быть подпись, что показатели только по выбранной категории");
+      if(/5\s?000/.test(html)) throw new Error("после выбора 'Бьюти' общий расход 5000 показываться не должен");
+      if(!/1\s?000/.test(html)) throw new Error("расход/охват по 'Бьюти' должен быть 1000");
+      if(html.includes("Лайфер")) throw new Error("блогер другой категории не должен попадать в лучших/худших: "+html);
+
+      // Несуществующая категория — тихо откатываемся на "все", а не показываем пустой дашборд.
+      UI.microDashCategory = "Такой-категории-нет";
+      html = tplMicroInfluencerBrandDashboard(rows);
+      if(!/5\s?000/.test(html)) throw new Error("при неизвестной категории дашборд должен вернуться к 'все категории'");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedDeals;
+      DataManager.state.salesByDay = savedSales;
+      UI.microMonth = savedMonth;
+      UI.microDashCategory = savedCat;
     }
   });
   TestSuite.test("microCategorySummary()/tplMicroCategorySummary(): разбивка по категориям блогеров, склейка опечатки 'Лайфстал', Итого по уникальным блогерам, раскрытие по ответственным", ()=>{
