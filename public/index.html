@@ -713,11 +713,25 @@ function latestMeasurementsByPlatform(pub){
   return map;
 }
 function pubPlatforms(pub){ return [...latestMeasurementsByPlatform(pub).keys()]; }
-// Суммарный охват доставки по всем платформам. Для одной платформы === views последнего замера.
-function pubTotalViews(pub){
+// Сумма любого числового поля замера по всем платформам (последний замер каждой).
+// Для одной платформы === значение последнего замера, то есть старые цифры не меняются.
+function pubTotalMeasure(pub, field){
   let sum = 0;
-  latestMeasurementsByPlatform(pub).forEach(m=>{ sum += (m && m.views) || 0; });
+  latestMeasurementsByPlatform(pub).forEach(m=>{ sum += (m && m[field]) || 0; });
   return sum;
+}
+function pubTotalViews(pub){ return pubTotalMeasure(pub, "views"); }
+// ER по доставке целиком: (лайки+комментарии) / охват, всё просуммировано по платформам.
+// Считать ER по одной площадке, когда их две, бессмысленно — знаменатель был бы неполным.
+function pubErPercent(pub, fallbackM){
+  const views = pubTotalViews(pub);
+  if(!views) return fallbackM ? erPercent(fallbackM) : 0;
+  return (pubTotalMeasure(pub,"likes") + pubTotalMeasure(pub,"comments")) / views * 100;
+}
+// Инстаграм-площадка этой публикации: если у неё стоят Stories — работаем со Stories,
+// иначе по умолчанию Reels. Нужно, чтобы форма замера не подменяла Stories на Reels.
+function pubInstagramPlatform(pub){
+  return (pub && String(pub.platform||"").startsWith("Instagram")) ? pub.platform : "Instagram Reels";
 }
 // Разбивка охвата по платформам строкой — для подсказки (title) в таблицах.
 function pubReachBreakdown(pub){
@@ -1045,10 +1059,47 @@ function computeUnifiedInfluencerRomi(){
   const contribution = {};
   units.forEach(u=> contribution[u.key]=0);
 
+  // СКОЛЬЗЯЩАЯ база: для каждого дня продаж берём среднее по последним BASELINE_WINDOW "чистым"
+  // дням ПЕРЕД ним (чистый = рядом, за 0–2 дня до него, не выходила ни одна выкладка).
+  //
+  // Зачем. Одна база на всю историю товара работает только для новинок. У давно раскрученного
+  // товара уровень продаж со временем уходит далеко от стартового, и всё, что выше старой базы,
+  // модель отдаёт тому, кто случайно оказался рядом. Живой пример: Коллаген+Биотин, база с
+  // июня — 369 544 ₸/день, а в августе товар сам по себе продавал под миллион. Микро-блогер
+  // с 10 700 просмотров, оказавшись 19 августа единственной выкладкой по товару, получила
+  // 2 426 888 ₸ вклада — то есть 227 ₸ выручки с одного просмотра, чего быть не может.
+  // Скользящая база сравнивает день с недавним уровнем товара, а не с уровнем двухмесячной
+  // давности, поэтому такие выбросы исчезают.
+  //
+  // Если чистых дней перед этим днём ещё не было (новинку и запускали блогерами) — падаем на
+  // базу "до первой выкладки", а она у новинок равна 0, и весь объём идёт в прирост, как и нужно.
+  const BASELINE_WINDOW = 7;
+  const rollingBaselineByProduct = {};
   Object.keys(byProduct).forEach(matchKey=>{
-    const base = baselineByProduct[matchKey];
-    if(base==null) return;
+    const sales = byProduct[matchKey].slice().sort((a,b)=>a.date.localeCompare(b.date));
+    const unitDates = units.filter(u=>u.matchKey===matchKey && u.date).map(u=>u.date);
+    const isClean = dateStr => !unitDates.some(ud=>{
+      const diff = daysBetween(dateStr, ud);
+      return diff>=0 && diff<=2;
+    });
+    const map = {};
+    const cleanRevenues = []; // выручка чистых дней в порядке возрастания даты
+    sales.forEach(s=>{
+      const recent = cleanRevenues.slice(-BASELINE_WINDOW);
+      map[s.date] = recent.length
+        ? recent.reduce((a,v)=>a+v,0)/recent.length
+        : baselineByProduct[matchKey];
+      if(isClean(s.date)) cleanRevenues.push(s.revenue);
+    });
+    rollingBaselineByProduct[matchKey] = map;
+  });
+
+  Object.keys(byProduct).forEach(matchKey=>{
+    const fallback = baselineByProduct[matchKey];
+    if(fallback==null) return;
+    const rolling = rollingBaselineByProduct[matchKey] || {};
     byProduct[matchKey].forEach(s=>{
+      const base = rolling[s.date]==null ? fallback : rolling[s.date];
       const uplift = Math.max(0, s.revenue - base);
       if(uplift<=0) return;
       const active = units
@@ -3766,10 +3817,10 @@ function tplReport(){
               <td>${!pub ? "—" : (pubPlatforms(pub).length>1
                 ? `<button class="link-btn rep-history-btn" data-order="${o.id}" title="Охват по платформам: ${escapeHtml(pubReachBreakdown(pub))}">${fmtNum(r.value)} <span class="badge badge-plan">${pubPlatforms(pub).length} площ.</span></button>`
                 : inlineEditSpan((r.value?fmtNum(r.value):"—")+reachBadge(r), pub.id, "measureViews", m?(m.views||0):0, "number"))}</td>
-              <td>${editableMeasureCell(pub, o.id, m?fmtPercent(erPercent(m)):"—")}</td>
-              <td>${pub ? inlineEditSpan(m&&m.clicks?fmtNum(m.clicks):"—", pub.id, "measureClicks", m?(m.clicks||0):0, "number") : "—"}</td>
-              <td>${pub ? inlineEditSpan(m?(m.salesCount||0):"—", pub.id, "measureSales", m?(m.salesCount||0):0, "number") : "—"}</td>
-              <td>${pub ? inlineEditSpan(m?fmtNum(m.salesRevenue):"—", pub.id, "measureRevenue", m?(m.salesRevenue||0):0, "number") : "—"}</td>
+              <td>${editableMeasureCell(pub, o.id, m?fmtPercent(pubErPercent(pub, m)):"—")}</td>
+              <td>${pub ? inlineEditSpan(pubTotalMeasure(pub,"clicks")?fmtNum(pubTotalMeasure(pub,"clicks")):"—", pub.id, "measureClicks", m?(m.clicks||0):0, "number") : "—"}</td>
+              <td>${pub ? inlineEditSpan(m?pubTotalMeasure(pub,"salesCount"):"—", pub.id, "measureSales", m?(m.salesCount||0):0, "number") : "—"}</td>
+              <td>${pub ? inlineEditSpan(m?fmtNum(pubTotalMeasure(pub,"salesRevenue")):"—", pub.id, "measureRevenue", m?(m.salesRevenue||0):0, "number") : "—"}</td>
               <td>${o.status==='delivered' ? (o.bitrixSynced?'✓':'—') : "—"}</td>
               <td>
                 ${pub
@@ -4176,28 +4227,51 @@ function modalAddMeasurement(orderId, isFirst){
   const pub = pubOf(orderId);
   const o = DataManager.find("orders", orderId);
   if(!pub || !o){ toast("Сначала добавьте публикацию", true); return; }
-  // Платформа замера: по умолчанию та, что стоит у публикации. Если блогер выложил и Reels,
-  // и TikTok — второй замер заводится с другой платформой, и охваты сложатся, а не перезапишутся.
-  const already = pubPlatforms(pub);
+  // Блогер обычно выкладывает один бокс сразу в двух местах: Reels в Instagram и видео в TikTok.
+  // Поэтому в форме СРАЗУ два блока — по одному на площадку, заполнять можно любой из них или оба.
+  // Каждая площадка сохраняется отдельным замером со своей платформой, а охват доставки —
+  // их сумма. Промокод (клики/продажи/выручка) общий: он один на всю доставку, а не на площадку.
+  const IG = pubInstagramPlatform(pub);
+  const TT = "TikTok";
+  const last = latestMeasurementsByPlatform(pub);
+  const prev = platform => last.get(platform) || {};
+  const num = v => (v || 0);
+  // Блок полей одной площадки. Значения подставляем из последнего замера этой площадки,
+  // чтобы окно работало и как "поправить цифры", а не только как "внести с нуля".
+  const block = (platform, key, title, hint) => {
+    const m = prev(platform);
+    return `
+      <div style="flex:1;min-width:260px;border:1px solid var(--line);border-radius:12px;padding:12px 14px">
+        <div style="font-weight:600;margin-bottom:2px">${title}</div>
+        <div style="color:var(--ink-mute);font-size:11.5px;margin-bottom:10px">${hint}</div>
+        <div class="form-row">
+          <div class="field"><label>Просмотры</label><input id="m-${key}-views" type="number" value="${num(m.views)}"></div>
+          <div class="field"><label>Лайки</label><input id="m-${key}-likes" type="number" value="${num(m.likes)}"></div>
+          <div class="field"><label>Комментарии</label><input id="m-${key}-comments" type="number" value="${num(m.comments)}"></div>
+          <div class="field"><label>Сохранения</label><input id="m-${key}-saves" type="number" value="${num(m.saves)}"></div>
+        </div>
+        <div class="field"><label>Ссылка</label><input id="m-${key}-link" value="${escapeHtml(m.link||"")}" placeholder="https://..."></div>
+      </div>`;
+  };
+  const общий = prev(IG).clicks ? prev(IG) : (prev(TT).clicks ? prev(TT) : (latestMeasurement(pub) || {}));
   openModal(`
     <h3>Замер охвата · ${escapeHtml(o.blogger)}</h3>
     <div class="form-row">
-      <div class="field"><label>Платформа</label><select id="m-mplatform">${PLATFORMS.map(p=>`<option ${p===pub.platform?'selected':''}>${p}</option>`).join("")}</select></div>
-      <div class="field"><label>Ссылка на эту публикацию (необязательно)</label><input id="m-mlink" placeholder="https://..."></div>
       <div class="field"><label>Дата замера</label><input id="m-mdate" type="date" value="${todayStr()}"></div>
-      <div class="field"><label>Просмотры</label><input id="m-views" type="number" value="0"></div>
-      <div class="field"><label>Лайки</label><input id="m-likes" type="number" value="0"></div>
-      <div class="field"><label>Комментарии</label><input id="m-comments" type="number" value="0"></div>
-      <div class="field"><label>Сохранения</label><input id="m-saves" type="number" value="0"></div>
-      <div class="field"><label>Клики по промокоду/ссылке (если есть)</label><input id="m-clicks" type="number" value="0"></div>
-      <div class="field"><label>Продажи по промокоду, шт</label><input id="m-sales" type="number" value="0"></div>
-      <div class="field"><label>Выручка по промокоду, ₸</label><input id="m-revenue" type="number" value="0"></div>
+    </div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px">
+      ${block(IG, "ig", "📸 " + escapeHtml(IG), "оставьте нули, если в Instagram не выкладывали")}
+      ${block(TT, "tt", "🎵 TikTok", "оставьте нули, если в TikTok не выкладывали")}
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Клики по промокоду/ссылке (если есть)</label><input id="m-clicks" type="number" value="${num(общий.clicks)}"></div>
+      <div class="field"><label>Продажи по промокоду, шт</label><input id="m-sales" type="number" value="${num(общий.salesCount)}"></div>
+      <div class="field"><label>Выручка по промокоду, ₸</label><input id="m-revenue" type="number" value="${num(общий.salesRevenue)}"></div>
     </div>
     <div class="field"><label>Комментарий (необязательно)</label><textarea id="m-note" placeholder="Например: замер через 5 дней после публикации"></textarea></div>
     <div class="login-hint">
-      Охват доставки — сумма последних замеров по каждой платформе. Чтобы добавить второй канал,
-      сохраните ещё один замер и выберите в нём другую платформу.
-      ${already.length ? `<br>Уже есть замеры: <b>${already.map(escapeHtml).join(", ")}</b>.` : ""}
+      Охват доставки — сумма двух площадок. Промокод общий на всю доставку, поэтому его цифры
+      вводятся один раз, а не по каждой площадке отдельно.
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="m-cancel">${isFirst?'Пропустить':'Отмена'}</button>
@@ -4207,21 +4281,35 @@ function modalAddMeasurement(orderId, isFirst){
   document.getElementById("m-cancel").onclick = ()=>{ closeModal(); render(); };
   document.getElementById("m-save").onclick = async ()=>{
     const btn = document.getElementById("m-save");
+    const int = id => parseInt(document.getElementById(id).value,10)||0;
+    const str = id => document.getElementById(id).value.trim();
+    const date = document.getElementById("m-mdate").value;
+    const note = str("m-note");
+    // Собираем по одной записи на площадку. Пустой блок (все нули и без ссылки) пропускаем —
+    // иначе у доставки появлялась бы фиктивная вторая площадка с нулевым охватом.
+    const build = (platform, key) => {
+      const m = {
+        platform, date, note,
+        link: str(`m-${key}-link`),
+        views: int(`m-${key}-views`), likes: int(`m-${key}-likes`),
+        comments: int(`m-${key}-comments`), saves: int(`m-${key}-saves`),
+        clicks: 0, salesCount: 0, salesRevenue: 0,
+      };
+      const empty = !m.views && !m.likes && !m.comments && !m.saves && !m.link;
+      return empty ? null : m;
+    };
+    const items = [build(IG,"ig"), build(TT,"tt")].filter(Boolean);
+    if(!items.length){ toast("Заполните хотя бы одну площадку", true); return; }
+    // Промокод общий на доставку, поэтому его цифры кладём только в ПЕРВУЮ запись —
+    // суммирование по площадкам иначе задвоило бы клики и продажи.
+    items[0].clicks = int("m-clicks");
+    items[0].salesCount = int("m-sales");
+    items[0].salesRevenue = int("m-revenue");
     try{
-      await withBusy(btn, ()=> Api.addMeasurement(pub.id, {
-        platform: document.getElementById("m-mplatform").value,
-        link: document.getElementById("m-mlink").value.trim(),
-        date: document.getElementById("m-mdate").value,
-        views: parseInt(document.getElementById("m-views").value,10)||0,
-        likes: parseInt(document.getElementById("m-likes").value,10)||0,
-        comments: parseInt(document.getElementById("m-comments").value,10)||0,
-        saves: parseInt(document.getElementById("m-saves").value,10)||0,
-        clicks: parseInt(document.getElementById("m-clicks").value,10)||0,
-        salesCount: parseInt(document.getElementById("m-sales").value,10)||0,
-        salesRevenue: parseInt(document.getElementById("m-revenue").value,10)||0,
-        note: document.getElementById("m-note").value.trim(),
-      }));
-      closeModal(); toast("Замер сохранён"); await DataManager.refresh(); render();
+      await withBusy(btn, async ()=>{ for(const m of items) await Api.addMeasurement(pub.id, m); });
+      closeModal();
+      toast(items.length>1 ? "Замеры сохранены: Instagram и TikTok" : "Замер сохранён");
+      await DataManager.refresh(); render();
     }catch(e){ toast(e.message, true); }
   };
 }
@@ -6104,6 +6192,51 @@ async function runSelfTests(){
       DataManager.state.microInfluencerDeals = saved;
     }
   });
+  TestSuite.test("computeUnifiedInfluencerRomi: скользящая база — день сравнивается с недавним уровнем товара, а не с уровнем двухмесячной давности", ()=>{
+    const savedDeals = DataManager.state.influencerDeals;
+    const savedMicro = DataManager.state.microInfluencerDeals;
+    const savedSales = DataManager.state.salesByDay;
+    try{
+      // Сценарий "Коллаген+Биотин": в начале товар продавал 100/день, потом его разогнали и он
+      // вышел на 1000/день сам по себе. Через два месяца выходит маленький блогер.
+      // Со старой (фиксированной) базой 100 ему достался бы весь объём 900+900+900.
+      // Со скользящей базой сравниваем с недавними 1000 — и вклад около нуля, что и правильно.
+      DataManager.state.influencerDeals = [
+        {id:9701, blogerLogin:"@big", platform:"Instagram Reels", product:"РазогнанныйТовар", publishedDate:"2026-05-05", cost:1000, status:"Опубликована"},
+      ];
+      DataManager.state.microInfluencerDeals = [
+        {id:9702, blogerName:"@small", product:"РазогнанныйТовар", barcode:"", publishDate:"2026-06-20", cost:100},
+      ];
+      const sales = [];
+      let id = 9800;
+      const push = (date, revenue) => sales.push({id:id++, date, product:"РазогнанныйТовар", revenue});
+      // 01–04 мая: спокойный старт, 100/день — это и есть база "до первой выкладки"
+      ["2026-05-01","2026-05-02","2026-05-03","2026-05-04"].forEach(d=>push(d,100));
+      // 05–07 мая: выкладка крупного, всплеск
+      push("2026-05-05",900); push("2026-05-06",700); push("2026-05-07",500);
+      // 08 мая – 19 июня: товар осел на новом уровне 1000/день, выкладок нет — это чистые дни
+      for(let day=8; day<=31; day++) push("2026-05-"+String(day).padStart(2,"0"), 1000);
+      for(let day=1; day<=19; day++) push("2026-06-"+String(day).padStart(2,"0"), 1000);
+      // 20–22 июня: выходит маленький блогер, продажи те же 1000 — прироста по факту нет
+      push("2026-06-20",1000); push("2026-06-21",1000); push("2026-06-22",1000);
+      DataManager.state.salesByDay = sales;
+
+      const {contribution, baselineByProduct} = computeUnifiedInfluencerRomi();
+      // База "до первой выкладки" осталась прежней и по-прежнему равна 100 —
+      // её используем только как запасной вариант, когда чистых дней ещё нет.
+      if(Math.abs(baselineByProduct["РазогнанныйТовар"]-100)>0.01) throw new Error("база 'до старта' должна остаться 100: "+baselineByProduct["РазогнанныйТовар"]);
+      const small = contribution["micro:9702"];
+      if(small>1) throw new Error("маленький блогер, вышедший на уже разогнанном товаре без реального прироста, не должен получать вклад: "+small);
+      // Крупный блогер, наоборот, свой настоящий всплеск получить обязан:
+      // 05.05 сравнивается с чистыми днями 01–04 мая (100), прирост 800.
+      const big = contribution["large:9701"];
+      if(big < 800) throw new Error("крупный блогер должен получить реальный прирост своего всплеска (>=800): "+big);
+    } finally {
+      DataManager.state.influencerDeals = savedDeals;
+      DataManager.state.microInfluencerDeals = savedMicro;
+      DataManager.state.salesByDay = savedSales;
+    }
+  });
   TestSuite.test("Замеры по нескольким платформам: охват доставки = сумма последних замеров по Instagram и TikTok, старые замеры без платформы считаются как раньше", ()=>{
     const pubOld = { id:9501, orderId:9500, platform:"Instagram Reels", publishedAt:"2026-08-01", measurements:[
       {id:1, date:"2026-08-02", views:1000}, {id:2, date:"2026-08-05", views:1500},
@@ -6129,6 +6262,22 @@ async function runSelfTests(){
     // Замер без просмотров не должен ломать сумму.
     const pubZero = { id:9503, platform:"TikTok", measurements:[{id:1, views:0, platform:"TikTok"}] };
     if(pubTotalViews(pubZero)!==0) throw new Error("нулевой замер должен давать 0");
+
+    // Промокод общий на доставку: клики/продажи лежат только в одной записи, но суммируются по
+    // площадкам — значит в отчёте видно полное число, а не половину.
+    const pubPromo = { id:9504, platform:"Instagram Reels", measurements:[
+      {id:1, views:1000, likes:50, comments:10, clicks:30, salesCount:4, salesRevenue:20000, platform:"Instagram Reels"},
+      {id:2, views:600,  likes:30, comments:6,  clicks:0,  salesCount:0, salesRevenue:0,     platform:"TikTok"},
+    ]};
+    if(pubTotalMeasure(pubPromo,"clicks")!==30) throw new Error("клики промокода не должны задваиваться: "+pubTotalMeasure(pubPromo,"clicks"));
+    if(pubTotalMeasure(pubPromo,"salesRevenue")!==20000) throw new Error("выручка промокода должна остаться 20000");
+    // ER считается по сумме обеих площадок: (50+30+10+6)/1600 = 6%
+    const er = pubErPercent(pubPromo, latestMeasurement(pubPromo));
+    if(Math.abs(er-6)>0.01) throw new Error("ER должен считаться по сумме площадок и равняться 6%: "+er);
+    // (заглушка — проверка платформ ниже)
+    // Instagram Stories не должны подменяться на Reels в форме замера.
+    if(pubInstagramPlatform({platform:"Instagram Stories"})!=="Instagram Stories") throw new Error("Stories должны сохраняться как Stories");
+    if(pubInstagramPlatform({platform:"TikTok"})!=="Instagram Reels") throw new Error("для TikTok-публикации инстаграм-блок по умолчанию Reels");
   });
   TestSuite.test("Таблица крупных интеграций: колонка 'Ответственный' в шапке, значении и выгрузке CSV", ()=>{
     const saved = DataManager.state.influencerDeals;
