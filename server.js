@@ -652,6 +652,12 @@ app.post("/api/publications/:id/measurements", requireAuth, (req,res)=>{
     id: nextMeasurementId(), date: b.date||"", views: b.views||0, likes: b.likes||0,
     comments: b.comments||0, saves: b.saves||0, clicks: b.clicks||0, salesCount: b.salesCount||0,
     salesRevenue: b.salesRevenue||0, note: b.note||"",
+    // Блогер часто выкладывает один и тот же бокс и в Reels, и в TikTok. Раньше публикация была
+    // привязана к одной платформе и вторые цифры было некуда занести. Теперь платформа живёт
+    // на самом замере: по каждой ведём свою историю, а охват публикации — сумма последних
+    // замеров по всем платформам. У старых замеров поля нет — они считаются платформой публикации.
+    platform: b.platform || pub.platform || "",
+    link: b.link || "",
   };
   pub.measurements.push(measurement);
   persist();
