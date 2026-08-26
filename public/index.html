@@ -695,6 +695,38 @@ function inDateRange(dateStr, from, to){
 function latestMeasurement(pub){
   return (pub && pub.measurements && pub.measurements.length) ? pub.measurements[pub.measurements.length-1] : null;
 }
+/* ---------- Несколько платформ на одной доставке (Instagram + TikTok) ----------
+   Блогер часто выкладывает один и тот же бокс дважды: Reels и TikTok. Раньше публикация была
+   привязана к одной платформе, и вторые цифры некуда было занести — их либо теряли, либо
+   вписывали поверх первых. Теперь платформа хранится на самом ЗАМЕРЕ: по каждой платформе
+   ведётся своя история, а охват доставки — сумма последних замеров по каждой платформе.
+   У старых замеров поля platform нет — они относятся к платформе самой публикации, поэтому
+   для одноплатформенных данных все цифры остаются ровно такими же, как были. */
+function measurementPlatform(m, pub){
+  return (m && m.platform) || (pub && pub.platform) || "—";
+}
+// Последний замер по каждой платформе: Map<платформа, замер>. Порядок — как в истории,
+// поэтому последняя запись по платформе затирает предыдущие.
+function latestMeasurementsByPlatform(pub){
+  const map = new Map();
+  if(pub && pub.measurements) pub.measurements.forEach(m=> map.set(measurementPlatform(m, pub), m));
+  return map;
+}
+function pubPlatforms(pub){ return [...latestMeasurementsByPlatform(pub).keys()]; }
+// Суммарный охват доставки по всем платформам. Для одной платформы === views последнего замера.
+function pubTotalViews(pub){
+  let sum = 0;
+  latestMeasurementsByPlatform(pub).forEach(m=>{ sum += (m && m.views) || 0; });
+  return sum;
+}
+// Разбивка охвата по платформам строкой — для подсказки (title) в таблицах.
+function pubReachBreakdown(pub){
+  const parts = [];
+  latestMeasurementsByPlatform(pub).forEach((m, platform)=>{
+    if(m && m.views) parts.push(`${platform}: ${fmtNum(m.views)}`);
+  });
+  return parts.join(" · ");
+}
 // Быстрые пресеты периода для фильтра "по неделе / по конкретной дате" на дашборде маркетолога.
 // Локальная дата в формате YYYY-MM-DD — НЕ использовать d.toISOString().slice(0,10) для этого:
 // toISOString() всегда переводит в UTC, а у нас пользователи в Казахстане (UTC+5), поэтому
@@ -731,6 +763,10 @@ function fmtPercent(v){ return v==null ? "—" : v.toFixed(1)+"%"; }
 // До этого момента (не доставлено или ещё не опубликовано) оценка не считается вообще.
 const ACTIVE_AUDIENCE_RATE = 0.15;
 function reachInfo(o, pub, m){
+  // Сначала — сумма по всем платформам (Instagram + TikTok). Если платформа одна, это ровно
+  // views последнего замера, то есть для старых данных поведение не меняется.
+  const total = pub ? pubTotalViews(pub) : 0;
+  if(total) return {value: total, estimated:false};
   if(m && m.views) return {value:m.views, estimated:false};
   if(o && pub && o.status==="delivered" && pub.publishedAt && o.followers){
     return {value: Math.round(o.followers * ACTIVE_AUDIENCE_RATE), estimated:true};
@@ -1479,6 +1515,17 @@ function microAvailableMonths(){
   });
   return [...set].sort();
 }
+// Отдельный список месяцев ТОЛЬКО для выпадашки "Сводки по ответственным": сюда всегда
+// добавляем текущий месяц и месяц старта плана, даже если интеграций по ним ещё нет — иначе
+// в начале сентября месяц не появится в списке и посмотреть выполнение плана будет негде.
+// В microAvailableMonths() это добавлять нельзя: тем же списком пользуется автовыбор периодов
+// в "Сравнении периодов", и пустой будущий месяц там молча обнулял бы период B.
+function microMonthsWithPlan(){
+  const set = new Set(microAvailableMonths());
+  set.add(todayStr().slice(0,7));
+  set.add(MICRO_PLAN_FROM_MONTH);
+  return [...set].sort();
+}
 function microReachTrend(allRows){
   return microAvailableMonths().map(m=>{
     const rows = allRows.filter(r=>microDealDate(r.deal).slice(0,7)===m);
@@ -1779,9 +1826,32 @@ function tplMicroBloggerSummary(){
 // месяц (см. UI.microResponsibleMonth), фильтруем по plan/факт дате публикации (microDealDate),
 // как и в "Сводке по блогерам" — так менеджер может посмотреть загрузку конкретно за месяц,
 // а не только "на сегодня". "В работе" — видео ещё не опубликовано (videoStatus !== "опубликовано").
+/* ---------- План по уникальным блогерам на каждого ответственного менеджера ----------
+   Договорённость с командой: начиная с сентября 2026 каждый менеджер ведёт 50 УНИКАЛЬНЫХ
+   блогеров в месяц — один блогер считается один раз, сколько бы интеграций с ним ни было.
+   За месяцы до сентября плана не существовало, поэтому там колонки плана не показываются:
+   сравнивать не с чем, а пустые "0 из 50" за июль только путали бы.
+   Чтобы поменять цифру или начать план с другого месяца — правьте две константы ниже. */
+const MICRO_PLAN_FROM_MONTH = "2026-09";
+const MICRO_PLAN_PER_RESPONSIBLE = 50;
+function microPlanPerResponsible(month){
+  return (month && month >= MICRO_PLAN_FROM_MONTH) ? MICRO_PLAN_PER_RESPONSIBLE : null;
+}
+// Список менеджеров берём по ВСЕЙ истории, а не по выбранному месяцу. В начале месяца у части
+// девочек интеграций ещё ноль — но строка с планом всё равно должна быть на экране, иначе
+// невыполнение просто исчезает из таблицы вместо того, чтобы бросаться в глаза.
+function microKnownResponsibles(){
+  const set = new Set();
+  DataManager.state.microInfluencerDeals.forEach(d=>{
+    const n = (d.responsible||"").trim();
+    if(n) set.add(n);
+  });
+  return [...set].sort((a,b)=>a.localeCompare(b,"ru"));
+}
 function microResponsibleSummary(month){
   let deals = DataManager.state.microInfluencerDeals;
   if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
+  const plan = microPlanPerResponsible(month);
   const map = {};
   deals.forEach(d=>{
     const name = d.responsible || "Не указан";
@@ -1798,6 +1868,14 @@ function microResponsibleSummary(month){
     // так что на итог это не влияет.
     a.totalReach += microDealFactReach(d);
   });
+  // Достраиваем нулевые строки тем, у кого за месяц ещё нет ни одной интеграции (см. комментарий
+  // к microKnownResponsibles). Делаем это только когда на месяц есть план — за прошлые месяцы
+  // пустые строки были бы мусором.
+  if(plan!=null){
+    microKnownResponsibles().forEach(name=>{
+      if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), dealsCount:0, inProgress:0, published:0, totalReach:0};
+    });
+  }
   return Object.values(map).map(a=>{
     const byCity = {}, byCategory = {};
     a.bloggers.forEach(info=>{
@@ -1812,6 +1890,10 @@ function microResponsibleSummary(month){
       inProgress: a.inProgress,
       published: a.published,
       totalReach: a.totalReach,
+      // План/остаток/процент выполнения — null, если на этот месяц плана нет.
+      plan,
+      planLeft: plan==null ? null : Math.max(0, plan - a.bloggers.size),
+      planPct: plan==null ? null : Math.round(a.bloggers.size / plan * 100),
       cityRows: toRows(byCity, "city"),
       categoryRows: toRows(byCategory, "category"),
     };
@@ -1827,9 +1909,20 @@ function microResponsibleTotalUniqueBloggers(month){
   return new Set(deals.map(d=>d.blogerName||"—")).size;
 }
 function tplMicroResponsibleSummary(){
-  const months = microAvailableMonths();
+  const months = microMonthsWithPlan();
   const month = UI.microResponsibleMonth;
   const rows = microResponsibleSummary(month);
+  const plan = microPlanPerResponsible(month);
+  // Ячейка выполнения плана: полоска + процент. Цвет — светофор, чтобы отставание было видно
+  // не вчитываясь в цифры.
+  const planCell = pct => {
+    const color = pct>=100 ? "var(--ok)" : (pct>=60 ? "var(--warn)" : "var(--bad)");
+    return `<td><div style="display:flex;align-items:center;gap:8px;min-width:110px">
+      <div style="flex:1;height:6px;border-radius:3px;background:var(--line);overflow:hidden"><div style="width:${Math.min(100,pct)}%;height:100%;background:${color}"></div></div>
+      <b style="color:${color};font-size:12px;white-space:nowrap">${pct}%</b>
+    </div></td>`;
+  };
+  const cols = plan ? 10 : 7; // всего колонок в таблице — нужно для colspan пустой строки
   return `
     <div class="panel">
       <div class="panel-title">
@@ -1842,9 +1935,13 @@ function tplMicroResponsibleSummary(){
           ${months.map(m=>`<option value="${m}" ${month===m?'selected':''}>${escapeHtml(monthLabel(m))}</option>`).join("")}
         </select>
       </div>
+      ${plan ? `<div class="login-hint" style="margin-bottom:10px">
+        План с ${escapeHtml(monthLabel(MICRO_PLAN_FROM_MONTH))}: <b>${plan} уникальных блогеров на каждого менеджера в месяц</b>.
+        Блогер считается один раз, сколько бы интеграций с ним ни было. Менеджеры без интеграций за месяц тоже показаны — с нулём.
+      </div>` : ""}
       <div class="table-wrap"><table>
         <thead><tr>
-          <th style="width:28px"></th><th>Ответственный</th><th>Блогеров</th><th>В работе (интеграций)</th><th>Опубликовано (интеграций)</th><th>Всего интеграций</th><th>Охваты</th>
+          <th style="width:28px"></th><th>Ответственный</th><th>Блогеров</th>${plan?`<th>План</th><th>Осталось</th><th>Выполнение</th>`:""}<th>В работе (интеграций)</th><th>Опубликовано (интеграций)</th><th>Всего интеграций</th><th>Охваты</th>
         </tr></thead>
         <tbody>
           ${rows.map(r=>{
@@ -1861,24 +1958,35 @@ function tplMicroResponsibleSummary(){
               <td><button class="btn btn-ghost btn-sm responsible-toggle-btn" data-responsible="${escapeHtml(r.responsible)}" style="padding:2px 9px;line-height:1">${expanded?'−':'+'}</button></td>
               <td><b>${escapeHtml(r.responsible)}</b></td>
               <td>${r.uniqueBloggerCount}</td>
+              ${plan ? `<td>${r.plan}</td><td>${r.planLeft}</td>${planCell(r.planPct)}` : ""}
               <td>${r.inProgress}</td>
               <td>${r.published}</td>
               <td>${r.dealsCount}</td>
               <td>${fmtNum(r.totalReach)}</td>
             </tr>${expanded ? `<tr>
               <td></td>
-              <td colspan="6" style="padding:6px 0 16px 0">
+              <td colspan="${cols-1}" style="padding:6px 0 16px 0">
                 <div style="display:flex;gap:36px;flex-wrap:wrap">
                   ${miniTable("По городам", r.cityRows, "city")}
                   ${miniTable("По категории блогера", r.categoryRows, "category")}
                 </div>
               </td>
             </tr>` : ""}`;
-          }).join("") || `<tr><td class="empty" colspan="7">${month ? "Нет интеграций за выбранный месяц" : "Интеграций пока нет"}</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="${cols}">${month ? "Нет интеграций за выбранный месяц" : "Интеграций пока нет"}</td></tr>`}
           ${rows.length ? `<tr style="font-weight:700;border-top:2px solid var(--line-2)">
             <td></td>
             <td>Итого</td>
             <td>${microResponsibleTotalUniqueBloggers(month)}</td>
+            ${plan ? (()=>{
+              // Итоговый план — сумма личных планов (у каждой девочки свой), а выполнение считаем
+              // через остаток: (план − сколько осталось) / план. Через сумму "Блогеров" считать
+              // нельзя — перевыполнение одной девочки маскировало бы отставание другой, да и
+              // блогер, поработавший с двумя менеджерами, попал бы в счёт дважды.
+              const planTotal = rows.reduce((s,r)=>s+r.plan,0);
+              const leftTotal = rows.reduce((s,r)=>s+r.planLeft,0);
+              const pctTotal = planTotal ? Math.round((planTotal-leftTotal)/planTotal*100) : 0;
+              return `<td>${planTotal}</td><td>${leftTotal}</td>${planCell(pctTotal)}`;
+            })() : ""}
             <td>${rows.reduce((s,r)=>s+r.inProgress,0)}</td>
             <td>${rows.reduce((s,r)=>s+r.published,0)}</td>
             <td>${rows.reduce((s,r)=>s+r.dealsCount,0)}</td>
@@ -3150,7 +3258,7 @@ function tplInfluencerDeals(){
           <!-- Колонка "Блогер" закреплена (sticky-col): таблица широкая, и при горизонтальном
                скролле вправо без этого не видно, чья строка. Так же сделано в микро/средних и в
                "Сводном отчёте". -->
-          <th class="sticky-col">Блогер</th><th>Платформа</th><th>Продукт</th><th>Дата план</th><th>Дата факт</th>
+          <th class="sticky-col">Блогер</th><th>Ответственный</th><th>Платформа</th><th>Продукт</th><th>Дата план</th><th>Дата факт</th>
           <th>План охват/клики</th><th>Факт охват/клики</th><th>План/факт расход</th><th>Вклад в продажи</th><th>ROMI</th><th>Статус</th><th></th>
         </tr></thead>
         <tbody>
@@ -3158,6 +3266,7 @@ function tplInfluencerDeals(){
             const d = r.deal;
             return `<tr>
               <td class="sticky-col"><b>${escapeHtml(d.blogerLogin)}</b>${d.lastUpdatedFrom==="telegram"?' <span class="badge badge-progress" title="Обновлено через Telegram-бота">TG</span>':''}</td>
+              <td>${d.responsible ? escapeHtml(d.responsible) : `<span style="color:var(--ink-mute)">—</span>`}</td>
               <td>${escapeHtml(d.platform)}</td>
               <td>${escapeHtml(d.product)}${d.barcode?`<br><span style="color:var(--ink-mute);font-size:11px">ШК ${escapeHtml(d.barcode)}</span>`:""}</td>
               <td>${escapeHtml(d.plannedDate||"—")}</td>
@@ -3173,7 +3282,7 @@ function tplInfluencerDeals(){
                 <button class="btn btn-danger btn-sm del-deal-btn" data-id="${d.id}">✕</button>
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="12">${s.rows.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="13">${s.rows.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -3650,7 +3759,13 @@ function tplReport(){
                       ? `<a href="${escapeHtml(pub.link)}" target="_blank" rel="noopener">ссылка</a> ${inlineEditSpan("✎", pub.id, "link", pub.link, "text")}`
                       : inlineEditSpan("—", pub.id, "link", "", "text"))
                   : "—"}</td>
-              <td>${pub ? inlineEditSpan((r.value?fmtNum(r.value):"—")+reachBadge(r), pub.id, "measureViews", m?(m.views||0):0, "number") : "—"}</td>
+              <!-- Если у доставки замеры по нескольким платформам (Reels + TikTok), охват в ячейке —
+                   это СУММА, и править её одним числом нельзя: непонятно, к какой платформе оно
+                   относится. Поэтому в таком случае вместо инлайн-ввода открываем историю замеров,
+                   где каждая платформа своей строкой. -->
+              <td>${!pub ? "—" : (pubPlatforms(pub).length>1
+                ? `<button class="link-btn rep-history-btn" data-order="${o.id}" title="Охват по платформам: ${escapeHtml(pubReachBreakdown(pub))}">${fmtNum(r.value)} <span class="badge badge-plan">${pubPlatforms(pub).length} площ.</span></button>`
+                : inlineEditSpan((r.value?fmtNum(r.value):"—")+reachBadge(r), pub.id, "measureViews", m?(m.views||0):0, "number"))}</td>
               <td>${editableMeasureCell(pub, o.id, m?fmtPercent(erPercent(m)):"—")}</td>
               <td>${pub ? inlineEditSpan(m&&m.clicks?fmtNum(m.clicks):"—", pub.id, "measureClicks", m?(m.clicks||0):0, "number") : "—"}</td>
               <td>${pub ? inlineEditSpan(m?(m.salesCount||0):"—", pub.id, "measureSales", m?(m.salesCount||0):0, "number") : "—"}</td>
@@ -4061,9 +4176,14 @@ function modalAddMeasurement(orderId, isFirst){
   const pub = pubOf(orderId);
   const o = DataManager.find("orders", orderId);
   if(!pub || !o){ toast("Сначала добавьте публикацию", true); return; }
+  // Платформа замера: по умолчанию та, что стоит у публикации. Если блогер выложил и Reels,
+  // и TikTok — второй замер заводится с другой платформой, и охваты сложатся, а не перезапишутся.
+  const already = pubPlatforms(pub);
   openModal(`
     <h3>Замер охвата · ${escapeHtml(o.blogger)}</h3>
     <div class="form-row">
+      <div class="field"><label>Платформа</label><select id="m-mplatform">${PLATFORMS.map(p=>`<option ${p===pub.platform?'selected':''}>${p}</option>`).join("")}</select></div>
+      <div class="field"><label>Ссылка на эту публикацию (необязательно)</label><input id="m-mlink" placeholder="https://..."></div>
       <div class="field"><label>Дата замера</label><input id="m-mdate" type="date" value="${todayStr()}"></div>
       <div class="field"><label>Просмотры</label><input id="m-views" type="number" value="0"></div>
       <div class="field"><label>Лайки</label><input id="m-likes" type="number" value="0"></div>
@@ -4074,6 +4194,11 @@ function modalAddMeasurement(orderId, isFirst){
       <div class="field"><label>Выручка по промокоду, ₸</label><input id="m-revenue" type="number" value="0"></div>
     </div>
     <div class="field"><label>Комментарий (необязательно)</label><textarea id="m-note" placeholder="Например: замер через 5 дней после публикации"></textarea></div>
+    <div class="login-hint">
+      Охват доставки — сумма последних замеров по каждой платформе. Чтобы добавить второй канал,
+      сохраните ещё один замер и выберите в нём другую платформу.
+      ${already.length ? `<br>Уже есть замеры: <b>${already.map(escapeHtml).join(", ")}</b>.` : ""}
+    </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="m-cancel">${isFirst?'Пропустить':'Отмена'}</button>
       <button class="btn btn-primary" id="m-save">Сохранить замер</button>
@@ -4084,6 +4209,8 @@ function modalAddMeasurement(orderId, isFirst){
     const btn = document.getElementById("m-save");
     try{
       await withBusy(btn, ()=> Api.addMeasurement(pub.id, {
+        platform: document.getElementById("m-mplatform").value,
+        link: document.getElementById("m-mlink").value.trim(),
         date: document.getElementById("m-mdate").value,
         views: parseInt(document.getElementById("m-views").value,10)||0,
         likes: parseInt(document.getElementById("m-likes").value,10)||0,
@@ -4106,13 +4233,19 @@ function modalPublicationHistory(orderId){
   openModal(`
     <h3>История замеров · ${escapeHtml(o.blogger)}</h3>
     <p style="color:var(--ink-soft);margin-bottom:8px">${escapeHtml(pub.platform)}${pub.link?` · <a href="${escapeHtml(pub.link)}" target="_blank" rel="noopener">ссылка</a>`:" · без ссылки (сторис)"} · публикация ${escapeHtml(pub.publishedAt)}</p>
+    ${pubPlatforms(pub).length>1 ? `<div class="login-hint" style="margin-bottom:8px">
+      Суммарный охват по платформам: <b>${fmtNum(pubTotalViews(pub))}</b> — ${escapeHtml(pubReachBreakdown(pub))}.
+      Считается последний замер по каждой платформе.
+    </div>` : ""}
     <div class="table-wrap"><table>
-      <thead><tr><th>Дата замера</th><th>Просмотры</th><th>Лайки</th><th>Коммент.</th><th>Клики</th><th>Продажи</th><th>Выручка</th><th>Комментарий</th></tr></thead>
+      <thead><tr><th>Дата замера</th><th>Платформа</th><th>Просмотры</th><th>Лайки</th><th>Коммент.</th><th>Клики</th><th>Продажи</th><th>Выручка</th><th>Комментарий</th></tr></thead>
       <tbody>
         ${pub.measurements.slice().reverse().map(m=>`<tr>
-          <td>${escapeHtml(m.date)}</td><td>${fmtNum(m.views)}</td><td>${fmtNum(m.likes)}</td><td>${fmtNum(m.comments)}</td>
+          <td>${escapeHtml(m.date)}</td>
+          <td>${escapeHtml(measurementPlatform(m, pub))}${m.link?` · <a href="${escapeHtml(m.link)}" target="_blank" rel="noopener">ссылка</a>`:""}</td>
+          <td>${fmtNum(m.views)}</td><td>${fmtNum(m.likes)}</td><td>${fmtNum(m.comments)}</td>
           <td>${m.clicks?fmtNum(m.clicks):"—"}</td><td>${m.salesCount||0}</td><td>${fmtNum(m.salesRevenue)}</td><td>${escapeHtml(m.note||"")}</td>
-        </tr>`).join("") || `<tr><td class="empty" colspan="8">Замеров пока нет</td></tr>`}
+        </tr>`).join("") || `<tr><td class="empty" colspan="9">Замеров пока нет</td></tr>`}
       </tbody>
     </table></div>
     <div class="modal-actions">
@@ -4943,12 +5076,12 @@ function wireDeskTab(){
     // расходился с тем, что маркетолог видит на экране.
     document.getElementById("export-deal-csv-btn").onclick = ()=>{
       const rows = filteredInfluencerDealRows();
-      const header = ["блогер","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","вклад_в_продажи","romi","статус"];
+      const header = ["блогер","ответственный","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","вклад_в_продажи","romi","статус"];
       const lines = [header.map(csvEscape).join(",")];
       rows.forEach(r=>{
         const d = r.deal;
         lines.push([
-          d.blogerLogin, d.platform, d.product, d.barcode||"",
+          d.blogerLogin, d.responsible||"", d.platform, d.product, d.barcode||"",
           d.plannedDate||"", d.publishedDate||"",
           d.plannedReach||0, d.plannedClicks||0, d.reach||0, d.clicks||0,
           d.plannedCost||0, d.cost||0,
@@ -5928,6 +6061,90 @@ async function runSelfTests(){
       DataManager.state.influencerDeals = savedDeals;
       DataManager.state.microInfluencerDeals = savedMicro;
       DataManager.state.salesByDay = savedSales;
+    }
+  });
+  TestSuite.test("microResponsibleSummary: с сентября у каждого менеджера план 50 уникальных блогеров; менеджеры без интеграций показаны с нулём, за прошлые месяцы плана нет", ()=>{
+    const saved = DataManager.state.microInfluencerDeals;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        // У Нины два блогера, но один из них с двумя интеграциями — план по УНИКАЛЬНЫМ, значит 2, а не 3.
+        {id:9401, responsible:"Нина", blogerName:"@b1", publishDate:"2026-09-02", videoStatus:"опубликовано"},
+        {id:9402, responsible:"Нина", blogerName:"@b1", publishDate:"2026-09-03", videoStatus:"опубликовано"},
+        {id:9403, responsible:"Нина", blogerName:"@b2", publishDate:"2026-09-04", videoStatus:"опубликовано"},
+        // Камила работала только в августе — в сентябре у неё должен быть ноль, но строка обязана быть.
+        {id:9404, responsible:"Камила", blogerName:"@b3", publishDate:"2026-08-10", videoStatus:"опубликовано"},
+      ];
+      const sep = microResponsibleSummary("2026-09");
+      const nina = sep.find(r=>r.responsible==="Нина");
+      const kamila = sep.find(r=>r.responsible==="Камила");
+      if(!nina) throw new Error("Нины нет в сводке за сентябрь");
+      if(nina.plan!==50) throw new Error("план на сентябрь должен быть 50: "+nina.plan);
+      if(nina.uniqueBloggerCount!==2) throw new Error("считать нужно уникальных блогеров (2), а не интеграции: "+nina.uniqueBloggerCount);
+      if(nina.planLeft!==48) throw new Error("осталось должно быть 48: "+nina.planLeft);
+      if(nina.planPct!==4) throw new Error("выполнение должно быть 4%: "+nina.planPct);
+      if(!kamila) throw new Error("менеджер без интеграций за месяц всё равно должен быть в таблице с планом");
+      if(kamila.uniqueBloggerCount!==0 || kamila.planLeft!==50) throw new Error("у менеджера без интеграций должно быть 0 и осталось 50: "+kamila.uniqueBloggerCount+"/"+kamila.planLeft);
+
+      // За август плана нет — колонки не должны появляться, и лишних нулевых строк тоже.
+      const aug = microResponsibleSummary("2026-08");
+      if(aug.some(r=>r.plan!=null)) throw new Error("за август (до старта плана) plan должен быть null");
+      if(aug.some(r=>r.responsible==="Нина")) throw new Error("за август не должно быть достроенных нулевых строк");
+
+      // Разметка: заголовки план/осталось/выполнение появляются только на месяце с планом.
+      const savedMonth = UI.microResponsibleMonth;
+      try{
+        UI.microResponsibleMonth = "2026-09";
+        const html = tplMicroResponsibleSummary();
+        if(!html.includes("<th>План</th>") || !html.includes("<th>Осталось</th>") || !html.includes("<th>Выполнение</th>")) throw new Error("на месяце с планом должны быть колонки План/Осталось/Выполнение");
+        UI.microResponsibleMonth = "2026-08";
+        const htmlAug = tplMicroResponsibleSummary();
+        if(htmlAug.includes("<th>План</th>")) throw new Error("за август колонок плана быть не должно");
+      } finally { UI.microResponsibleMonth = savedMonth; }
+    } finally {
+      DataManager.state.microInfluencerDeals = saved;
+    }
+  });
+  TestSuite.test("Замеры по нескольким платформам: охват доставки = сумма последних замеров по Instagram и TikTok, старые замеры без платформы считаются как раньше", ()=>{
+    const pubOld = { id:9501, orderId:9500, platform:"Instagram Reels", publishedAt:"2026-08-01", measurements:[
+      {id:1, date:"2026-08-02", views:1000}, {id:2, date:"2026-08-05", views:1500},
+    ]};
+    // Старые данные: платформы у замеров нет — берём последний замер, как и раньше.
+    if(pubTotalViews(pubOld)!==1500) throw new Error("без платформ охват должен равняться последнему замеру (1500): "+pubTotalViews(pubOld));
+    if(pubPlatforms(pubOld).length!==1) throw new Error("замеры без платформы должны схлопываться в одну платформу публикации");
+    if(reachInfo(null, pubOld, latestMeasurement(pubOld)).value!==1500) throw new Error("reachInfo не должен меняться для одноплатформенных данных");
+
+    // Блогер выложил и Reels, и TikTok: охваты складываются, а не перезаписываются.
+    const pubTwo = { id:9502, orderId:9500, platform:"Instagram Reels", publishedAt:"2026-08-01", measurements:[
+      {id:1, date:"2026-08-02", views:1000, platform:"Instagram Reels"},
+      {id:2, date:"2026-08-02", views:400,  platform:"TikTok"},
+      {id:3, date:"2026-08-06", views:1500, platform:"Instagram Reels"}, // повторный замер той же площадки — заменяет, не плюсует
+      {id:4, date:"2026-08-06", views:900,  platform:"TikTok"},
+    ]};
+    if(pubTotalViews(pubTwo)!==2400) throw new Error("охват двух площадок = 1500+900 = 2400: "+pubTotalViews(pubTwo));
+    const platforms = pubPlatforms(pubTwo);
+    if(platforms.length!==2 || !platforms.includes("TikTok")) throw new Error("должны определяться обе площадки: "+platforms.join("/"));
+    const brk = pubReachBreakdown(pubTwo);
+    if(!/TikTok/.test(brk) || !/Instagram/.test(brk)) throw new Error("разбивка должна называть обе площадки: "+brk);
+    if(reachInfo(null, pubTwo, latestMeasurement(pubTwo)).value!==2400) throw new Error("reachInfo должен возвращать сумму по площадкам: "+reachInfo(null, pubTwo, latestMeasurement(pubTwo)).value);
+    // Замер без просмотров не должен ломать сумму.
+    const pubZero = { id:9503, platform:"TikTok", measurements:[{id:1, views:0, platform:"TikTok"}] };
+    if(pubTotalViews(pubZero)!==0) throw new Error("нулевой замер должен давать 0");
+  });
+  TestSuite.test("Таблица крупных интеграций: колонка 'Ответственный' в шапке, значении и выгрузке CSV", ()=>{
+    const saved = DataManager.state.influencerDeals;
+    try{
+      DataManager.state.influencerDeals = [
+        {id:9601, blogerLogin:"@resp_test", responsible:"Камила", platform:"Instagram Reels", product:"Товар", plannedDate:"2026-08-01", publishedDate:"2026-08-01", reach:0, clicks:0, cost:1000, status:"Опубликована"},
+        {id:9602, blogerLogin:"@no_resp", responsible:"", platform:"TikTok", product:"Товар", plannedDate:"2026-08-02", publishedDate:"2026-08-02", reach:0, clicks:0, cost:1000, status:"Опубликована"},
+      ];
+      const html = tplInfluencerDeals(computeInfluencerRomi());
+      if(!html.includes("<th>Ответственный</th>")) throw new Error("в шапке таблицы должна быть колонка 'Ответственный'");
+      if(!html.includes("Камила")) throw new Error("значение ответственного должно выводиться в строке");
+      const headIdx = html.indexOf("<th>Ответственный</th>");
+      const platIdx = html.indexOf("<th>Платформа</th>");
+      if(!(headIdx>=0 && platIdx>headIdx)) throw new Error("'Ответственный' должен стоять перед 'Платформа'");
+    } finally {
+      DataManager.state.influencerDeals = saved;
     }
   });
   TestSuite.test("marketingSummary агрегирует суммарный охват по всем публикациям (факт + оценка 15%)", ()=>{
