@@ -764,6 +764,9 @@ app.post("/api/influencer-deals", requireAuth, (req,res)=>{
     // Ответственный менеджер — как у микро/средних интеграций. Нужен, чтобы в "Планере блогеров"
     // каждый менеджер мог открыть календарь только по своим блогерам.
     responsible: b.responsible || "",
+    // План по вкладу в продажи на эту интеграцию: сколько выручки она должна принести.
+    // Факт считается моделью из продаж 1С и не редактируется — сравниваем план с ним.
+    plannedContribution: parseInt(b.plannedContribution,10) || 0,
     likes: b.likes || 0, comments: b.comments || 0, saves: b.saves || 0,
     lastUpdatedFrom: "", lastUpdatedAt: "",
     status: b.status || DEAL_STATUSES[0], notes: b.notes || "",
@@ -805,6 +808,7 @@ app.post("/api/influencer-deals/import", requireAuth, (req,res)=>{
       plannedCost: parseInt(r["план_расход"] || r["planned_cost"] || 0, 10) || 0,
       cost: parseInt(r["расход"] || r["cost"] || 0, 10) || 0,
       barcode: (r["шк"] || r["штрихкод"] || r["barcode"] || "").toString().trim(),
+      plannedContribution: parseInt(r["план_вклад"] || r["planned_contribution"] || 0, 10) || 0,
       likes:0, comments:0, saves:0, lastUpdatedFrom:"", lastUpdatedAt:"",
       status: r["статус"] || r["status"] || DEAL_STATUSES[0],
       notes: r["комментарий"] || r["notes"] || "",
