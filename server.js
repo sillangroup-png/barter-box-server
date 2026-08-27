@@ -165,7 +165,7 @@ function findDriverByPhoneOrCode(input){
 /* =========================================================================
    1. ХРАНИЛИЩЕ: всё состояние — один объект в памяти, зеркалится в JSON-файл
    ========================================================================= */
-function emptyState(){ return {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[], microInfluencerDeals:[], productEvents:[]}; }
+function emptyState(){ return {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[], microInfluencerDeals:[], productEvents:[], plans:[]}; }
 
 function seedState(){
   const drivers = [
@@ -268,7 +268,7 @@ function seedState(){
     salesByDay.push({id: salesByDay.length+1, date:d, product:"Уход премиум", revenue: revenue*3500});
   }
 
-  return {drivers, campaigns, orders, returns, publications, influencerDeals, salesByDay, microInfluencerDeals: [], productEvents: []};
+  return {drivers, campaigns, orders, returns, publications, influencerDeals, salesByDay, microInfluencerDeals: [], productEvents: [], plans: []};
 }
 
 let state = loadState();
@@ -969,6 +969,34 @@ app.post("/api/sales/import", requireAuth, (req,res)=>{
   });
   persist();
   res.json({added, updated});
+});
+
+/* ---------- Планы (план/факт) ----------
+   Одна универсальная таблица на все разрезы, чтобы не плодить по справочнику на каждый случай.
+   Запись = (месяц, разрез, ключ, показатель) → число. Разрезы:
+     manager  — ключ это имя ответственного ("Нина"), показатели bloggers/budget/integrations
+     product  — ключ это ШК товара, показатели integrations/budget
+     large    — канал целиком (ключ пустой), показатели bloggers/budget/integrations
+   Факт нигде не хранится: он всегда считается из интеграций на лету, чтобы план и факт
+   не могли разъехаться. Запись с value=0 удаляется — так пустая ячейка означает "плана нет". */
+function planKeyOf(p){ return [p.month, p.scope, p.key||"", p.metric].join("|"); }
+app.get("/api/plans", requireAuth, (req,res)=> res.json(state.plans || []));
+app.post("/api/plans", requireAuth, (req,res)=>{
+  const rows = Array.isArray(req.body && req.body.rows) ? req.body.rows : [req.body||{}];
+  state.plans = state.plans || [];
+  let saved = 0, removed = 0;
+  rows.forEach(b=>{
+    const month = (b.month||"").trim(), scope = (b.scope||"").trim(), metric = (b.metric||"").trim();
+    if(!month || !scope || !metric) return;
+    const rec = {month, scope, key:(b.key||"").toString().trim(), metric, value: Number(b.value)||0};
+    const k = planKeyOf(rec);
+    const idx = state.plans.findIndex(p=>planKeyOf(p)===k);
+    if(!rec.value){ if(idx>=0){ state.plans.splice(idx,1); removed++; } return; }
+    if(idx>=0){ state.plans[idx].value = rec.value; saved++; }
+    else { state.plans.push(Object.assign({id: nextId("plans")}, rec)); saved++; }
+  });
+  persist();
+  res.json({saved, removed, total: state.plans.length});
 });
 
 /* ---------- События по товарам (смена цены, акция, реклама Kaspi) ----------
