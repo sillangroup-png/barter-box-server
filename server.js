@@ -165,7 +165,7 @@ function findDriverByPhoneOrCode(input){
 /* =========================================================================
    1. ХРАНИЛИЩЕ: всё состояние — один объект в памяти, зеркалится в JSON-файл
    ========================================================================= */
-function emptyState(){ return {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[], microInfluencerDeals:[]}; }
+function emptyState(){ return {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[], microInfluencerDeals:[], productEvents:[]}; }
 
 function seedState(){
   const drivers = [
@@ -268,7 +268,7 @@ function seedState(){
     salesByDay.push({id: salesByDay.length+1, date:d, product:"Уход премиум", revenue: revenue*3500});
   }
 
-  return {drivers, campaigns, orders, returns, publications, influencerDeals, salesByDay, microInfluencerDeals: []};
+  return {drivers, campaigns, orders, returns, publications, influencerDeals, salesByDay, microInfluencerDeals: [], productEvents: []};
 }
 
 let state = loadState();
@@ -316,7 +316,26 @@ function nextMeasurementId(){
    2. Express app
    ========================================================================= */
 const app = express();
-app.use(express.json({limit: "2mb"}));
+// 12mb — интерфейс это один большой index.html (~700 КБ), плюс запас на будущее.
+app.use(express.json({limit: "12mb"}));
+
+/* ---------- Горячее обновление интерфейса (без GitHub) ----------
+   Раньше любая правка интерфейса означала ручную заливку index.html на GitHub и ожидание
+   пересборки на Render. Теперь новую версию можно положить прямо через API: она сохраняется
+   на постоянный диск рядом с данными и отдаётся вместо той, что лежит в образе контейнера.
+   Файл из образа никуда не девается и остаётся запасным вариантом: если новая версия окажется
+   сломанной, достаточно вызвать DELETE /api/app-version — и вернётся та, что пришла с деплоем.
+   При следующем полноценном деплое с GitHub накат с диска НЕ сбрасывается автоматически:
+   иначе свежий интерфейс молча откатился бы на старый. Сбрасывать — только вручную. */
+const APP_HTML_PATH = path.join(DATA_DIR, "index.html");
+const BUNDLED_HTML_PATH = path.join(__dirname, "public", "index.html");
+function activeIndexPath(){
+  try{ if(fs.existsSync(APP_HTML_PATH)) return APP_HTML_PATH; }catch(e){}
+  return BUNDLED_HTML_PATH;
+}
+// Перехватываем index.html ДО express.static, иначе статика отдаст версию из образа.
+app.get(["/", "/index.html"], (req,res)=> res.sendFile(activeIndexPath()));
+
 app.use("/uploads", express.static(UPLOADS_DIR, {maxAge: "30d"}));
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -952,12 +971,83 @@ app.post("/api/sales/import", requireAuth, (req,res)=>{
   res.json({added, updated});
 });
 
+/* ---------- События по товарам (смена цены, акция, реклама Kaspi) ----------
+   Зачем. Модель вклада блогеров сравнивает продажи дня с недавним уровнем товара. Но уровень
+   меняется и без блогеров: например, 19.08.2026 цену на набор Коллаген+Биотин снизили с 7000
+   до 5900 ₸ — продажи в штуках выросли в 2,55 раза и остались на новой полке. Модель этот
+   скачок раздала тем, кто случайно выложился рядом: 4,5 млн ₸ "вклада" за 17–26 августа.
+   Отметив такое событие, мы говорим расчёту: с этой даты старый уровень больше не эталон,
+   сравнивать с ним нельзя. Пока после события не наберутся новые "чистые" дни, вклад по этому
+   товару не начисляется никому — честнее оставить рост неопознанным, чем приписать его людям. */
+app.get("/api/product-events", requireAuth, (req,res)=> res.json(state.productEvents || []));
+app.post("/api/product-events", requireAuth, (req,res)=>{
+  const b = req.body || {};
+  const barcode = (b.barcode||"").toString().trim();
+  const date = (b.date||"").trim();
+  if(!barcode || !date) return res.status(400).json({error:"нужны ШК и дата"});
+  state.productEvents = state.productEvents || [];
+  const ev = {
+    id: nextId("productEvents"), barcode, date,
+    type: b.type || "Смена цены",
+    priceFrom: parseInt(b.priceFrom,10) || 0,
+    priceTo: parseInt(b.priceTo,10) || 0,
+    note: (b.note||"").trim(),
+  };
+  state.productEvents.push(ev);
+  persist();
+  res.json(ev);
+});
+app.delete("/api/product-events/:id", requireAuth, (req,res)=>{
+  state.productEvents = (state.productEvents || []).filter(e=>e.id !== +req.params.id);
+  persist();
+  res.json({ok:true});
+});
+
+/* ---------- Версия интерфейса ----------
+   Кто может обновлять: только менеджер и маркетолог с правом записи. Аня (readOnly) и водители —
+   нет. Это тот же круг людей, который и так может менять любые данные через остальные ручки,
+   так что новых прав никому не выдаём. */
+function requireStaffWrite(req,res,next){
+  const s = req.session;
+  if(!s || s.readOnly || (s.role!=="manager" && s.role!=="marketer")){
+    return res.status(403).json({error:"нужен доступ менеджера или маркетолога с правом записи"});
+  }
+  next();
+}
+app.get("/api/app-version", requireAuth, (req,res)=>{
+  const p = activeIndexPath();
+  let size = 0, mtime = null;
+  try{ const st = fs.statSync(p); size = st.size; mtime = st.mtime.toISOString(); }catch(e){}
+  res.json({source: p===APP_HTML_PATH ? "disk" : "bundled", size, updatedAt: mtime});
+});
+app.post("/api/app-version", requireAuth, requireStaffWrite, (req,res)=>{
+  const html = (req.body && req.body.html) || "";
+  // Три дешёвые проверки, чтобы случайно не положить на прод пустой или обрезанный файл.
+  if(typeof html !== "string" || html.length < 10000) return res.status(400).json({error:"файл слишком маленький — похоже, обрезан"});
+  if(!/<!DOCTYPE html/i.test(html)) return res.status(400).json({error:"это не HTML-страница"});
+  if(!html.includes("Barter Box")) return res.status(400).json({error:"не похоже на интерфейс Barter Box"});
+  try{
+    // Пишем во временный файл и только потом переименовываем: если процесс упадёт на середине
+    // записи, на диске не останется обрезанного index.html, который сломает сайт всем.
+    const tmp = APP_HTML_PATH + ".tmp";
+    fs.writeFileSync(tmp, html, "utf8");
+    fs.renameSync(tmp, APP_HTML_PATH);
+  }catch(e){ return res.status(500).json({error:"не удалось сохранить: "+e.message}); }
+  res.json({ok:true, size: Buffer.byteLength(html, "utf8"), source:"disk"});
+});
+// Откат на версию из образа контейнера — если накат оказался сломанным.
+app.delete("/api/app-version", requireAuth, requireStaffWrite, (req,res)=>{
+  try{ if(fs.existsSync(APP_HTML_PATH)) fs.unlinkSync(APP_HTML_PATH); }
+  catch(e){ return res.status(500).json({error:"не удалось откатить: "+e.message}); }
+  res.json({ok:true, source:"bundled"});
+});
+
 // 404 для неизвестных API-путей (чтобы не отдавать index.html вместо ошибки)
 app.use("/api", (req,res)=> res.status(404).json({error:"not found"}));
 
 // SPA fallback — всё остальное отдаём как index.html
 app.get(/^(?!\/api).*/, (req,res)=>{
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+  res.sendFile(activeIndexPath());
 });
 
 // Render при деплое сначала посылает процессу SIGTERM и только потом убивает. Успеваем сбросить
