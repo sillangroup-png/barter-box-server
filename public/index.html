@@ -419,6 +419,14 @@ const Api = {
   deleteSale: (id)=> apiFetch("/api/sales/"+id, {method:"DELETE"}),
   importSales: (rows)=> apiFetch("/api/sales/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
 
+  // События по товару (смена цены, акция, реклама Kaspi) — см. computeUnifiedInfluencerRomi:
+  // они обнуляют базовую линию, чтобы рост от цены не записывался блогерам.
+  createProductEvent: (e)=> apiFetch("/api/product-events", {method:"POST", headers:jsonHeaders, body:JSON.stringify(e)}),
+  deleteProductEvent: (id)=> apiFetch("/api/product-events/"+id, {method:"DELETE"}),
+
+  // Планы: одна ручка на всё — принимает и одну строку, и пачку (для заливки месяца целиком).
+  savePlans: (rows)=> apiFetch("/api/plans", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
+
   createMicroDeal: (d)=> apiFetch("/api/micro-influencer-deals", {method:"POST", headers:jsonHeaders, body:JSON.stringify(d)}),
   updateMicroDeal: (id, changes)=> apiFetch("/api/micro-influencer-deals/"+id, {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
   deleteMicroDeal: (id)=> apiFetch("/api/micro-influencer-deals/"+id, {method:"DELETE"}),
@@ -432,7 +440,7 @@ const Api = {
    ОТКУДА берутся данные и КАК они изменяются)
    ========================================================================= */
 const DataManager = {
-  state: {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[], microInfluencerDeals:[]},
+  state: {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[], microInfluencerDeals:[], productEvents:[], plans:[]},
   async load(){ this.state = await Api.getState(); return this.state; },
   async refresh(){ this.state = await Api.getState(); return this.state; },
   find(collection, id){ return this.state[collection].find(i=> (i.id===id) || (i.code===id)); },
@@ -1019,6 +1027,12 @@ function saleMatchKey(s){ return (s.barcode||"").trim() || s.product; }
 // такие дни нужно делить МЕЖДУ всеми активными интеграциями обоих каналов (по тому же
 // decay-весу), а не засчитывать полностью и туда, и туда — иначе один и тот же прирост
 // задвоится в сумме "Вклад в продажи" крупных + микро дашбордов.
+function median(arr){
+  if(!arr || !arr.length) return 0;
+  const s = arr.slice().sort((a,b)=>a-b);
+  const mid = Math.floor(s.length/2);
+  return s.length%2 ? s[mid] : (s[mid-1]+s[mid])/2;
+}
 function computeUnifiedInfluencerRomi(){
   const {influencerDeals, microInfluencerDeals, salesByDay} = DataManager.state;
   const units = [
@@ -1053,7 +1067,7 @@ function computeUnifiedInfluencerRomi(){
     const firstDate = firstUnitDateByProduct[matchKey];
     // Нет ни одной выкладки по товару — брать "до старта" не от чего, берём всю историю.
     const pre = firstDate ? byProduct[matchKey].filter(s=>s.date < firstDate) : byProduct[matchKey];
-    baselineByProduct[matchKey] = pre.length ? pre.reduce((a,s)=>a+s.revenue,0)/pre.length : 0;
+    baselineByProduct[matchKey] = pre.length ? median(pre.map(s=>s.revenue)) : 0;
   });
 
   const contribution = {};
@@ -1073,6 +1087,21 @@ function computeUnifiedInfluencerRomi(){
   //
   // Если чистых дней перед этим днём ещё не было (новинку и запускали блогерами) — падаем на
   // базу "до первой выкладки", а она у новинок равна 0, и весь объём идёт в прирост, как и нужно.
+  // СОБЫТИЯ ПО ТОВАРУ (смена цены, акция, реклама Kaspi) обнуляют накопленную базу.
+  // Реальный случай: 19.08.2026 цену на Коллаген+Биотин снизили с 7000 до 5900 ₸ — продажи в
+  // штуках выросли в 2,55 раза и остались на новом уровне. Без отметки о событии модель считала
+  // этот скачок заслугой блогеров и раздала 4,5 млн ₸ тем, кто просто выложился рядом.
+  // После события старый уровень перестаёт быть эталоном: копим чистые дни заново, а пока их
+  // нет — вклад по товару НЕ начисляется никому (baseline = null). Лучше оставить рост
+  // неопознанным, чем приписать его людям, которые к нему не причастны.
+  const eventsByProduct = {};
+  (DataManager.state.productEvents || []).forEach(e=>{
+    const bc = (e.barcode||"").trim();
+    if(!bc || !e.date) return;
+    (eventsByProduct[bc] = eventsByProduct[bc] || []).push(e.date);
+  });
+  Object.keys(eventsByProduct).forEach(k=> eventsByProduct[k].sort());
+
   const BASELINE_WINDOW = 7;
   const rollingBaselineByProduct = {};
   Object.keys(byProduct).forEach(matchKey=>{
@@ -1082,13 +1111,23 @@ function computeUnifiedInfluencerRomi(){
       const diff = daysBetween(dateStr, ud);
       return diff>=0 && diff<=2;
     });
+    const eventDates = eventsByProduct[matchKey] || [];
+    // Дата последнего события на этот день — граница "эпохи" уровня продаж.
+    const epochOf = dateStr => {
+      let last = null;
+      eventDates.forEach(d=>{ if(d <= dateStr) last = d; });
+      return last;
+    };
     const map = {};
-    const cleanRevenues = []; // выручка чистых дней в порядке возрастания даты
+    let cleanRevenues = [];   // выручка чистых дней текущей эпохи
+    let currentEpoch = epochOf(sales.length ? sales[0].date : "");
     sales.forEach(s=>{
+      const epoch = epochOf(s.date);
+      if(epoch !== currentEpoch){ cleanRevenues = []; currentEpoch = epoch; } // событие — копим заново
       const recent = cleanRevenues.slice(-BASELINE_WINDOW);
-      map[s.date] = recent.length
-        ? recent.reduce((a,v)=>a+v,0)/recent.length
-        : baselineByProduct[matchKey];
+      if(recent.length) map[s.date] = median(recent);
+      // После события чистых дней ещё нет — измерять не от чего, вклад не начисляем.
+      else map[s.date] = epoch ? null : baselineByProduct[matchKey];
       if(isClean(s.date)) cleanRevenues.push(s.revenue);
     });
     rollingBaselineByProduct[matchKey] = map;
@@ -1099,6 +1138,8 @@ function computeUnifiedInfluencerRomi(){
     if(fallback==null) return;
     const rolling = rollingBaselineByProduct[matchKey] || {};
     byProduct[matchKey].forEach(s=>{
+      // null (а не undefined) означает "после события базы ещё нет" — день пропускаем целиком.
+      if(Object.prototype.hasOwnProperty.call(rolling, s.date) && rolling[s.date]===null) return;
       const base = rolling[s.date]==null ? fallback : rolling[s.date];
       const uplift = Math.max(0, s.revenue - base);
       if(uplift<=0) return;
@@ -1113,15 +1154,39 @@ function computeUnifiedInfluencerRomi(){
     });
   });
 
-  return {units, contribution, baselineByProduct};
+  
+  // Потолок правдоподобия: интеграция не может физически принести больше, чем разумная
+  // доля охвата, конвертированная в покупки по полной цене. Без этого модель может отдать
+  // одной небольшой интеграции весь прирост дня, вызванный посторонним фактором —
+  // см. пример @cool_zhan_ (коллаген+биотин, 28.08): 2017 охвата не могут физически
+  // объяснить более миллиона тенге вклада.
+  const CONTRIB_CONV_CEILING = 0.05; // не более 5% охвата конвертится в покупку по полной цене
+  const cappedKeys = new Set();
+  units.forEach(u=>{
+    const reach = u.type==="large" ? (u.deal.reach||0) : ((u.deal.factReachReels||0)+(u.deal.factReachTT||0));
+    if(!reach){
+      // Нет замеренного охвата — не можем обосновать вклад: считаем потолок нулевым,
+      // а не пропускаем проверку (раньше reach=0 полностью обходил потолок правдоподобия).
+      if(contribution[u.key] > 0){ contribution[u.key] = 0; cappedKeys.add(u.key); }
+      return;
+    }
+    const avgCheck = avgCheckByBarcode(u.deal.barcode);
+    if(!avgCheck) return;
+    const ceiling = reach * avgCheck * CONTRIB_CONV_CEILING;
+    if(contribution[u.key] > ceiling){
+      contribution[u.key] = ceiling;
+      cappedKeys.add(u.key);
+    }
+  });
+return {units, contribution, baselineByProduct, cappedKeys};
 }
 function computeInfluencerRomi(){
-  const {units, contribution, baselineByProduct} = computeUnifiedInfluencerRomi();
+  const {units, contribution, baselineByProduct, cappedKeys} = computeUnifiedInfluencerRomi();
   return units.filter(u=>u.type==='large').map(u=>{
     const netContribution = Math.round(contribution[u.key]||0);
     const hasBaseline = baselineByProduct[u.matchKey]!=null;
     const romi = (hasBaseline && u.cost>0) ? (netContribution / u.cost) : null;
-    return {deal:u.deal, netContribution, romi, hasBaseline};
+    return {deal:u.deal, netContribution, romi, hasBaseline, capped: cappedKeys.has(u.key)};
   });
 }
 // from/to — тот же необязательный фильтр периода, что и в marketingSummary; фильтрует по
@@ -1203,12 +1268,12 @@ function microDealMatchKey(d){ return (d.barcode||"").trim() || d.product; }
 // вместе с крупными интеграциями (см. комментарий у computeUnifiedInfluencerRomi выше) — так
 // реклама у крупного блогера в те же даты не задваивает и не искажает вклад микро/средних.
 function computeMicroInfluencerRomi(){
-  const {units, contribution, baselineByProduct} = computeUnifiedInfluencerRomi();
+  const {units, contribution, baselineByProduct, cappedKeys} = computeUnifiedInfluencerRomi();
   return units.filter(u=>u.type==='micro').map(u=>{
     const netContribution = Math.round(contribution[u.key]||0);
     const hasBaseline = baselineByProduct[u.matchKey]!=null;
     const romi = (hasBaseline && u.cost>0) ? (netContribution / u.cost) : null;
-    return {deal:u.deal, netContribution, romi, hasBaseline};
+    return {deal:u.deal, netContribution, romi, hasBaseline, capped: cappedKeys.has(u.key)};
   });
 }
 function microInfluencerSummary(from, to){
@@ -1469,7 +1534,7 @@ function tplInfluencerBrandDashboard(allRows){
 
     <div class="grid-kpi">
       ${kpi("Расходы (факт)", fmtNum(s.totalCost)+" ₸", "сумма колонки «факт расход» — сколько уже реально потратили")}
-      ${kpi("План", fmtNum(s.plannedCost)+" ₸", "сумма колонки «план расход» — только там, где план заполнен")}
+      ${kpi("План", fmtNum(s.plannedCost + (allPeriod ? (DataManager.state.plans||[]).filter(p=>p.scope==="cohort"&&p.key==="mid"&&p.metric==="budget").reduce((a,p)=>a+(p.value||0),0) : planValue(month,"cohort","mid","budget")))+" ₸", "сумма «план расход» (крупные) + план бюджета когорты «Средний инфлюенс» за месяц")}
       ${kpi("Выручка (вклад)", fmtNum(Math.round(s.totalContribution))+" ₸")}
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2))}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%")}
@@ -1885,8 +1950,19 @@ function tplMicroBloggerSummary(){
    Чтобы поменять цифру или начать план с другого месяца — правьте две константы ниже. */
 const MICRO_PLAN_FROM_MONTH = "2026-09";
 const MICRO_PLAN_PER_RESPONSIBLE = 50;
-function microPlanPerResponsible(month){
-  return (month && month >= MICRO_PLAN_FROM_MONTH) ? MICRO_PLAN_PER_RESPONSIBLE : null;
+// План на конкретного менеджера: если в справочнике планов на этот месяц стоит своя цифра —
+// берём её, иначе договорённость по умолчанию (50 с сентября).
+function microPlanPerResponsible(month, responsible){
+  if(!month) return null;
+  const own = responsible ? planValue(month, "manager", responsible, "bloggers") : 0;
+  if(own) return own;
+  return month >= MICRO_PLAN_FROM_MONTH ? MICRO_PLAN_PER_RESPONSIBLE : null;
+}
+// Есть ли вообще план на этот месяц: либо месяц не раньше сентября, либо кому-то проставили руками.
+function microMonthHasPlan(month){
+  if(!month) return false;
+  if(month >= MICRO_PLAN_FROM_MONTH) return true;
+  return (DataManager.state.plans || []).some(p=>p.month===month && p.scope==="manager");
 }
 // Список менеджеров берём по ВСЕЙ истории, а не по выбранному месяцу. В начале месяца у части
 // девочек интеграций ещё ноль — но строка с планом всё равно должна быть на экране, иначе
@@ -1902,7 +1978,7 @@ function microKnownResponsibles(){
 function microResponsibleSummary(month){
   let deals = DataManager.state.microInfluencerDeals;
   if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
-  const plan = microPlanPerResponsible(month);
+  const hasPlan = microMonthHasPlan(month);
   const map = {};
   deals.forEach(d=>{
     const name = d.responsible || "Не указан";
@@ -1922,7 +1998,7 @@ function microResponsibleSummary(month){
   // Достраиваем нулевые строки тем, у кого за месяц ещё нет ни одной интеграции (см. комментарий
   // к microKnownResponsibles). Делаем это только когда на месяц есть план — за прошлые месяцы
   // пустые строки были бы мусором.
-  if(plan!=null){
+  if(hasPlan){
     microKnownResponsibles().forEach(name=>{
       if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), dealsCount:0, inProgress:0, published:0, totalReach:0};
     });
@@ -1942,9 +2018,9 @@ function microResponsibleSummary(month){
       published: a.published,
       totalReach: a.totalReach,
       // План/остаток/процент выполнения — null, если на этот месяц плана нет.
-      plan,
-      planLeft: plan==null ? null : Math.max(0, plan - a.bloggers.size),
-      planPct: plan==null ? null : Math.round(a.bloggers.size / plan * 100),
+      plan: hasPlan ? microPlanPerResponsible(month, a.responsible) : null,
+      planLeft: !hasPlan ? null : Math.max(0, microPlanPerResponsible(month, a.responsible) - a.bloggers.size),
+      planPct: !hasPlan ? null : Math.round(a.bloggers.size / microPlanPerResponsible(month, a.responsible) * 100),
       cityRows: toRows(byCity, "city"),
       categoryRows: toRows(byCategory, "category"),
     };
@@ -1963,10 +2039,10 @@ function tplMicroResponsibleSummary(){
   const months = microMonthsWithPlan();
   const month = UI.microResponsibleMonth;
   const rows = microResponsibleSummary(month);
-  const plan = microPlanPerResponsible(month);
+  const plan = microMonthHasPlan(month);
   // Ячейка выполнения плана: полоска + процент. Цвет — светофор, чтобы отставание было видно
   // не вчитываясь в цифры.
-  const planCell = pct => {
+  const progressCell = pct => {
     const color = pct>=100 ? "var(--ok)" : (pct>=60 ? "var(--warn)" : "var(--bad)");
     return `<td><div style="display:flex;align-items:center;gap:8px;min-width:110px">
       <div style="flex:1;height:6px;border-radius:3px;background:var(--line);overflow:hidden"><div style="width:${Math.min(100,pct)}%;height:100%;background:${color}"></div></div>
@@ -2009,7 +2085,7 @@ function tplMicroResponsibleSummary(){
               <td><button class="btn btn-ghost btn-sm responsible-toggle-btn" data-responsible="${escapeHtml(r.responsible)}" style="padding:2px 9px;line-height:1">${expanded?'−':'+'}</button></td>
               <td><b>${escapeHtml(r.responsible)}</b></td>
               <td>${r.uniqueBloggerCount}</td>
-              ${plan ? `<td>${r.plan}</td><td>${r.planLeft}</td>${planCell(r.planPct)}` : ""}
+              ${plan ? `${planCell(month,"manager",r.responsible,"bloggers")}<td>${r.planLeft}</td>${progressCell(r.planPct)}` : ""}
               <td>${r.inProgress}</td>
               <td>${r.published}</td>
               <td>${r.dealsCount}</td>
@@ -2036,7 +2112,7 @@ function tplMicroResponsibleSummary(){
               const planTotal = rows.reduce((s,r)=>s+r.plan,0);
               const leftTotal = rows.reduce((s,r)=>s+r.planLeft,0);
               const pctTotal = planTotal ? Math.round((planTotal-leftTotal)/planTotal*100) : 0;
-              return `<td>${planTotal}</td><td>${leftTotal}</td>${planCell(pctTotal)}`;
+              return `<td>${planTotal}</td><td>${leftTotal}</td>${progressCell(pctTotal)}`;
             })() : ""}
             <td>${rows.reduce((s,r)=>s+r.inProgress,0)}</td>
             <td>${rows.reduce((s,r)=>s+r.published,0)}</td>
@@ -2246,7 +2322,9 @@ const UI = {
   inflCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
   microCompare: {aFrom:"", aTo:"", bFrom:"", bTo:""},
   microSummaryExpanded: false, // "Сводка по блогерам" свёрнута до 10 строк, пока не нажата "Показать все"
-  expandedResponsible: new Set(), // какие менеджеры развёрнуты в "Сводке по ответственным" (клик по "+" показывает разбивку по городам/категориям блогеров)
+  expandedResponsible: new Set(),
+  expandedCohort: new Set(), // какие когорты (топ/средний/мелкий) развёрнуты в "Плане продаж" (клик по "+" показывает разбивку по товарам)
+  collapsedColGroups: new Set(), // свёрнутые группы колонок в широких таблицах (как группировка столбцов в Excel) — "infl-dates", "infl-reach" // какие менеджеры развёрнуты в "Сводке по ответственным" (клик по "+" показывает разбивку по городам/категориям блогеров)
   expandedCategory: new Set(), // какие категории блогеров развёрнуты в "Сводке по категориям" (клик по "+" показывает, кто из менеджеров её ведёт)
   microDashCategory: "", // фильтр категории блогера на дашборде "Микро/средние": "" = все категории
   calendarMonth: "", // выбранный месяц в "Планере блогеров" (см. tplMicroCalendar) — "YYYY-MM", пусто = текущий месяц
@@ -3225,6 +3303,494 @@ function filteredInfluencerDealRows(){
   if(sorters[fi.sort]) rows = rows.slice().sort(sorters[fi.sort]);
   return rows;
 }
+/* ---------- Планы (план/факт) ----------
+   План живёт не отдельной вкладкой, а панелью внутри каждой: по менеджерам — на микро/средних,
+   по блогерам и бюджету — на крупных, по товарам — на обеих. Хранится одной универсальной
+   таблицей (месяц, разрез, ключ, показатель) → число, см. /api/plans на сервере.
+   Факт нигде не хранится и всегда считается из интеграций, поэтому план и факт не разъезжаются. */
+function planValue(month, scope, key, metric){
+  const p = (DataManager.state.plans || []).find(x=>
+    x.month===month && x.scope===scope && (x.key||"")===(key||"") && x.metric===metric);
+  return p ? p.value : 0;
+}
+function planCell(month, scope, key, metric, opts){
+  const v = planValue(month, scope, key, metric);
+  const money = opts && opts.money;
+  const auto = (opts && opts.auto) || 0;
+  return `<td><span class="plan-cell" data-month="${month}" data-scope="${scope}" data-key="${escapeHtml(key||"")}" data-metric="${metric}" data-auto="${auto}"
+    style="cursor:pointer;border-bottom:1px dashed var(--line-2)" title="Кликните, чтобы поставить план"
+    >${v ? (money?fmtNum(v)+" ₸":fmtNum(v)) : (auto ? `<span style="color:var(--ink-mute)" title="Автоподсказка по графику — можно поправить">≈${money?fmtNum(auto)+" ₸":fmtNum(auto)}</span>` : '<span style="color:var(--ink-mute)">—</span>')}</span></td>`;
+}
+function planProgressCell(fact, plan){
+  if(!plan) return `<td><span style="color:var(--ink-mute)">—</span></td>`;
+  const pct = Math.round(fact/plan*100);
+  const color = pct>=100 ? "var(--ok)" : (pct>=60 ? "var(--warn)" : "var(--bad)");
+  return `<td><div style="display:flex;align-items:center;gap:8px;min-width:110px">
+    <div style="flex:1;height:6px;border-radius:3px;background:var(--line);overflow:hidden"><div style="width:${Math.min(100,pct)}%;height:100%;background:${color}"></div></div>
+    <b style="color:${color};font-size:12px;white-space:nowrap">${pct}%</b>
+  </div></td>`;
+}
+function largeFact(month){
+  const deals = DataManager.state.influencerDeals.filter(d=>(d.publishedDate||"").slice(0,7)===month);
+  return {
+    bloggers: new Set(deals.map(d=>d.blogerLogin||"—")).size,
+    integrations: deals.length,
+    budget: deals.reduce((a,d)=>a+(+d.cost||0),0),
+  };
+}
+function productFact(month, barcode){
+  const large = DataManager.state.influencerDeals.filter(d=>(d.barcode||"").trim()===barcode && (d.publishedDate||"").slice(0,7)===month);
+  const micro = DataManager.state.microInfluencerDeals.filter(d=>(d.barcode||"").trim()===barcode && (d.publishDate||"").slice(0,7)===month);
+  return {
+    integrations: large.length + micro.length,
+    budget: large.reduce((a,d)=>a+(+d.cost||0),0) + micro.reduce((a,d)=>a+microDealTotalCost(d),0),
+  };
+}
+function productScheduled(month, barcode){
+  const deals = DataManager.state.influencerDeals.filter(d=>(d.barcode||"").trim()===barcode && (d.plannedDate||"").slice(0,7)===month);
+  return {
+    integrations: deals.length,
+    budget: deals.reduce((a,d)=>a+(d.plannedCost||d.cost||0),0),
+  };
+}
+function productScheduledMicro(month, barcode){
+  const deals = DataManager.state.microInfluencerDeals.filter(d=>(d.barcode||"").trim()===barcode && (d.plannedDate||"").slice(0,7)===month);
+  return {
+    integrations: deals.length,
+    budget: deals.reduce((a,d)=>a+microDealTotalCost(d),0),
+  };
+}
+function productFactMicro(month, barcode){
+  const micro = DataManager.state.microInfluencerDeals.filter(d=>(d.barcode||"").trim()===barcode && (d.publishedDate||"").slice(0,7)===month);
+  return {
+    integrations: micro.length,
+    budget: micro.reduce((a,d)=>a+microDealTotalCost(d),0),
+  };
+}
+function microPlanProductRows(month){
+  const set = new Set();
+  (DataManager.state.plans||[]).forEach(p=>{ if(p.month===month && p.scope==="productMicro" && p.key) set.add(p.key); });
+  DataManager.state.microInfluencerDeals.forEach(d=>{ const b=(d.barcode||"").trim(); if(b && (d.publishedDate||"").slice(0,7)===month) set.add(b); });
+  DataManager.state.microInfluencerDeals.forEach(d=>{ const b=(d.barcode||"").trim(); if(b && (d.plannedDate||"").slice(0,7)===month) set.add(b); });
+  const nameByBarcode = {};
+  DataManager.state.salesByDay.forEach(s=>{ const b=(s.barcode||"").trim(); if(b && !nameByBarcode[b]) nameByBarcode[b]=s.product; });
+  return [...set].map(bc=>Object.assign({barcode:bc, name:nameByBarcode[bc]||"—"}, productFactMicro(month, bc)))
+    .sort((a,b)=> b.integrations-a.integrations || a.name.localeCompare(b.name,"ru"));
+}
+function planProductRows(month){
+  const set = new Set();
+  (DataManager.state.plans||[]).forEach(p=>{ if(p.month===month && p.scope==="product" && p.key) set.add(p.key); });
+  DataManager.state.influencerDeals.forEach(d=>{ const b=(d.barcode||"").trim(); if(b && (d.publishedDate||"").slice(0,7)===month) set.add(b); });
+  DataManager.state.influencerDeals.forEach(d=>{ const b=(d.barcode||"").trim(); if(b && (d.plannedDate||"").slice(0,7)===month) set.add(b); });
+  DataManager.state.microInfluencerDeals.forEach(d=>{ const b=(d.barcode||"").trim(); if(b && (d.publishDate||"").slice(0,7)===month) set.add(b); });
+  const nameByBarcode = {};
+  DataManager.state.salesByDay.forEach(s=>{ const b=(s.barcode||"").trim(); if(b && !nameByBarcode[b]) nameByBarcode[b]=s.product; });
+  return [...set].map(bc=>Object.assign({barcode:bc, name:nameByBarcode[bc]||"—"}, productFact(month, bc)))
+    .sort((a,b)=> b.integrations-a.integrations || a.name.localeCompare(b.name,"ru"));
+}
+function tplPlanProducts(month){
+  if(!month) return `
+    <div class="panel"><div class="panel-title">🎯 План по товарам</div>
+      <div class="login-hint">Выберите месяц вверху страницы — план ставится на конкретный месяц.</div>
+    </div>`;
+  const rows = planProductRows(month);
+  const planInt = rows.reduce((a,r)=>a+planValue(month,"product",r.barcode,"integrations"),0);
+  const factInt = rows.reduce((a,r)=>a+r.integrations,0);
+  return `
+    <div class="panel">
+      <div class="panel-title">
+        🎯 План по товарам · ${escapeHtml(monthLabel(month))}
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">кликните по числу в колонке «План», чтобы поставить или изменить</span>
+      </div>
+      <div class="login-hint" style="margin-bottom:10px">
+        Факт считается по обоим каналам сразу — и крупные, и микро. В список попадают товары,
+        по которым в этом месяце есть план или уже были выкладки.
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Товар</th><th>План интеграций</th><th>Факт</th><th>Выполнение</th><th>План бюджета</th><th>Факт бюджета</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r=>{
+            const pi = planValue(month,"product",r.barcode,"integrations");
+            const pb = planValue(month,"product",r.barcode,"budget");
+            const sched = productScheduled(month, r.barcode);
+            return `<tr>
+              <td>${escapeHtml(r.name)}<br><span style="color:var(--ink-mute);font-size:11px">ШК ${escapeHtml(r.barcode)}</span></td>
+              ${planCell(month,"product",r.barcode,"integrations",{auto:sched.integrations})}
+              <td>${r.integrations}</td>
+              ${planProgressCell(r.integrations, pi)}
+              ${planCell(month,"product",r.barcode,"budget",{money:true, auto:sched.budget})}
+              <td>${fmtNum(r.budget)} ₸${pb?`<br><span style="color:var(--ink-mute);font-size:11px">${Math.round(r.budget/pb*100)}% от плана</span>`:""}</td>
+            </tr>`;
+          }).join("") || `<tr><td class="empty" colspan="6">Нет товаров с планом или выкладками за этот месяц</td></tr>`}
+          ${rows.length ? `<tr style="font-weight:700;border-top:2px solid var(--line-2)">
+            <td>Итого</td><td>${fmtNum(planInt)}</td><td>${factInt}</td>${planProgressCell(factInt, planInt)}
+            <td>${fmtNum(rows.reduce((a,r)=>a+planValue(month,"product",r.barcode,"budget"),0))} ₸</td>
+            <td>${fmtNum(rows.reduce((a,r)=>a+r.budget,0))} ₸</td>
+          </tr>` : ""}
+        </tbody>
+      </table></div>
+      <div class="login-hint" style="margin-top:10px">
+        Товара нет в списке? Добавьте план по ШК:
+        <input id="plan-new-barcode" placeholder="ШК" style="max-width:160px">
+        <button class="btn btn-ghost btn-sm" id="plan-add-product">Добавить строку</button>
+      </div>
+    </div>
+  `;
+}
+function tplMicroPlanProducts(month){
+  if(!month) return `
+    <div class="panel"><div class="panel-title">🎯 План по товарам (микро)</div>
+      <div class="login-hint">Выберите месяц вверху страницы — план ставится на конкретный месяц.</div>
+    </div>`;
+  const rows = microPlanProductRows(month);
+  const planInt = rows.reduce((a,r)=>a+planValue(month,"product",r.barcode,"integrations"),0);
+  const factInt = rows.reduce((a,r)=>a+r.integrations,0);
+  return `
+    <div class="panel">
+      <div class="panel-title">
+        🎯 План по товарам (микро) · ${escapeHtml(monthLabel(month))}
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">кликните по числу в колонке «План», чтобы поставить или изменить</span>
+      </div>
+      <div class="login-hint" style="margin-bottom:10px">
+        Факт считается только по микро-каналу. В список попадают товары,
+        по которым в этом месяце есть план или уже были выкладки.
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Товар</th><th>План интеграций</th><th>Факт</th><th>Выполнение</th><th>План бюджета</th><th>Факт бюджета</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r=>{
+            const pi = planValue(month,"productMicro",r.barcode,"integrations");
+            const pb = planValue(month,"productMicro",r.barcode,"budget");
+            const sched = productScheduledMicro(month, r.barcode);
+            return `<tr>
+              <td>${escapeHtml(r.name)}<br><span style="color:var(--ink-mute);font-size:11px">ШК ${escapeHtml(r.barcode)}</span></td>
+              ${planCell(month,"productMicro",r.barcode,"integrations",{auto:sched.integrations})}
+              <td>${r.integrations}</td>
+              ${planProgressCell(r.integrations, pi)}
+              ${planCell(month,"productMicro",r.barcode,"budget",{money:true, auto:sched.budget})}
+              <td>${fmtNum(r.budget)} ₸${pb?`<br><span style="color:var(--ink-mute);font-size:11px">${Math.round(r.budget/pb*100)}% от плана</span>`:""}</td>
+            </tr>`;
+          }).join("") || `<tr><td class="empty" colspan="6">Нет товаров с планом или выкладками за этот месяц</td></tr>`}
+          ${rows.length ? `<tr style="font-weight:700;border-top:2px solid var(--line-2)">
+            <td>Итого</td><td>${fmtNum(planInt)}</td><td>${factInt}</td>${planProgressCell(factInt, planInt)}
+            <td>${fmtNum(rows.reduce((a,r)=>a+planValue(month,"product",r.barcode,"budget"),0))} ₸</td>
+            <td>${fmtNum(rows.reduce((a,r)=>a+r.budget,0))} ₸</td>
+          </tr>` : ""}
+        </tbody>
+      </table></div>
+      <div class="login-hint" style="margin-top:10px">
+        Товара нет в списке? Добавьте план по ШК:
+        <input id="plan-new-barcode" placeholder="ШК" style="max-width:160px">
+        <button class="btn btn-ghost btn-sm" id="plan-add-product">Добавить строку</button>
+      </div>
+    </div>
+  `;
+}
+/* Панель "План продаж по инфлюенс-маркетингу": бюджет когорты превращается в две планки выручки.
+     "в ноль" = бюджет ÷ маржа       — валовая прибыль ровно покрывает гонорары;
+     "в плюс" = бюджет ÷ (маржа ÷ 2) — заработали столько же, сколько потратили.
+   Маржа настраивается (по умолчанию 60% грязными). Когорты: топ — крупные интеграции;
+   средний и мелкий — микро, разделённые по сумме оплаты (порог по умолчанию 200 000 ₸). */
+const PLAN_COHORTS = [
+  {key:"top",   label:"Топ-блогеры"},
+  {key:"mid",   label:"Средний инфлюенс"},
+  {key:"small", label:"Мелкий инфлюенс"},
+];
+function planMarginPct(){ return planValue("settings","settings","","margin") || 60; }
+function planMidThreshold(){ return planValue("settings","settings","","midThreshold") || 200000; }
+function planTargetFromCost(cost){
+  const m = planMarginPct() / 100;
+  return cost ? Math.round(cost / (m/2)) : 0;
+}
+function avgCheckByBarcode(barcode){
+  if(!barcode) return 0;
+  const events = (DataManager.state.productEvents || []).filter(e=>e.barcode===barcode && e.priceTo);
+  if(!events.length) return 0;
+  events.sort((a,b)=> (a.date||"").localeCompare(b.date||""));
+  return events[events.length-1].priceTo || 0;
+}
+function planUnitsFromContribution(contribution, barcode){
+  const avg = avgCheckByBarcode(barcode);
+  return avg>0 ? Math.round((contribution||0)/avg) : 0;
+}
+// Интеграции, которые относятся к когорте за месяц — общий фильтр для cohortFact и разбивки по товарам.
+function cohortUnits(month, cohort, romi){
+  const th = planMidThreshold();
+  const isAltynay = u => u.type==="large" && u.deal && u.deal.responsible==="Алтынай";
+  if(cohort==="top") return romi.units.filter(u=>u.type==="large" && !isAltynay(u) && (u.date||"").slice(0,7)===month);
+  if(cohort==="mid") return romi.units.filter(u=>(u.date||"").slice(0,7)===month && (isAltynay(u) || (u.type==="micro" && (u.cost||0) >= th)));
+  return romi.units.filter(u=>u.type==="micro" && (u.date||"").slice(0,7)===month && (u.cost||0) < th);
+}
+// Факт по когорте за месяц: людей, бюджет, вклад в продажи.
+function cohortFact(month, cohort, romi){
+  const units = cohortUnits(month, cohort, romi);
+  const names = new Set(units.map(u=>u.deal.blogerLogin || u.deal.blogerName || "—"));
+  return {
+    people: names.size,
+    integrations: units.length,
+    budget: Math.round(units.reduce((a,u)=>a+(u.cost||0),0)),
+    contribution: Math.round(units.reduce((a,u)=>a+(romi.contribution[u.key]||0),0)),
+  };
+}
+// Плановый список сделок когорты за месяц (по план_дате) — не зависит от факта публикации.
+function cohortScheduledList(month, cohort){
+  const th = planMidThreshold();
+  const isAltynay = d => d.responsible==="Алтынай";
+  const mapLarge = d=>({blogerLogin:d.blogerLogin||"—", product:(d.product||"").trim()||"Без товара", barcode:d.barcode||"", cost:d.plannedCost||d.cost||0, contribution:d.plannedContribution||0, status:d.status||"—"});
+  const mapMicro = d=>({blogerLogin:d.blogerLogin||"—", product:(d.product||"").trim()||"Без товара", barcode:d.barcode||"", cost:microDealTotalCost(d), contribution:d.plannedContribution||0, status:d.status||"—"});
+  if(cohort==="top"){
+    return (DataManager.state.influencerDeals||[]).filter(d=>(d.plannedDate||"").slice(0,7)===month && !isAltynay(d)).map(mapLarge);
+  }
+  if(cohort==="mid"){
+    const fromLarge = (DataManager.state.influencerDeals||[]).filter(d=>(d.plannedDate||"").slice(0,7)===month && isAltynay(d)).map(mapLarge);
+    const fromMicro = (DataManager.state.microInfluencerDeals||[]).filter(d=>(d.plannedDate||"").slice(0,7)===month && microDealTotalCost(d) >= th).map(mapMicro);
+    return fromLarge.concat(fromMicro);
+  }
+  return (DataManager.state.microInfluencerDeals||[]).filter(d=>(d.plannedDate||"").slice(0,7)===month && microDealTotalCost(d) < th).map(mapMicro);
+}
+// HTML-список состава когорты по плану — показывается над разбивкой по товарам при разворачивании строки.
+function cohortScheduledListHtml(month, cohort){
+  const list = cohortScheduledList(month, cohort);
+  if(!list.length) return "";
+  const rows = list.slice().sort((a,b)=> b.cost-a.cost);
+  return `<div style="margin-bottom:14px">
+    <div style="font-weight:600;font-size:12.5px;color:var(--ink-mute);margin-bottom:6px">Состав когорты по плану (${rows.length})</div>
+    <table style="width:100%;max-width:620px">
+      <thead><tr>
+        <th style="text-align:left;font-weight:600;color:var(--ink-mute);font-size:12px">Блогер</th>
+        <th style="text-align:left;font-weight:600;color:var(--ink-mute);font-size:12px">Товар</th>
+        <th style="text-align:right;font-weight:600;color:var(--ink-mute);font-size:12px">План расход</th>
+        <th style="text-align:right;font-weight:600;color:var(--ink-mute);font-size:12px">План вклад</th>
+        <th style="text-align:left;font-weight:600;color:var(--ink-mute);font-size:12px">Статус</th>
+      </tr></thead>
+      <tbody>${rows.map(b=>`<tr>
+        <td style="padding:3px 10px 3px 0">${escapeHtml(b.blogerLogin)}</td>
+        <td style="padding:3px 10px 3px 0">${escapeHtml(b.product)}</td>
+        <td style="padding:3px 10px;text-align:right">${fmtNum(b.cost)} ₸</td>
+        <td style="padding:3px 10px;text-align:right">${fmtNum(b.contribution)} ₸</td>
+        <td style="padding:3px 10px">${escapeHtml(b.status||"—")}</td>
+      </tr>`).join("")}</tbody>
+    </table>
+  </div>`;
+}
+
+// Разбивка бюджета/вклада когорты по товарам — открывается по "+" в строке когорты.
+function cohortProductBreakdown(month, cohort, romi){
+  const units = cohortUnits(month, cohort, romi);
+  const byProduct = {};
+  units.forEach(u=>{
+    const name = (u.deal.product || "").trim() || "Без товара";
+    const row = byProduct[name] || (byProduct[name] = {name, integrations:0, budget:0, contribution:0});
+    row.integrations += 1;
+    row.budget += (u.cost||0);
+    row.contribution += (romi.contribution[u.key]||0);
+  });
+  return Object.values(byProduct)
+    .map(r=>Object.assign({}, r, {budget:Math.round(r.budget), contribution:Math.round(r.contribution)}))
+    .sort((a,b)=> b.budget-a.budget);
+}
+function planCellInline(month, scope, key, metric, label){
+  const v = planValue(month, scope, key, metric);
+  return `<span class="plan-cell" data-month="${month}" data-scope="${scope}" data-key="${escapeHtml(key||"")}" data-metric="${metric}"
+    style="cursor:pointer;border-bottom:1px dashed var(--line-2);margin-left:8px"
+    title="Кликните, чтобы изменить">${escapeHtml(label)}: <b>${v?fmtNum(v):"по умолчанию"}</b></span>`;
+}
+function tplPlanSales(month, cohortKeys){
+  if(!month) return "";
+  const cohorts = cohortKeys ? PLAN_COHORTS.filter(c=>cohortKeys.includes(c.key)) : PLAN_COHORTS;
+  const romi = computeUnifiedInfluencerRomi();
+  const margin = planMarginPct() / 100;
+  const rows = cohorts.map(c=>{
+    const f = cohortFact(month, c.key, romi);
+    const planBudget = planValue(month,"cohort",c.key,"budget");
+    return {c, f, planBudget,
+      planPeople: planValue(month,"cohort",c.key,"people"),
+      breakEven: planBudget ? Math.round(planBudget/margin) : 0,
+      target2x:  planBudget ? Math.round(planBudget/(margin/2)) : 0};
+  });
+  const sum = k => rows.reduce((a,r)=> a + (k==="fbudget"?r.f.budget : k==="fpeople"?r.f.people : k==="fcontr"?r.f.contribution : r[k]||0), 0);
+  const verdict = (contr, be, t2) => {
+    if(!be) return `<span style="color:var(--ink-mute)">нет плана</span>`;
+    if(contr >= t2) return `<b style="color:var(--ok)">зарабатываем</b>`;
+    if(contr >= be) return `<b style="color:var(--warn)">отбились</b>`;
+    return `<b style="color:var(--bad)">в минусе</b>`;
+  };
+  return `
+    <div class="panel">
+      <div class="panel-title">
+        🎯 План продаж по инфлюенс-маркетингу · ${escapeHtml(monthLabel(month))}
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">кликните по числу в колонке «План», чтобы изменить</span>
+      </div>
+      <div class="login-hint" style="margin-bottom:10px">
+        «В ноль» = бюджет ÷ ${planMarginPct()}% — валовая прибыль ровно покрывает гонорары.
+        «В плюс ×2» = бюджет ÷ ${Math.round(planMarginPct()/2)}% — заработали столько же, сколько потратили.
+        Настройки: ${planCellInline("settings","settings","","margin","маржа, %")} ${planCellInline("settings","settings","","midThreshold","порог среднего, ₸")}
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th style="width:28px"></th><th>Направление</th><th>План чел.</th><th>Факт чел.</th><th>План бюджета</th><th>Факт бюджета</th>
+          <th>В ноль</th><th>В плюс ×2</th><th>Факт вклада</th><th>Итог</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r=>{
+            const expanded = UI.expandedCohort.has(r.c.key);
+            const breakdown = expanded ? cohortProductBreakdown(month, r.c.key, romi) : [];
+            return `<tr>
+            <td><button class="btn btn-ghost btn-sm cohort-toggle-btn" data-cohort="${r.c.key}" style="padding:2px 9px;line-height:1">${expanded?'−':'+'}</button></td>
+            <td><b>${r.c.label}</b></td>
+            ${planCell(month,"cohort",r.c.key,"people")}
+            <td>${r.f.people}</td>
+            ${planCell(month,"cohort",r.c.key,"budget",{money:true})}
+            <td>${fmtNum(r.f.budget)} ₸</td>
+            <td>${r.breakEven?fmtNum(r.breakEven)+" ₸":"—"}</td>
+            <td>${r.target2x?fmtNum(r.target2x)+" ₸":"—"}</td>
+            <td>${fmtNum(r.f.contribution)} ₸</td>
+            <td>${verdict(r.f.contribution, r.breakEven, r.target2x)}</td>
+          </tr>${expanded ? `<tr>
+            <td></td>
+            <td colspan="9" style="padding:6px 0 16px 0">
+              ${cohortScheduledListHtml(month, r.c.key)}
+              ${breakdown.length ? `<table style="width:100%;max-width:620px">
+                <thead><tr>
+                  <th style="text-align:left;font-weight:600;color:var(--ink-mute);font-size:12px">Товар</th>
+                  <th style="text-align:right;font-weight:600;color:var(--ink-mute);font-size:12px">Интеграций</th>
+                  <th style="text-align:right;font-weight:600;color:var(--ink-mute);font-size:12px">Бюджет</th>
+                  <th style="text-align:right;font-weight:600;color:var(--ink-mute);font-size:12px">Вклад в продажи</th>
+                </tr></thead>
+                <tbody>
+                  ${breakdown.map(b=>`<tr>
+                    <td style="padding:3px 10px 3px 0">${escapeHtml(b.name)}</td>
+                    <td style="padding:3px 10px;text-align:right">${b.integrations}</td>
+                    <td style="padding:3px 10px;text-align:right">${fmtNum(b.budget)} ₸</td>
+                    <td style="padding:3px 0;text-align:right;font-weight:600">${fmtNum(b.contribution)} ₸</td>
+                  </tr>`).join("")}
+                </tbody>
+              </table>` : `<div class="login-hint">Нет интеграций в этой когорте за месяц</div>`}
+            </td>
+          </tr>` : ""}`;
+          }).join("")}
+          <tr style="font-weight:700;border-top:2px solid var(--line-2)">
+            <td></td>
+            <td>Всего</td>
+            <td>${fmtNum(sum("planPeople"))}</td><td>${sum("fpeople")}</td>
+            <td>${fmtNum(sum("planBudget"))} ₸</td><td>${fmtNum(sum("fbudget"))} ₸</td>
+            <td>${fmtNum(sum("breakEven"))} ₸</td><td>${fmtNum(sum("target2x"))} ₸</td>
+            <td>${fmtNum(sum("fcontr"))} ₸</td>
+            <td>${verdict(sum("fcontr"), sum("breakEven"), sum("target2x"))}</td>
+          </tr>
+        </tbody>
+      </table></div>
+      ${cohorts.some(c=>c.key==="small") ? `<div class="login-hint" style="margin-top:10px">
+        Мелкий инфлюенс смотрим когортой целиком: 150 человек поштучно почти не окупаются,
+        важно, дала ли вся группа свою планку.
+      </div>` : ""}
+    </div>
+  `;
+}
+function wirePlanCells(){
+  document.querySelectorAll(".plan-cell").forEach(cell=>{
+    cell.onclick = ()=>{
+      if(cell.querySelector("input")) return;
+      const d = cell.dataset;
+      const current = planValue(d.month, d.scope, d.key, d.metric) || (parseInt(cell.dataset.auto,10)||0);
+      cell.innerHTML = `<input type="number" value="${current||""}" style="width:110px;padding:2px 6px" />`;
+      const input = cell.querySelector("input");
+      input.focus(); input.select();
+      let done = false;
+      const save = async ()=>{
+        if(done) return; done = true;
+        const value = parseInt(input.value,10)||0;
+        try{
+          await Api.savePlans([{month:d.month, scope:d.scope, key:d.key, metric:d.metric, value}]);
+          await DataManager.refresh(); renderDeskTab();
+        }catch(e){ toast(e.message, true); renderDeskTab(); }
+      };
+      input.onkeydown = e=>{
+        if(e.key==="Enter"){ e.preventDefault(); save(); }
+        if(e.key==="Escape"){ done = true; renderDeskTab(); }
+      };
+      input.onblur = save;
+    };
+  });
+  document.querySelectorAll(".cohort-toggle-btn").forEach(btn=>{
+    btn.onclick = ()=>{
+      const key = btn.dataset.cohort;
+      if(UI.expandedCohort.has(key)) UI.expandedCohort.delete(key);
+      else UI.expandedCohort.add(key);
+      renderDeskTab();
+    };
+  });
+  document.querySelectorAll(".colgroup-toggle-btn").forEach(btn=>{
+    btn.onclick = ()=>{
+      const key = btn.dataset.group;
+      if(UI.collapsedColGroups.has(key)) UI.collapsedColGroups.delete(key);
+      else UI.collapsedColGroups.add(key);
+      renderDeskTab();
+    };
+  });
+  const addBtn = document.getElementById("plan-add-product");
+  if(addBtn) addBtn.onclick = async ()=>{
+    const bc = document.getElementById("plan-new-barcode").value.trim();
+    if(!bc){ toast("Укажите ШК", true); return; }
+    const month = UI.tab==="microInfluencers" ? UI.microMonth : UI.inflMonth;
+    if(!month){ toast("Сначала выберите месяц", true); return; }
+    try{
+      await withBusy(addBtn, ()=> Api.savePlans([{month, scope: UI.tab==="microInfluencers" ? "productMicro" : "product", key:bc, metric:"integrations", value:1}]));
+      await DataManager.refresh(); renderDeskTab();
+    }catch(e){ toast(e.message, true); }
+  };
+}
+/* ---------- События по товарам ----------
+   Смена цены, акция или реклама на Kaspi двигают продажи не хуже блогера. Отмечаем такие
+   события здесь — и расчёт вклада перестаёт сравнивать дни после события с уровнем до него.
+   Пока после события не наберутся новые "чистые" дни (без выкладок рядом), вклад по этому
+   товару не начисляется никому: рост честно остаётся неопознанным. */
+const PRODUCT_EVENT_TYPES = ["Смена цены","Акция","Реклама Kaspi","Другое"];
+function tplProductEvents(){
+  const events = (DataManager.state.productEvents || []).slice().sort((a,b)=> b.date.localeCompare(a.date));
+  const nameByBarcode = {};
+  DataManager.state.salesByDay.forEach(s=>{ const b=(s.barcode||"").trim(); if(b && !nameByBarcode[b]) nameByBarcode[b] = s.product; });
+  return `
+    <div class="panel">
+      <div class="panel-title">
+        📉 События по товарам
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">смена цены, акция, реклама Kaspi — то, что двигает продажи помимо блогеров</span>
+      </div>
+      <div class="login-hint" style="margin-bottom:10px">
+        Отметьте событие — и с этой даты расчёт перестанет сравнивать продажи с прежним уровнем.
+        Пока после события не наберутся дни без выкладок, вклад по товару не начисляется никому.
+        Пример: 19.08 цену на Коллаген+Биотин снизили с 7000 до 5900 ₸, продажи выросли в 2,5 раза —
+        без отметки этот рост уходил блогерам, которые к нему непричастны.
+      </div>
+      <div class="toolbar" style="margin-bottom:12px;flex-wrap:wrap">
+        <input id="pe-barcode" placeholder="ШК товара" style="max-width:170px">
+        <input id="pe-date" type="date" value="${todayStr()}">
+        <select id="pe-type">${PRODUCT_EVENT_TYPES.map(t=>`<option>${t}</option>`).join("")}</select>
+        <input id="pe-from" type="number" placeholder="цена была" style="max-width:120px">
+        <input id="pe-to" type="number" placeholder="стала" style="max-width:110px">
+        <input id="pe-note" placeholder="комментарий" style="max-width:220px">
+        <button class="btn btn-primary btn-sm" id="pe-add">+ Событие</button>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Дата</th><th>Товар</th><th>Тип</th><th>Цена</th><th>Комментарий</th><th></th></tr></thead>
+        <tbody>
+          ${events.map(e=>`<tr>
+            <td>${escapeHtml(e.date)}</td>
+            <td>${escapeHtml(nameByBarcode[e.barcode] || "—")}<br><span style="color:var(--ink-mute);font-size:11px">ШК ${escapeHtml(e.barcode)}</span></td>
+            <td>${escapeHtml(e.type||"—")}</td>
+            <td>${e.priceFrom||e.priceTo ? fmtNum(e.priceFrom)+" → "+fmtNum(e.priceTo)+" ₸" : "—"}</td>
+            <td>${escapeHtml(e.note||"")}</td>
+            <td><button class="btn btn-danger btn-sm pe-del-btn" data-id="${e.id}">✕</button></td>
+          </tr>`).join("") || `<tr><td class="empty" colspan="6">Событий пока нет</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+  `;
+}
 function tplInfluencerDeals(){
   const s = influencerSummary();
   const {salesByDay} = DataManager.state;
@@ -3244,6 +3810,9 @@ function tplInfluencerDeals(){
 
   return `
     ${tplInfluencerBrandDashboard(s.rows)}
+    ${tplPlanSales(UI.inflMonth, ["top","mid"])}
+    ${tplPlanProducts(UI.inflMonth)}
+    ${tplProductEvents()}
     ${tplInfluencerCompare(s.rows)}
 
     <div class="toolbar" style="margin-bottom:8px;align-items:center;flex-wrap:wrap">
@@ -3305,12 +3874,28 @@ function tplInfluencerDeals(){
         </select>
       </div>
       <div class="table-wrap"><table>
-        <thead><tr>
+        <thead>
+        ${(()=>{
+          const datesCollapsed = UI.collapsedColGroups.has("infl-dates");
+          const reachCollapsed = UI.collapsedColGroups.has("infl-reach");
+          const groupBtn = (key, label, collapsed)=> `<th colspan="${collapsed?1:2}" style="text-align:center;padding:3px;background:var(--action-soft);border-bottom:none">
+            <button class="btn btn-ghost btn-sm colgroup-toggle-btn" data-group="${key}" style="padding:1px 8px;font-size:11px;line-height:1.4">${collapsed?'+ '+label:'− '+label}</button>
+          </th>`;
+          return `<tr class="col-group-bar">
+            <th colspan="4" style="border:none;background:transparent"></th>
+            ${groupBtn("infl-dates","Даты",datesCollapsed)}
+            ${groupBtn("infl-reach","Охваты",reachCollapsed)}
+            <th colspan="5" style="border:none;background:transparent"></th>
+          </tr>`;
+        })()}
+        <tr>
           <!-- Колонка "Блогер" закреплена (sticky-col): таблица широкая, и при горизонтальном
                скролле вправо без этого не видно, чья строка. Так же сделано в микро/средних и в
                "Сводном отчёте". -->
-          <th class="sticky-col">Блогер</th><th>Ответственный</th><th>Платформа</th><th>Продукт</th><th>Дата план</th><th>Дата факт</th>
-          <th>План охват/клики</th><th>Факт охват/клики</th><th>План/факт расход</th><th>Вклад в продажи</th><th>ROMI</th><th>Статус</th><th></th>
+          <th class="sticky-col">Блогер</th><th>Ответственный</th><th>Платформа</th><th>Продукт</th>
+          ${UI.collapsedColGroups.has("infl-dates") ? `<th title="Дата план / Дата факт свёрнуты">Даты</th>` : `<th>Дата план</th><th>Дата факт</th>`}
+          ${UI.collapsedColGroups.has("infl-reach") ? `<th title="План охват/клики / Факт охват/клики свёрнуты">Охваты</th>` : `<th>План охват/клики</th><th>Факт охват/клики</th>`}
+          <th>План/факт расход</th><th>Вклад в продажи<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-mute)">план / факт</span></th><th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th><th>ROMI</th><th>Статус</th><th></th>
         </tr></thead>
         <tbody>
           ${rows.map(r=>{
@@ -3320,20 +3905,34 @@ function tplInfluencerDeals(){
               <td>${d.responsible ? escapeHtml(d.responsible) : `<span style="color:var(--ink-mute)">—</span>`}</td>
               <td>${escapeHtml(d.platform)}</td>
               <td>${escapeHtml(d.product)}${d.barcode?`<br><span style="color:var(--ink-mute);font-size:11px">ШК ${escapeHtml(d.barcode)}</span>`:""}</td>
-              <td>${escapeHtml(d.plannedDate||"—")}</td>
-              <td>${escapeHtml(d.publishedDate||"—")}</td>
-              <td>${fmtNum(d.plannedReach)} / ${fmtNum(d.plannedClicks)}</td>
-              <td>${fmtNum(d.reach)} / ${fmtNum(d.clicks)}</td>
+              ${UI.collapsedColGroups.has("infl-dates") ? `<td style="color:var(--ink-mute);text-align:center">⋯</td>` : `<td>${escapeHtml(d.plannedDate||"—")}</td><td>${escapeHtml(d.publishedDate||"—")}</td>`}
+              ${UI.collapsedColGroups.has("infl-reach") ? `<td style="color:var(--ink-mute);text-align:center">⋯</td>` : `<td>${fmtNum(d.plannedReach)} / ${fmtNum(d.plannedClicks)}</td><td>${fmtNum(d.reach)} / ${fmtNum(d.clicks)}</td>`}
               <td>${fmtNum(d.plannedCost)} / ${fmtNum(d.cost)} ₸</td>
-              <td>${r.hasBaseline ? fmtNum(r.netContribution)+" ₸" : `<span style="color:var(--ink-mute)">нет данных</span>`}</td>
-              <td>${r.romi==null ? "—" : `<b style="color:${r.romi>=1?'var(--ok)':'var(--warn)'}">${r.romi.toFixed(2)}</b>`}</td>
+              <td>
+                ${(()=>{
+                  const spend = d.plannedCost || d.cost || 0;
+                  const auto = !d.plannedContribution ? planTargetFromCost(spend) : 0;
+                  const editVal = d.plannedContribution || auto;
+                  const label = d.plannedContribution ? fmtNum(d.plannedContribution)
+                    : (auto ? `<span style="color:var(--ink-mute)" title="Автоподсказка: расход ÷ (маржа/2), как в плане продаж. Кликните, чтобы поправить.">≈${fmtNum(auto)}</span>` : "—");
+                  return inlineEditSpan(label, d.id, "plannedContribution", editVal, "number");
+                })()}
+                <span style="color:var(--ink-mute)"> / </span>
+                ${r.hasBaseline ? `<b>${fmtNum(r.netContribution)}</b>${r.capped?' <span title="Вклад ограничен потолком правдоподобия по охвату — реальный прирост продаж в эти дни объясняется другим фактором, не этой интеграцией" style="cursor:help">⚠️</span>':''}` : `<span style="color:var(--ink-mute)">нет данных</span>`}
+                ${d.plannedContribution && r.hasBaseline ? `<br><span style="font-size:11px;color:${r.netContribution>=d.plannedContribution?'var(--ok)':'var(--bad)'}">${Math.round(r.netContribution/d.plannedContribution*100)}% от плана</span>` : ""}
+              </td>
+              <td style="text-align:right">${(()=>{
+              const contrib = d.plannedContribution || planTargetFromCost(d.plannedCost||d.cost||0);
+              const units = planUnitsFromContribution(contrib, d.barcode);
+              return units ? fmtNum(units) : `<span style="color:var(--ink-mute)" title="Нет цены товара по этому ШК — добавьте в «Динамика цен»">—</span>`;
+            })()}</td><td>${r.romi==null ? "—" : `<b style="color:${r.romi>=1?'var(--ok)':'var(--warn)'}">${r.romi.toFixed(2)}</b>`}</td>
               <td><select class="deal-status-select" data-id="${d.id}">${DEAL_STATUSES.map(st=>`<option ${st===d.status?'selected':''}>${st}</option>`).join("")}</select></td>
               <td>
                 <button class="btn btn-ghost btn-sm edit-deal-btn" data-id="${d.id}">✎</button>
                 <button class="btn btn-danger btn-sm del-deal-btn" data-id="${d.id}">✕</button>
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="13">${s.rows.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="${14 - (UI.collapsedColGroups.has("infl-dates")?1:0) - (UI.collapsedColGroups.has("infl-reach")?1:0)}">${s.rows.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -3444,7 +4043,9 @@ function tplMicroInfluencers(){
     ${tplMicroInfluencerBrandDashboard(s.romiRows)}
     ${tplMicroInfluencerCompare(s.romiRows)}
     ${tplMicroBloggerSummary()}
+    ${tplPlanSales(UI.microMonth, ["small"])}
     ${tplMicroResponsibleSummary()}
+    ${tplMicroPlanProducts(UI.microMonth)}
     ${tplMicroCategorySummary()}
 
     <div class="toolbar" style="margin-bottom:8px;align-items:center;flex-wrap:wrap">
@@ -3558,7 +4159,7 @@ function tplMicroInfluencers(){
           <th>#</th>
           <th class="sticky-col">Блогер</th><th>Категория блогера</th><th>Ответственный</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
           ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
-          ${sortableTh("Вклад в продажи","sales",mf.sort)}${sortableTh("ROMI","romi",mf.sort)}
+          ${sortableTh("Вклад в продажи (план/факт)","sales",mf.sort)}<th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th>${sortableTh("ROMI","romi",mf.sort)}
           <th>Статус товара</th><th>Статус видео</th><th>Плановая дата</th><th>Дата выкладки</th><th>Ссылка на Reels</th><th></th>
         </tr></thead>
         <tbody>
@@ -3582,8 +4183,22 @@ function tplMicroInfluencers(){
               <td>${inlineEditSpan(escapeHtml(d.paymentStatus||"—"), d.id, 'paymentStatus', d.paymentStatus||'', 'select', MICRO_PAYMENT_STATUSES)}</td>
               <td>${inlineEditSpan(fmtNum(factReach), d.id, 'factReachTotal', factReach, 'number')}</td>
               <td title="Считается автоматически: (сумма + стоимость товара) ÷ факт.охват">${cpv==null?"—":cpv.toFixed(3)+" ₸"}</td>
-              <td title="Считается автоматически из продаж по ШК (импорт по вторникам) — вручную не редактируется">${!d.barcode ? '<span style="color:var(--ink-mute)">нет ШК</span>' : (hasBaseline ? fmtNum(r.netContribution)+" ₸" : '<span style="color:var(--ink-mute)">—</span>')}</td>
-              <td title="Считается автоматически: вклад в продажи ÷ (сумма + стоимость товара)">${(r && r.romi!=null) ? r.romi.toFixed(2) : "—"}</td>
+              <td>
+                ${(()=>{
+                  const auto = !d.plannedContribution ? planTargetFromCost(microDealTotalCost(d)) : 0;
+                  const editVal = d.plannedContribution || auto;
+                  const label = d.plannedContribution ? fmtNum(d.plannedContribution)
+                    : (auto ? `<span style="color:var(--ink-mute)" title="Автоподсказка: сумма+товар ÷ (маржа/2), как в плане продаж. Кликните, чтобы поправить.">≈${fmtNum(auto)}</span>` : "—");
+                  return inlineEditSpan(label, d.id, "plannedContribution", editVal, "number");
+                })()}
+                <span style="color:var(--ink-mute)"> / </span>
+                <span title="Считается автоматически из продаж по ШК (импорт по вторникам) — вручную не редактируется">${!d.barcode ? '<span style="color:var(--ink-mute)">нет ШК</span>' : (hasBaseline ? fmtNum(r.netContribution)+" ₸"+(r.capped?' <span title="Вклад ограничен потолком правдоподобия по охвату — реальный прирост продаж в эти дни объясняется другим фактором, не этой интеграцией" style="cursor:help">⚠️</span>':"") : '<span style="color:var(--ink-mute)">—</span>')}</span>
+              </td>
+              <td style="text-align:right">${(()=>{
+                const contrib = d.plannedContribution || planTargetFromCost(microDealTotalCost(d));
+                const units = planUnitsFromContribution(contrib, d.barcode);
+                return units ? fmtNum(units) : `<span style="color:var(--ink-mute)" title="Нет цены товара по этому ШК — добавьте в «Динамика цен»">—</span>`;
+              })()}</td><td title="Считается автоматически: вклад в продажи ÷ (сумма + стоимость товара)">${(r && r.romi!=null) ? r.romi.toFixed(2) : "—"}</td>
               <td>${inlineEditSpan(escapeHtml(d.productStatus||"—"), d.id, 'productStatus', d.productStatus||'', 'select', MICRO_PRODUCT_STATUSES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.videoStatus||"—"), d.id, 'videoStatus', d.videoStatus||'', 'select', MICRO_VIDEO_STATUSES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.plannedDate||"—"), d.id, 'plannedDate', d.plannedDate||'', 'date')}</td>
@@ -3596,7 +4211,7 @@ function tplMicroInfluencers(){
                 <button class="btn btn-danger btn-sm del-micro-btn" data-id="${d.id}">✕</button>
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="22">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="23">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -4353,7 +4968,7 @@ function knownProductNames(){
 }
 function modalDeal(existing){
   const isEdit = !!existing;
-  const d = existing || {blogerLogin:"", platform:PLATFORMS[0], product:"", barcode:"", responsible:"", plannedDate:"", publishedDate:"", plannedReach:0, plannedClicks:0, reach:0, clicks:0, likes:0, comments:0, saves:0, cost:0, plannedCost:0, notes:""};
+  const d = existing || {blogerLogin:"", platform:PLATFORMS[0], product:"", barcode:"", responsible:"", plannedDate:"", publishedDate:"", plannedReach:0, plannedClicks:0, reach:0, clicks:0, likes:0, comments:0, saves:0, cost:0, plannedCost:0, plannedContribution:0, notes:""};
   const botHint = d.lastUpdatedFrom==="telegram"
     ? `<div class="login-hint">Последнее обновление — из Telegram-бота (${escapeHtml((d.lastUpdatedAt||"").replace("T"," ").slice(0,16))}). Лайки/комментарии/сохранения ниже — из распознанного скриншота.</div>`
     : "";
@@ -4375,6 +4990,7 @@ function modalDeal(existing){
       <div class="field"><label>Комментарии</label><input id="m-comments" type="number" value="${d.comments||0}"></div>
       <div class="field"><label>Сохранения</label><input id="m-saves" type="number" value="${d.saves||0}"></div>
       <div class="field"><label>План расход, ₸</label><input id="m-planned-cost" type="number" value="${d.plannedCost||0}"></div>
+      <div class="field"><label>План вклада в продажи, ₸ <span style="font-weight:400;color:var(--ink-mute)">(авто: расход ÷ маржа/2, можно поправить)</span></label><input id="m-planned-contribution" type="number" value="${d.plannedContribution || planTargetFromCost(d.plannedCost||d.cost||0)}"></div>
       <div class="field"><label>Факт расход, ₸</label><input id="m-cost" type="number" value="${d.cost||0}"></div>
     </div>
     <datalist id="product-suggestions">${knownProductNames().map(p=>`<option value="${escapeHtml(p)}">`).join("")}</datalist>
@@ -4404,6 +5020,7 @@ function modalDeal(existing){
       comments: parseInt(document.getElementById("m-comments").value,10)||0,
       saves: parseInt(document.getElementById("m-saves").value,10)||0,
       plannedCost: parseInt(document.getElementById("m-planned-cost").value,10)||0,
+      plannedContribution: parseInt(document.getElementById("m-planned-contribution").value,10)||0,
       cost: parseInt(document.getElementById("m-cost").value,10)||0,
       notes: document.getElementById("m-notes").value.trim(),
     };
@@ -5078,6 +5695,43 @@ function wireDeskTab(){
     document.getElementById("new-deal-btn").onclick = ()=> modalDeal(null);
     document.getElementById("new-sale-btn").onclick = ()=> modalSale();
 
+    wirePlanCells();
+
+    wireInlineEdit(document.getElementById("main"), async (id, field, value)=>{
+      await Api.updateDeal(id, {[field]: value});
+      await DataManager.refresh(); renderDeskTab();
+    });
+
+    // События по товарам (см. tplProductEvents) — влияют на расчёт вклада, поэтому после
+    // добавления/удаления обязательно перечитываем состояние и перерисовываем страницу.
+    const peAdd = document.getElementById("pe-add");
+    if(peAdd) peAdd.onclick = async ()=>{
+      const barcode = document.getElementById("pe-barcode").value.trim();
+      const date = document.getElementById("pe-date").value;
+      if(!barcode || !date){ toast("Укажите ШК и дату", true); return; }
+      try{
+        await withBusy(peAdd, ()=> Api.createProductEvent({
+          barcode, date,
+          type: document.getElementById("pe-type").value,
+          priceFrom: parseInt(document.getElementById("pe-from").value,10)||0,
+          priceTo: parseInt(document.getElementById("pe-to").value,10)||0,
+          note: document.getElementById("pe-note").value.trim(),
+        }));
+        toast("Событие добавлено — вклад пересчитан");
+        await DataManager.refresh(); renderDeskTab();
+      }catch(e){ toast(e.message, true); }
+    };
+    document.querySelectorAll(".pe-del-btn").forEach(btn=>{
+      btn.onclick = async ()=>{
+        try{
+          await withBusy(btn, ()=> Api.deleteProductEvent(parseInt(btn.dataset.id,10)));
+          toast("Событие удалено — вклад пересчитан");
+          await DataManager.refresh(); renderDeskTab();
+        }catch(e){ toast(e.message, true); }
+      };
+    });
+
+
     const inflSearch = document.getElementById("infl-search");
     wireSearchOnEnter(inflSearch, v=>{ UI.inflFilter.search = v; renderDeskTab(); });
     document.getElementById("infl-sort").onchange = e=>{ UI.inflFilter.sort = e.target.value; renderDeskTab(); };
@@ -5164,7 +5818,7 @@ function wireDeskTab(){
     // расходился с тем, что маркетолог видит на экране.
     document.getElementById("export-deal-csv-btn").onclick = ()=>{
       const rows = filteredInfluencerDealRows();
-      const header = ["блогер","ответственный","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","вклад_в_продажи","romi","статус"];
+      const header = ["блогер","ответственный","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","план_вклад","вклад_в_продажи","romi","статус"];
       const lines = [header.map(csvEscape).join(",")];
       rows.forEach(r=>{
         const d = r.deal;
@@ -5172,7 +5826,7 @@ function wireDeskTab(){
           d.blogerLogin, d.responsible||"", d.platform, d.product, d.barcode||"",
           d.plannedDate||"", d.publishedDate||"",
           d.plannedReach||0, d.plannedClicks||0, d.reach||0, d.clicks||0,
-          d.plannedCost||0, d.cost||0,
+          d.plannedCost||0, d.cost||0, d.plannedContribution||0,
           r.hasBaseline ? r.netContribution : "нет данных",
           r.romi==null ? "" : r.romi.toFixed(2),
           d.status
@@ -5207,6 +5861,7 @@ function wireDeskTab(){
 
   else if(UI.tab==="microInfluencers"){
     document.getElementById("new-micro-btn").onclick = ()=> modalMicroDeal(null);
+    wirePlanCells();
 
     const microSearch = document.getElementById("micro-search");
     wireSearchOnEnter(microSearch, v=>{ UI.microFilter.search = v; renderDeskTab(); });
@@ -6190,6 +6845,37 @@ async function runSelfTests(){
       } finally { UI.microResponsibleMonth = savedMonth; }
     } finally {
       DataManager.state.microInfluencerDeals = saved;
+    }
+  });
+  TestSuite.test("События по товару: после смены цены рост не приписывается блогерам, пока не наберутся новые чистые дни", ()=>{
+    const savedDeals = DataManager.state.influencerDeals;
+    const savedMicro = DataManager.state.microInfluencerDeals;
+    const savedSales = DataManager.state.salesByDay;
+    const savedEvents = DataManager.state.productEvents;
+    try{
+      DataManager.state.influencerDeals = [];
+      DataManager.state.microInfluencerDeals = [
+        {id:9902, blogerName:"@после_цены", product:"ЦенаТовар", barcode:"", publishDate:"2026-03-11", cost:1000},
+      ];
+      const sales=[]; let id=9950;
+      const push=(d,v)=>sales.push({id:id++, date:d, product:"ЦенаТовар", revenue:v});
+      for(let i=1;i<=9;i++) push("2026-03-0"+i, 100);
+      ["2026-03-10","2026-03-11","2026-03-12","2026-03-13"].forEach(d=>push(d,500));
+      DataManager.state.salesByDay = sales;
+      DataManager.state.productEvents = [];
+      const bez = computeUnifiedInfluencerRomi().contribution["micro:9902"];
+      if(!(bez > 500)) throw new Error("без события модель должна отдать рост блогеру: "+bez);
+      DataManager.state.productEvents = [{id:1, barcode:"ЦенаТовар", date:"2026-03-10", type:"Смена цены", priceFrom:7000, priceTo:5900, note:""}];
+      const s2 = computeUnifiedInfluencerRomi().contribution["micro:9902"];
+      if(s2 !== 0) throw new Error("после события вклад не должен начисляться: "+s2);
+      DataManager.state.productEvents = [{id:2, barcode:"ЧужойТовар", date:"2026-03-10", type:"Смена цены"}];
+      const other = computeUnifiedInfluencerRomi().contribution["micro:9902"];
+      if(Math.abs(other - bez) > 1) throw new Error("событие по другому товару не должно менять расчёт: "+other);
+    } finally {
+      DataManager.state.influencerDeals = savedDeals;
+      DataManager.state.microInfluencerDeals = savedMicro;
+      DataManager.state.salesByDay = savedSales;
+      DataManager.state.productEvents = savedEvents;
     }
   });
   TestSuite.test("computeUnifiedInfluencerRomi: скользящая база — день сравнивается с недавним уровнем товара, а не с уровнем двухмесячной давности", ()=>{
