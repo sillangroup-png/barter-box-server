@@ -1143,8 +1143,12 @@ function computeUnifiedInfluencerRomi(){
       const base = rolling[s.date]==null ? fallback : rolling[s.date];
       const uplift = Math.max(0, s.revenue - base);
       if(uplift<=0) return;
+      // noImpact — ручная отметка "по факту всплеска продаж от этой интеграции не было"
+      // (ставится менеджером после мониторинга, см. пример 01.09: Нагимуша постила утром,
+      // реального всплеска не было, всплеск вечером дала Дина Сатжан — без этой отметки
+      // модель делит прирост дня 50/50 между обеими только по факту "тот же день").
       const active = units
-        .filter(u=>u.matchKey===matchKey && u.date)
+        .filter(u=>u.matchKey===matchKey && u.date && !u.deal.noImpact)
         .map(u=>({u, diff: daysBetween(s.date, u.date)}))
         .filter(x=>x.diff>=0 && x.diff<=2)
         .map(x=>({u:x.u, w: decayWeight(x.diff)}));
@@ -1160,7 +1164,13 @@ function computeUnifiedInfluencerRomi(){
   // одной небольшой интеграции весь прирост дня, вызванный посторонним фактором —
   // см. пример @cool_zhan_ (коллаген+биотин, 28.08): 2017 охвата не могут физически
   // объяснить более миллиона тенге вклада.
-  const CONTRIB_CONV_CEILING = 0.05; // не более 5% охвата конвертится в покупку по полной цене
+  // Потолок разный для крупных и мелких/средних: у крупных охват и стоимость обычно точнее
+  // задокументированы, у мелких/средних выше риск, что чужой посторонний всплеск продаж
+  // случайно совпал по дате с маленькой интеграцией — см. пример thataigerim (охват 3936,
+  // 08.09): при 5% потолок давал 1 161 120 ₸ на интеграцию за 41 000 ₸ — неправдоподобно много
+  // для такого маленького блогера. Поэтому для мелких/средних потолок строже, 1%.
+  const CONTRIB_CONV_CEILING_LARGE = 0.05; // крупные: не более 5% охвата конвертится в покупку
+  const CONTRIB_CONV_CEILING_MICRO = 0.01; // мелкие/средние: не более 1% охвата конвертится в покупку
   const cappedKeys = new Set();
   units.forEach(u=>{
     const reach = u.type==="large" ? (u.deal.reach||0) : ((u.deal.factReachReels||0)+(u.deal.factReachTT||0));
@@ -1172,7 +1182,8 @@ function computeUnifiedInfluencerRomi(){
     }
     const avgCheck = avgCheckByBarcode(u.deal.barcode);
     if(!avgCheck) return;
-    const ceiling = reach * avgCheck * CONTRIB_CONV_CEILING;
+    const ceilingPct = u.type==="large" ? CONTRIB_CONV_CEILING_LARGE : CONTRIB_CONV_CEILING_MICRO;
+    const ceiling = reach * avgCheck * ceilingPct;
     if(contribution[u.key] > ceiling){
       contribution[u.key] = ceiling;
       cappedKeys.add(u.key);
@@ -3920,6 +3931,7 @@ function tplInfluencerDeals(){
                 <span style="color:var(--ink-mute)"> / </span>
                 ${r.hasBaseline ? `<b>${fmtNum(r.netContribution)}</b>${r.capped?' <span title="Вклад ограничен потолком правдоподобия по охвату — реальный прирост продаж в эти дни объясняется другим фактором, не этой интеграцией" style="cursor:help">⚠️</span>':''}` : `<span style="color:var(--ink-mute)">нет данных</span>`}
                 ${d.plannedContribution && r.hasBaseline ? `<br><span style="font-size:11px;color:${r.netContribution>=d.plannedContribution?'var(--ok)':'var(--bad)'}">${Math.round(r.netContribution/d.plannedContribution*100)}% от плана</span>` : ""}
+                <br>${inlineEditSpan(d.noImpact==='Да' ? '<span style="color:var(--bad);font-size:10.5px" title="Отмечено вручную: реального всплеска продаж не было — эта интеграция исключена из расчёта вклада">🚫 нет всплеска</span>' : '<span style="color:var(--ink-mute);font-size:10.5px;text-decoration:underline dotted;cursor:pointer" title="Отметить вручную, если по факту мониторинга всплеска продаж не было">отметить: нет всплеска</span>', d.id, 'noImpact', d.noImpact||'Нет', 'select', ['Нет','Да'])}
               </td>
               <td style="text-align:right">${(()=>{
               const contrib = d.plannedContribution || planTargetFromCost(d.plannedCost||d.cost||0);
@@ -4193,6 +4205,7 @@ function tplMicroInfluencers(){
                 })()}
                 <span style="color:var(--ink-mute)"> / </span>
                 <span title="Считается автоматически из продаж по ШК (импорт по вторникам) — вручную не редактируется">${!d.barcode ? '<span style="color:var(--ink-mute)">нет ШК</span>' : (hasBaseline ? fmtNum(r.netContribution)+" ₸"+(r.capped?' <span title="Вклад ограничен потолком правдоподобия по охвату — реальный прирост продаж в эти дни объясняется другим фактором, не этой интеграцией" style="cursor:help">⚠️</span>':"") : '<span style="color:var(--ink-mute)">—</span>')}</span>
+                <br>${inlineEditSpan(d.noImpact==='Да' ? '<span style="color:var(--bad);font-size:10.5px" title="Отмечено вручную: реального всплеска продаж не было — эта интеграция исключена из расчёта вклада">🚫 нет всплеска</span>' : '<span style="color:var(--ink-mute);font-size:10.5px;text-decoration:underline dotted;cursor:pointer" title="Отметить вручную, если по факту мониторинга всплеска продаж не было">отметить: нет всплеска</span>', d.id, 'noImpact', d.noImpact||'Нет', 'select', ['Нет','Да'])}
               </td>
               <td style="text-align:right">${(()=>{
                 const contrib = d.plannedContribution || planTargetFromCost(microDealTotalCost(d));
