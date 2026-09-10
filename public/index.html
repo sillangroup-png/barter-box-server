@@ -2320,7 +2320,7 @@ const UI = {
   reportSort: "", // сортировка кликом по заголовку в "Сводном отчёте" (см. sortableTh) — платформа/дата публ./охват/ER/клики/продажи/выручка
   reportPeriod: {from:"", to:""}, // период (по дате публикации) для сводки "Сколько выложили" в верхней части "Сводного отчёта" — см. reportPeriodSummary()
   reportOnlyWaiting: false, // фильтр "Сводного отчёта": показывать только доставленные, но ещё не выложенные (чтобы обзванивать блогеров)
-  inflFilter: {search:"", sort:"default", month:""},
+  inflFilter: {search:"", sort:"default", month:"", dateFrom:"", dateTo:""},
   microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:""},
   // ЕДИНЫЙ месяц на всю вкладку. Раньше на каждой вкладке было 3-4 независимых фильтра месяца
   // (дашборд / сводка по блогерам / сводка по ответственным / таблица интеграций), и месяц
@@ -3299,6 +3299,12 @@ function filteredInfluencerDealRows(){
   if(fi.month){
     rows = rows.filter(r=> inflDealDate(r.deal).slice(0,7)===fi.month);
   }
+  if(fi.dateFrom){
+    rows = rows.filter(r=> inflDealDate(r.deal) >= fi.dateFrom);
+  }
+  if(fi.dateTo){
+    rows = rows.filter(r=> inflDealDate(r.deal) <= fi.dateTo);
+  }
   const sorters = {
     sales_desc: (a,b)=> (b.netContribution||0)-(a.netContribution||0),
     sales_asc: (a,b)=> (a.netContribution||0)-(b.netContribution||0),
@@ -3866,6 +3872,8 @@ function tplInfluencerDeals(){
       </div>
       <div class="toolbar" style="margin-bottom:12px">
         <input type="search" class="fill" id="infl-search" placeholder="Поиск по логину блогера" value="${escapeHtml(fi.search)}">
+        <input type="date" id="infl-date-from" value="${fi.dateFrom||''}" style="max-width:150px" title="Дата с">
+        <input type="date" id="infl-date-to" value="${fi.dateTo||''}" style="max-width:150px" title="Дата по">
         <select id="infl-month">
           <option value="">Все месяцы</option>
           ${months.map(m=>`<option value="${m}" ${fi.month===m?'selected':''}>${monthLabel(m)}</option>`).join("")}
@@ -5749,6 +5757,8 @@ function wireDeskTab(){
     wireSearchOnEnter(inflSearch, v=>{ UI.inflFilter.search = v; renderDeskTab(); });
     document.getElementById("infl-sort").onchange = e=>{ UI.inflFilter.sort = e.target.value; renderDeskTab(); };
     document.getElementById("infl-month").onchange = e=>{ UI.inflFilter.month = e.target.value; renderDeskTab(); };
+    document.getElementById("infl-date-from").onchange = e=>{ UI.inflFilter.dateFrom = e.target.value; renderDeskTab(); };
+    document.getElementById("infl-date-to").onchange = e=>{ UI.inflFilter.dateTo = e.target.value; renderDeskTab(); };
     // Все контролы месяца на вкладке пишут в один UI.inflMonth (см. defineMonthAlias), поэтому
     // любой из них пересчитывает страницу целиком, а не только свой блок.
     const inflDetailMonthSelect = document.getElementById("infl-detail-month");
