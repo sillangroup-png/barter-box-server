@@ -1189,7 +1189,18 @@ function computeUnifiedInfluencerRomi(){
       cappedKeys.add(u.key);
     }
   });
-return {units, contribution, baselineByProduct, cappedKeys};
+// manualContribution — ручной ввод вклада в продажи менеджером:
+  // используется, если авторасчёт по 1С неверен или не видит предзаказ,
+  // который физически не попадает в 1С. Если заполнено — полностью
+  // заменяет автоматический расчёт (в т.ч. капы и флаг noImpact выше).
+  units.forEach(u=>{
+    const mc = u.deal.manualContribution;
+    if(mc!=="" && mc!=null && !isNaN(Number(mc))){
+      contribution[u.key] = Number(mc);
+      cappedKeys.delete(u.key);
+    }
+  });
+  return {units, contribution, baselineByProduct, cappedKeys};
 }
 function computeInfluencerRomi(){
   const {units, contribution, baselineByProduct, cappedKeys} = computeUnifiedInfluencerRomi();
@@ -3940,6 +3951,7 @@ function tplInfluencerDeals(){
                 ${r.hasBaseline ? `<b>${fmtNum(r.netContribution)}</b>${r.capped?' <span title="Вклад ограничен потолком правдоподобия по охвату — реальный прирост продаж в эти дни объясняется другим фактором, не этой интеграцией" style="cursor:help">⚠️</span>':''}` : `<span style="color:var(--ink-mute)">нет данных</span>`}
                 ${d.plannedContribution && r.hasBaseline ? `<br><span style="font-size:11px;color:${r.netContribution>=d.plannedContribution?'var(--ok)':'var(--bad)'}">${Math.round(r.netContribution/d.plannedContribution*100)}% от плана</span>` : ""}
                 <br>${inlineEditSpan(d.noImpact==='Да' ? '<span style="color:var(--bad);font-size:10.5px" title="Отмечено вручную: реального всплеска продаж не было — эта интеграция исключена из расчёта вклада">🚫 нет всплеска</span>' : '<span style="color:var(--ink-mute);font-size:10.5px;text-decoration:underline dotted;cursor:pointer" title="Отметить вручную, если по факту мониторинга всплеска продаж не было">отметить: нет всплеска</span>', d.id, 'noImpact', d.noImpact||'Нет', 'select', ['Нет','Да'])}
+        <br>${inlineEditSpan(d.manualContribution ? `<span style="color:var(--ok);font-size:10.5px" title="Вклад задан вручную — заменяет авторасчёт. Кликните, чтобы изменить или очистить (пустое значение = вернуться к авторасчёту)">✏️ вручную: ${fmtNum(d.manualContribution)}</span>` : '<span style="color:var(--ink-mute);font-size:10.5px;text-decoration:underline dotted;cursor:pointer" title="Задать вклад в продажи вручную — если система считает неверно или не видит предзаказ вне 1С">➕ вклад вручную</span>', d.id, 'manualContribution', d.manualContribution||'', 'number')}
               </td>
               <td style="text-align:right">${(()=>{
               const contrib = d.plannedContribution || planTargetFromCost(d.plannedCost||d.cost||0);
@@ -4222,6 +4234,7 @@ function tplMicroInfluencers(){
                 <span style="color:var(--ink-mute)"> / </span>
                 <span title="Считается автоматически из продаж по ШК (импорт по вторникам) — вручную не редактируется">${!d.barcode ? '<span style="color:var(--ink-mute)">нет ШК</span>' : (hasBaseline ? fmtNum(r.netContribution)+" ₸"+(r.capped?' <span title="Вклад ограничен потолком правдоподобия по охвату — реальный прирост продаж в эти дни объясняется другим фактором, не этой интеграцией" style="cursor:help">⚠️</span>':"") : '<span style="color:var(--ink-mute)">—</span>')}</span>
                 <br>${inlineEditSpan(d.noImpact==='Да' ? '<span style="color:var(--bad);font-size:10.5px" title="Отмечено вручную: реального всплеска продаж не было — эта интеграция исключена из расчёта вклада">🚫 нет всплеска</span>' : '<span style="color:var(--ink-mute);font-size:10.5px;text-decoration:underline dotted;cursor:pointer" title="Отметить вручную, если по факту мониторинга всплеска продаж не было">отметить: нет всплеска</span>', d.id, 'noImpact', d.noImpact||'Нет', 'select', ['Нет','Да'])}
+        <br>${inlineEditSpan(d.manualContribution ? `<span style="color:var(--ok);font-size:10.5px" title="Вклад задан вручную — заменяет авторасчёт. Кликните, чтобы изменить или очистить (пустое значение = вернуться к авторасчёту)">✏️ вручную: ${fmtNum(d.manualContribution)}</span>` : '<span style="color:var(--ink-mute);font-size:10.5px;text-decoration:underline dotted;cursor:pointer" title="Задать вклад в продажи вручную — если система считает неверно или не видит предзаказ вне 1С">➕ вклад вручную</span>', d.id, 'manualContribution', d.manualContribution||'', 'number')}
               </td>
               <td style="text-align:right">${(()=>{
                 const contrib = d.plannedContribution || planTargetFromCost(microDealTotalCost(d));
