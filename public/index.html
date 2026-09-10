@@ -2321,7 +2321,7 @@ const UI = {
   reportPeriod: {from:"", to:""}, // период (по дате публикации) для сводки "Сколько выложили" в верхней части "Сводного отчёта" — см. reportPeriodSummary()
   reportOnlyWaiting: false, // фильтр "Сводного отчёта": показывать только доставленные, но ещё не выложенные (чтобы обзванивать блогеров)
   inflFilter: {search:"", sort:"default", month:"", dateFrom:"", dateTo:""},
-  microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:""},
+  microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:"", dateFrom:"", dateTo:""},
   // ЕДИНЫЙ месяц на всю вкладку. Раньше на каждой вкладке было 3-4 независимых фильтра месяца
   // (дашборд / сводка по блогерам / сводка по ответственным / таблица интеграций), и месяц
   // приходилось выбирать в каждом блоке отдельно — цифры на одном экране легко оказывались за
@@ -4026,6 +4026,12 @@ function tplMicroInfluencers(){
   if(mf.month){
     deals = deals.filter(d=> microDealDate(d).slice(0,7)===mf.month);
   }
+  if(mf.dateFrom){
+    deals = deals.filter(d=> microDealDate(d) >= mf.dateFrom);
+  }
+  if(mf.dateTo){
+    deals = deals.filter(d=> microDealDate(d) <= mf.dateTo);
+  }
   // Фильтр по ответственному менеджеру — список вариантов строится из реально встречающихся
   // значений d.responsible (а не из фиксированного справочника), чтобы не рассинхронизироваться
   // с тем, что девочки на самом деле вписывают в это поле.
@@ -4127,6 +4133,8 @@ function tplMicroInfluencers(){
       </div>
       <div class="toolbar" style="margin-bottom:12px">
         <input type="search" class="fill" id="micro-search" placeholder="Поиск по блогеру / товару / логину IG или TikTok" value="${escapeHtml(mf.search)}">
+        <input type="date" id="micro-date-from" value="${mf.dateFrom||''}" style="max-width:150px" title="Дата с">
+        <input type="date" id="micro-date-to" value="${mf.dateTo||''}" style="max-width:150px" title="Дата по">
         <select id="micro-payment-filter">
           <option value="">Все статусы оплаты</option>
           ${MICRO_PAYMENT_STATUSES.map(st=>`<option value="${st}" ${mf.paymentStatus===st?'selected':''}>${st}</option>`).join("")}
@@ -5890,6 +5898,8 @@ function wireDeskTab(){
     wireSearchOnEnter(microSearch, v=>{ UI.microFilter.search = v; renderDeskTab(); });
     document.getElementById("micro-payment-filter").onchange = e=>{ UI.microFilter.paymentStatus = e.target.value; renderDeskTab(); };
     document.getElementById("micro-month-filter").onchange = e=>{ UI.microFilter.month = e.target.value; renderDeskTab(); };
+    document.getElementById("micro-date-from").onchange = e=>{ UI.microFilter.dateFrom = e.target.value; renderDeskTab(); };
+    document.getElementById("micro-date-to").onchange = e=>{ UI.microFilter.dateTo = e.target.value; renderDeskTab(); };
     document.getElementById("micro-responsible-filter").onchange = e=>{ UI.microFilter.responsible = e.target.value; renderDeskTab(); };
     document.getElementById("micro-sort").onchange = e=>{ UI.microFilter.sort = e.target.value; renderDeskTab(); };
     // Сортировка кликом по заголовку колонки ("как в Excel") — см. sortableTh(). Первый клик по
