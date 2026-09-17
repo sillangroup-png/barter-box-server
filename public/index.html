@@ -3922,15 +3922,16 @@ function tplInfluencerDeals(){
           <!-- Колонка "Блогер" закреплена (sticky-col): таблица широкая, и при горизонтальном
                скролле вправо без этого не видно, чья строка. Так же сделано в микро/средних и в
                "Сводном отчёте". -->
-          <th class="sticky-col">Блогер</th><th>Ответственный</th><th>Платформа</th><th>Продукт</th>
+          <th>#</th><th class="sticky-col">Блогер</th><th>Ответственный</th><th>Платформа</th><th>Продукт</th>
           ${UI.collapsedColGroups.has("infl-dates") ? `<th title="Дата план / Дата факт свёрнуты">Даты</th>` : `<th>Дата план</th><th>Дата факт</th>`}
           ${UI.collapsedColGroups.has("infl-reach") ? `<th title="План охват/клики / Факт охват/клики свёрнуты">Охваты</th>` : `<th>План охват/клики</th><th>Факт охват/клики</th>`}
           <th>План/факт расход</th><th>Вклад в продажи<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-mute)">план / факт</span></th><th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th><th>ROMI</th><th title="ROAS = вклад в продажи ÷ расход (сумма + стоимость товара). Тот же расчёт, что и ROMI.">ROAS</th><th>Статус</th><th></th>
         </tr></thead>
         <tbody>
-          ${rows.map(r=>{
+          ${rows.map((r,i)=>{
             const d = r.deal;
             return `<tr>
+              <td>${i+1}</td>
               <td class="sticky-col"><b>${escapeHtml(d.blogerLogin)}</b>${d.lastUpdatedFrom==="telegram"?' <span class="badge badge-progress" title="Обновлено через Telegram-бота">TG</span>':''}</td>
               <td>${d.responsible ? escapeHtml(d.responsible) : `<span style="color:var(--ink-mute)">—</span>`}</td>
               <td>${escapeHtml(d.platform)}</td>
