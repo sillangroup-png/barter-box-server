@@ -1395,7 +1395,7 @@ function influencerFunnelCounts(allRows){
 }
 function influencerBrandStats(monthRows){
   const withBaseline = monthRows.filter(r=>r.hasBaseline);
-  const totalCost = monthRows.reduce((s,r)=>s+(r.deal.cost||0),0);
+  const totalCost = monthRows.reduce((s,r)=>s+((r.deal.status==='Опубликована'&&r.deal.cost)?r.deal.cost:0),0);
   const plannedCost = monthRows.reduce((s,r)=>s+(r.deal.plannedCost||0),0);
   // "Всего за месяц": берём факт.расход, а если он ещё не проставлен — плановый бюджет по этой же
   // интеграции. Раньше рядом стояли две несопоставимые цифры: "Расходы" (только там, где заполнен
