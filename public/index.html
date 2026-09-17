@@ -2331,7 +2331,7 @@ const UI = {
   reportSort: "", // сортировка кликом по заголовку в "Сводном отчёте" (см. sortableTh) — платформа/дата публ./охват/ER/клики/продажи/выручка
   reportPeriod: {from:"", to:""}, // период (по дате публикации) для сводки "Сколько выложили" в верхней части "Сводного отчёта" — см. reportPeriodSummary()
   reportOnlyWaiting: false, // фильтр "Сводного отчёта": показывать только доставленные, но ещё не выложенные (чтобы обзванивать блогеров)
-  inflFilter: {search:"", sort:"default", month:"", dateFrom:"", dateTo:""},
+  inflFilter: {search:"", sort:"default", month:"", dateFrom:"", dateTo:"", responsible:""},
   microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:"", dateFrom:"", dateTo:""},
   // ЕДИНЫЙ месяц на всю вкладку. Раньше на каждой вкладке было 3-4 независимых фильтра месяца
   // (дашборд / сводка по блогерам / сводка по ответственным / таблица интеграций), и месяц
@@ -3314,7 +3314,7 @@ function filteredInfluencerDealRows(){
     rows = rows.filter(r=> inflDealDate(r.deal) >= fi.dateFrom);
   }
   if(fi.dateTo){
-    rows = rows.filter(r=> inflDealDate(r.deal) <= fi.dateTo);
+    rows = rows.filter(r=> inflDealDate(r.deal) <= fi.dateTo); } if(fi.responsible){ rows = rows.filter(r=> r.deal.responsible===fi.responsible);
   }
   const sorters = {
     sales_desc: (a,b)=> (b.netContribution||0)-(a.netContribution||0),
@@ -3821,7 +3821,7 @@ function tplProductEvents(){
 }
 function tplInfluencerDeals(){
   const s = influencerSummary();
-  const {salesByDay} = DataManager.state;
+  const {salesByDay} = DataManager.state; const inflResponsibles = [...new Set(DataManager.state.influencerDeals.map(d=>d.responsible).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ru"));
   const salesSorted = salesByDay.slice().sort((a,b)=> a.date<b.date?1:-1).slice(0,30);
 
   const fi = UI.inflFilter;
@@ -3889,7 +3889,7 @@ function tplInfluencerDeals(){
           <option value="">Все месяцы</option>
           ${months.map(m=>`<option value="${m}" ${fi.month===m?'selected':''}>${monthLabel(m)}</option>`).join("")}
         </select>
-        <select id="infl-sort">
+        <select id="infl-responsible-filter"><option value="">Все ответственные</option>${inflResponsibles.map(r=>`<option value="${escapeHtml(r)}" ${fi.responsible===r?'selected':''}>${escapeHtml(r)}</option>`).join("")}</select><select id="infl-sort">
           <option value="default" ${fi.sort==='default'?'selected':''}>Без сортировки</option>
           <option value="sales_desc" ${fi.sort==='sales_desc'?'selected':''}>Продажи: сначала больше</option>
           <option value="sales_asc" ${fi.sort==='sales_asc'?'selected':''}>Продажи: сначала меньше</option>
@@ -5777,7 +5777,7 @@ function wireDeskTab(){
 
     const inflSearch = document.getElementById("infl-search");
     wireSearchOnEnter(inflSearch, v=>{ UI.inflFilter.search = v; renderDeskTab(); });
-    document.getElementById("infl-sort").onchange = e=>{ UI.inflFilter.sort = e.target.value; renderDeskTab(); };
+    document.getElementById("infl-sort").onchange = e=>{ UI.inflFilter.sort = e.target.value; renderDeskTab(); }; document.getElementById("infl-responsible-filter").onchange = e=>{ UI.inflFilter.responsible = e.target.value; renderDeskTab(); };
     document.getElementById("infl-month").onchange = e=>{ UI.inflFilter.month = e.target.value; renderDeskTab(); };
     document.getElementById("infl-date-from").onchange = e=>{ UI.inflFilter.dateFrom = e.target.value; renderDeskTab(); };
     document.getElementById("infl-date-to").onchange = e=>{ UI.inflFilter.dateTo = e.target.value; renderDeskTab(); };
