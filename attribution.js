@@ -43,7 +43,7 @@ const BASELINE_DAYS = 7;                 // сколько ЧИСТЫХ дней
 const BASELINE_LOOKBACK_DAYS = 60;       // как далеко назад искать чистые дни для базы
 const MIN_CLEAN_DAYS_TRUST = 3;          // меньше стольки чистых дней в базе — не доверяем числу (см. baseline_uncertain)
 const SKU_STALE_DAYS = 14;               // если по ШК нет продаж дольше этого — код считаем битым
-const PRICE_DRIFT_TOLERANCE = 0.03;      // >3% разброса цены — не считаем, слишком рискованно
+const PRICE_DRIFT_TOLERANCE = 0.03;      // >3% разброса цены — не блокируем расчёт, только помечаем в заметке
 const NAME_MATCH_MIN_SHARED_WORDS = 1;   // минимум общих значимых слов между sku_name и названием в Kaspi
 
 // ---------------------------------------------------------------------------
@@ -249,26 +249,27 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
     const baselineByDate = new Map();
     for (let d = minTarget; d <= windowEnd; d = addDaysStr(d, 1)) baselineByDate.set(d, cleanBaselineFor(d));
 
-    // Проверка на дрейф/скачок цены — только по реально использованным точкам
-    // (чистые дни, откуда взята база, и дни окна), а не по всему календарю между
-    // ними — иначе случайная старая смена цены за пределами реального расчёта
-    // блокировала бы то, что она не должна блокировать.
+    // Цена по ШК: раньше при разбросе цены > 3% мы вообще ОТКАЗЫВАЛИСЬ считать
+    // (unconfident_price) — по факту это блокировало слишком много размещений и
+    // не давало отчитаться даже по штукам, хотя штуки от цены не зависят вовсе.
+    // Теперь: штуки считаем всегда, ₸ — каждый день своей РЕАЛЬНОЙ ценой на тот
+    // день (это уже так и было ниже, price = rec.cena за конкретный день, а не
+    // одна усреднённая цена на всё окно) — поэтому смена цены посреди периода не
+    // искажает ₸-сумму задним числом. Если цена всё же прыгала — не блокируем,
+    // а просто помечаем это в заметке к результату, для сведения.
     const usedPriceDates = new Set();
     for (let d = minTarget; d <= windowEnd; d = addDaysStr(d, 1)) usedPriceDates.add(d);
     for (const [d] of byDate) if (d >= historyStart && d <= windowEnd && !occupied.has(d)) usedPriceDates.add(d);
     const pricesUsed = [...usedPriceDates]
       .map((d) => (byDate.has(d) ? Number(byDate.get(d).cena) : null))
       .filter((v) => v > 0);
+    let priceNote = "";
     if (pricesUsed.length) {
-      const priceRange = (Math.max(...pricesUsed) - Math.min(...pricesUsed)) / Math.min(...pricesUsed);
+      const priceMin = Math.min(...pricesUsed);
+      const priceMax = Math.max(...pricesUsed);
+      const priceRange = (priceMax - priceMin) / priceMin;
       if (priceRange > PRICE_DRIFT_TOLERANCE) {
-        for (const p of group) {
-          await writeResult(pgPool, p.id, {
-            status: "unconfident_price",
-            note: `Цена по ШК ${code} нестабильна в использованных для расчёта днях (от ${Math.min(...pricesUsed)} до ${Math.max(...pricesUsed)} ₸) — прирост в штуках/деньгах может быть от цены, а не от блогера. Не считаем.`,
-          });
-        }
-        continue;
+        priceNote = ` Цена в этот период менялась (от ${priceMin} до ${priceMax} ₸) — ₸ посчитаны по факту цены каждого дня, штуки цена не затрагивает.`;
       }
     }
 
@@ -365,7 +366,7 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
             status: units > 0 ? "ok" : "zero",
             units,
             kzt,
-            note: `База ${base.value.toFixed(1)} шт/день (скользящая, по ${base.cleanCount} чистым дням без рекламы по этому ШК), окно ${p.published_date}–${addDaysStr(p.published_date, 1)}${groupChecked.length > 1 ? `, делили с: ${groupChecked.filter((x) => x.id !== p.id).map((x) => x.blogger_handle).join(", ")}` : ""}.`,
+            note: `База ${base.value.toFixed(1)} шт/день (скользящая, по ${base.cleanCount} чистым дням без рекламы по этому ШК), окно ${p.published_date}–${addDaysStr(p.published_date, 1)}${groupChecked.length > 1 ? `, делили с: ${groupChecked.filter((x) => x.id !== p.id).map((x) => x.blogger_handle).join(", ")}` : ""}.${priceNote}`,
           });
         }
       }
