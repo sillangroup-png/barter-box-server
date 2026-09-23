@@ -316,9 +316,10 @@ function nextMeasurementId(){
 /* ---------- Синхронизация в Supabase (директор видит интеграции у себя) ----------
    Раз в несколько минут отправляем срез микро/средних и крупных инфлюенс-интеграций
    в public.influencer_placements того же Supabase-проекта, что и CRM блогеров.
-   Один барter-box-блогер (микро) = одна строка в этой таблице, даже если публикуется
-   и в Instagram, и в TikTok — таков реальный ключ таблицы: (source, source_deal_id).
-   Upsert через ON CONFLICT по этому ключу. syncing — защита от накладывающихся запусков. */
+   Один барter-box-блогер (микро) = одна строка — реальный ключ таблицы: (source, source_deal_id).
+   Данные вводятся вручную в текстовые поля и могут быть "грязными" (не дата, не число) —
+   всё проходит через safeDate/safeInt, и каждая строка апсертится ОТДЕЛЬНО: если что-то
+   в одной строке всё же невалидно, в базу не попадёт только она, а не всё сразу. */
 const pgPool = new Pool({
   connectionString: "postgresql://crm_nina.zwaynpogmedeqcyzriwi:TMxdRmisrSq6vs2tgmA82GDq@aws-0-eu-central-1.pooler.supabase.com:5432/postgres",
   ssl: { rejectUnauthorized: false },
@@ -327,6 +328,24 @@ const pgPool = new Pool({
 
 let placementsSyncing = false;
 
+function safeDate(v){
+  if(v===undefined || v===null) return null;
+  const s = String(v).trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(!m) return null;
+  const d = new Date(s.slice(0,10)+"T00:00:00Z");
+  return isNaN(d.getTime()) ? null : s.slice(0,10);
+}
+function safeInt(v){
+  const n = parseInt(v,10);
+  return Number.isFinite(n) ? n : null;
+}
+function safeText(v){
+  if(v===undefined || v===null) return null;
+  const s = String(v).trim();
+  return s ? s.slice(0,2000) : null;
+}
+
 const PLACEMENT_COLS = [
   "source","source_deal_id","blogger_handle","platform","followers","tier",
   "blogger_category","city","manager","kaspi_code","sku_name","deal_type",
@@ -334,24 +353,19 @@ const PLACEMENT_COLS = [
   "video_url","reach","status","notes","created_at","updated_at",
 ];
 
-function chunkRows(arr, size){ const out=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out; }
-
-async function upsertPlacements(client, rows){
-  if(!rows.length) return;
+async function upsertOneRow(client, r){
+  const values = PLACEMENT_COLS.map(c=> r[c] === undefined ? null : r[c]);
   const updateSet = PLACEMENT_COLS.filter(c=>c!=="source" && c!=="source_deal_id" && c!=="created_at").map(c=>`${c}=EXCLUDED.${c}`).join(",");
-  for(const part of chunkRows(rows, 300)){
-    const values = [];
-    const placeholders = part.map((r,i)=>{
-      const base = i*PLACEMENT_COLS.length;
-      values.push(...PLACEMENT_COLS.map(c=> r[c] === undefined ? null : r[c]));
-      return "(" + PLACEMENT_COLS.map((_,j)=>`$${base+j+1}`).join(",") + ")";
-    }).join(",");
+  const placeholders = PLACEMENT_COLS.map((_,i)=>`$${i+1}`).join(",");
+  try{
     await client.query(
-      `INSERT INTO public.influencer_placements (${PLACEMENT_COLS.join(",")}) VALUES ${placeholders}
+      `INSERT INTO public.influencer_placements (${PLACEMENT_COLS.join(",")}) VALUES (${placeholders})
        ON CONFLICT (source, source_deal_id) WHERE source_deal_id IS NOT NULL
        DO UPDATE SET ${updateSet}`,
       values
     );
+  }catch(e){
+    console.error(`Supabase placements: пропущена строка ${r.source}/${r.source_deal_id}:`, e.message);
   }
 }
 
@@ -372,37 +386,37 @@ function buildPlacementRows(){
   (state.microInfluencerDeals || []).forEach(d=>{
     const hasIg = !!d.instagramAccount, hasTt = !!d.tiktokAccount;
     const platform = hasIg && hasTt ? "Instagram Reels + TikTok" : hasIg ? "Instagram Reels" : hasTt ? "TikTok" : "unknown";
-    const followers = (d.followers||0) + (d.followersTT||0) || null;
-    const reach = (d.factReachReels||0) + (d.factReachTT||0) || null;
+    const followers = (safeInt(d.followers)||0) + (safeInt(d.followersTT)||0) || null;
+    const reach = (safeInt(d.factReachReels)||0) + (safeInt(d.factReachTT)||0) || null;
     const extraNote = (hasIg && hasTt && d.tiktokVideoLink) ? ("TikTok: "+d.tiktokVideoLink) : null;
     rows.push({
       source: "barter_box_micro", source_deal_id: String(d.id),
-      blogger_handle: d.instagramAccount || d.tiktokAccount || ("micro_"+d.id),
+      blogger_handle: safeText(d.instagramAccount) || safeText(d.tiktokAccount) || ("micro_"+d.id),
       platform, followers, tier: "Малый",
-      blogger_category: d.bloggerCategory || null, city: d.city || null,
-      manager: d.responsible || null, kaspi_code: d.barcode || null,
-      sku_name: d.product || null, deal_type: "mixed",
-      cost_kzt: d.cost || 0, product_cost_kzt: d.productCost || 0,
-      planned_date: d.plannedDate || null,
-      published_at: d.publishDate || null, published_date: d.publishDate || null,
-      video_url: d.reelsLink || d.tiktokVideoLink || null, reach,
+      blogger_category: safeText(d.bloggerCategory), city: safeText(d.city),
+      manager: safeText(d.responsible), kaspi_code: safeText(d.barcode),
+      sku_name: safeText(d.product), deal_type: "mixed",
+      cost_kzt: safeInt(d.cost) || 0, product_cost_kzt: safeInt(d.productCost) || 0,
+      planned_date: safeDate(d.plannedDate),
+      published_at: safeDate(d.publishDate), published_date: safeDate(d.publishDate),
+      video_url: safeText(d.reelsLink) || safeText(d.tiktokVideoLink), reach,
       status: microDealStatus(d),
-      notes: [d.notes, d.paymentStatus ? ("оплата: "+d.paymentStatus) : null, extraNote].filter(Boolean).join(" / ") || null,
+      notes: [safeText(d.notes), d.paymentStatus ? ("оплата: "+d.paymentStatus) : null, extraNote].filter(Boolean).join(" / ") || null,
       created_at: now, updated_at: now,
     });
   });
   (state.influencerDeals || []).forEach(d=>{
     rows.push({
       source: "barter_box_deals", source_deal_id: String(d.id),
-      blogger_handle: d.blogerLogin || ("deal_"+d.id), platform: d.platform || "unknown",
+      blogger_handle: safeText(d.blogerLogin) || ("deal_"+d.id), platform: safeText(d.platform) || "unknown",
       followers: null, tier: "Крупный", blogger_category: null, city: null,
-      manager: d.responsible || null, kaspi_code: d.barcode || null,
-      sku_name: d.product || null, deal_type: "paid",
-      cost_kzt: d.cost || 0, product_cost_kzt: 0,
-      planned_date: d.plannedDate || null,
-      published_at: d.publishedDate || null, published_date: d.publishedDate || null,
-      video_url: null, reach: d.reach || null, status: largeDealStatus(d),
-      notes: d.notes || null, created_at: now, updated_at: now,
+      manager: safeText(d.responsible), kaspi_code: safeText(d.barcode),
+      sku_name: safeText(d.product), deal_type: "paid",
+      cost_kzt: safeInt(d.cost) || 0, product_cost_kzt: 0,
+      planned_date: safeDate(d.plannedDate),
+      published_at: safeDate(d.publishedDate), published_date: safeDate(d.publishedDate),
+      video_url: null, reach: safeInt(d.reach), status: largeDealStatus(d),
+      notes: safeText(d.notes), created_at: now, updated_at: now,
     });
   });
   return rows;
@@ -415,8 +429,7 @@ async function syncPlacementsToSupabase(){
   try{
     client = await pgPool.connect();
     const rows = buildPlacementRows();
-    await client.query("BEGIN");
-    await upsertPlacements(client, rows);
+    for(const r of rows){ await upsertOneRow(client, r); }
     const microIds = rows.filter(r=>r.source==="barter_box_micro").map(r=>r.source_deal_id);
     const largeIds = rows.filter(r=>r.source==="barter_box_deals").map(r=>r.source_deal_id);
     await client.query(
@@ -427,10 +440,8 @@ async function syncPlacementsToSupabase(){
       `DELETE FROM public.influencer_placements WHERE source='barter_box_deals' AND NOT (source_deal_id = ANY($1::text[]))`,
       [largeIds.length ? largeIds : ["__none__"]]
     );
-    await client.query("COMMIT");
-    console.log(`Supabase placements sync OK: ${rows.length} строк`);
+    console.log(`Supabase placements sync OK: ${rows.length} строк обработано`);
   }catch(e){
-    if(client) await client.query("ROLLBACK").catch(()=>{});
     console.error("Supabase placements sync error:", e.message);
   }finally{
     if(client) client.release();
