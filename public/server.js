@@ -15,6 +15,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const express = require("express");
 const multer = require("multer");
+const { Pool } = require("pg");
 
 // DATA_DIR/UPLOADS_DIR можно переопределить переменными окружения — это нужно,
 // когда на хостинге (например, Render) подключён постоянный диск на отдельном
@@ -165,7 +166,7 @@ function findDriverByPhoneOrCode(input){
 /* =========================================================================
    1. ХРАНИЛИЩЕ: всё состояние — один объект в памяти, зеркалится в JSON-файл
    ========================================================================= */
-function emptyState(){ return {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[], microInfluencerDeals:[]}; }
+function emptyState(){ return {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[], microInfluencerDeals:[], productEvents:[], plans:[]}; }
 
 function seedState(){
   const drivers = [
@@ -268,7 +269,7 @@ function seedState(){
     salesByDay.push({id: salesByDay.length+1, date:d, product:"Уход премиум", revenue: revenue*3500});
   }
 
-  return {drivers, campaigns, orders, returns, publications, influencerDeals, salesByDay, microInfluencerDeals: []};
+  return {drivers, campaigns, orders, returns, publications, influencerDeals, salesByDay, microInfluencerDeals: [], productEvents: [], plans: []};
 }
 
 let state = loadState();
@@ -312,11 +313,209 @@ function nextMeasurementId(){
   return max + 1;
 }
 
+/* ---------- Синхронизация в Supabase (директор видит интеграции у себя) ----------
+   Раз в несколько минут отправляем срез микро/средних и крупных инфлюенс-интеграций
+   в public.influencer_placements того же Supabase-проекта, что и CRM блогеров.
+   Один барter-box-блогер (микро) = одна строка — реальный ключ таблицы: (source, source_deal_id).
+   Данные вводятся вручную в текстовые поля и могут быть "грязными" (не дата, не число) —
+   всё проходит через safeDate/safeInt, и каждая строка апсертится ОТДЕЛЬНО: если что-то
+   в одной строке всё же невалидно, в базу не попадёт только она, а не всё сразу. */
+const pgPool = new Pool({
+  connectionString: "postgresql://crm_nina.zwaynpogmedeqcyzriwi:TMxdRmisrSq6vs2tgmA82GDq@aws-0-eu-central-1.pooler.supabase.com:5432/postgres",
+  ssl: { rejectUnauthorized: false },
+  max: 3, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000,
+});
+
+let placementsSyncing = false;
+
+/* ---------- Авто-расчёт вклада блогеров в продажи (по Kaspi, раз в сутки) ----------
+   Отдельно от синка выше: тот только ОТПРАВЛЯЕТ данные в Supabase, а это СЧИТАЕТ
+   и ЗАБИРАЕТ обратно готовый результат в auto_contribution_* — см. attribution.js
+   и pull-fact-from-supabase.js. Существующий расчёт "Вклад в продажи" на фронтенде
+   (по salesByDay/1С) не трогается, это независимая, отдельная колонка для сверки. */
+const { runDailyAttribution, almatyTodayStr } = require("./attribution.js");
+const { pullFactFromSupabase } = require("./pull-fact-from-supabase.js");
+
+let lastAttributionRunDate = null;
+let attributionRunning = false; // защита от повторного запуска: если первый проход
+  // (особенно первый после деплоя — считает весь бэклог, может идти много минут)
+  // не успел закончиться за 3 минуты до следующего тика, второй запускать НЕ надо —
+  // иначе оба борются за одно и то же соединение с базой и всё замедляют ещё больше.
+
+async function maybeRunDailyAttribution(){
+  if(attributionRunning) return; // предыдущий проход ещё не закончился
+  const today = almatyTodayStr();
+  if(lastAttributionRunDate === today) return; // сегодня уже посчитали
+  attributionRunning = true;
+  try{
+    await runDailyAttribution(pgPool);
+    lastAttributionRunDate = today;
+  }catch(e){
+    console.error("Attribution error:", e.message);
+    // lastAttributionRunDate не трогаем — попробует снова на следующем тике
+  }finally{
+    attributionRunning = false;
+  }
+}
+
+// Забрать готовый результат на фронтенд — ОТДЕЛЬНО от расчёта выше и не дожидаясь
+// его полного завершения. Расчёт всего бэклога может идти долго, а строки в
+// auto_contribution_* появляются в Supabase постепенно, по мере готовности —
+// эта функция подтягивает то, что уже готово, на каждом тике, чтобы во фронтенде
+// цифры появлялись частями, а не разом только после того, как досчитается вообще всё.
+async function pullAttributionFact(){
+  try{
+    await pullFactFromSupabase(pgPool, state, persist);
+  }catch(e){
+    console.error("Pull-fact error:", e.message);
+  }
+}
+
+function safeDate(v){
+  if(v===undefined || v===null) return null;
+  const s = String(v).trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(!m) return null;
+  const d = new Date(s.slice(0,10)+"T00:00:00Z");
+  return isNaN(d.getTime()) ? null : s.slice(0,10);
+}
+function safeInt(v){
+  const n = parseInt(v,10);
+  return Number.isFinite(n) ? n : null;
+}
+function safeText(v){
+  if(v===undefined || v===null) return null;
+  const s = String(v).trim();
+  return s ? s.slice(0,2000) : null;
+}
+
+const PLACEMENT_COLS = [
+  "source","source_deal_id","blogger_handle","platform","followers","tier",
+  "blogger_category","city","manager","kaspi_code","sku_name","deal_type",
+  "cost_kzt","product_cost_kzt","planned_date","published_at","published_date",
+  "video_url","reach","status","notes","created_at","updated_at",
+];
+
+async function upsertOneRow(client, r){
+  const values = PLACEMENT_COLS.map(c=> r[c] === undefined ? null : r[c]);
+  const updateSet = PLACEMENT_COLS.filter(c=>c!=="source" && c!=="source_deal_id" && c!=="created_at").map(c=>`${c}=EXCLUDED.${c}`).join(",");
+  const placeholders = PLACEMENT_COLS.map((_,i)=>`$${i+1}`).join(",");
+  try{
+    await client.query(
+      `INSERT INTO public.influencer_placements (${PLACEMENT_COLS.join(",")}) VALUES (${placeholders})
+       ON CONFLICT (source, source_deal_id) WHERE source_deal_id IS NOT NULL
+       DO UPDATE SET ${updateSet}`,
+      values
+    );
+  }catch(e){
+    console.error(`Supabase placements: пропущена строка ${r.source}/${r.source_deal_id}:`, e.message);
+  }
+}
+
+function microDealStatus(d){
+  if(d.videoStatus === "опубликовано") return "published";
+  if(d.paymentStatus === "оплачено") return "paid";
+  if(d.productStatus === "товар доставлен" || d.productStatus === "товар заказан") return "product_sent";
+  return "planned";
+}
+function largeDealStatus(d){
+  const map = { "Запланирована":"planned", "Опубликована":"published", "Оплачена":"paid", "Закрыта":"published" };
+  return map[d.status] || "planned";
+}
+
+function buildPlacementRows(){
+  const rows = [];
+  const now = new Date().toISOString();
+  (state.microInfluencerDeals || []).forEach(d=>{
+    const hasIg = !!d.instagramAccount, hasTt = !!d.tiktokAccount;
+    const platform = hasIg && hasTt ? "Instagram Reels + TikTok" : hasIg ? "Instagram Reels" : hasTt ? "TikTok" : "unknown";
+    const followers = (safeInt(d.followers)||0) + (safeInt(d.followersTT)||0) || null;
+    const reach = (safeInt(d.factReachReels)||0) + (safeInt(d.factReachTT)||0) || null;
+    const extraNote = (hasIg && hasTt && d.tiktokVideoLink) ? ("TikTok: "+d.tiktokVideoLink) : null;
+    rows.push({
+      source: "barter_box_micro", source_deal_id: String(d.id),
+      blogger_handle: safeText(d.instagramAccount) || safeText(d.tiktokAccount) || ("micro_"+d.id),
+      platform, followers, tier: "Малый",
+      blogger_category: safeText(d.bloggerCategory), city: safeText(d.city),
+      manager: safeText(d.responsible), kaspi_code: safeText(d.barcode),
+      sku_name: safeText(d.product), deal_type: "mixed",
+      cost_kzt: safeInt(d.cost) || 0, product_cost_kzt: safeInt(d.productCost) || 0,
+      planned_date: safeDate(d.plannedDate),
+      published_at: safeDate(d.publishDate), published_date: safeDate(d.publishDate),
+      video_url: safeText(d.reelsLink) || safeText(d.tiktokVideoLink), reach,
+      status: microDealStatus(d),
+      notes: [safeText(d.notes), d.paymentStatus ? ("оплата: "+d.paymentStatus) : null, extraNote].filter(Boolean).join(" / ") || null,
+      created_at: now, updated_at: now,
+    });
+  });
+  (state.influencerDeals || []).forEach(d=>{
+    rows.push({
+      source: "barter_box_deals", source_deal_id: String(d.id),
+      blogger_handle: safeText(d.blogerLogin) || ("deal_"+d.id), platform: safeText(d.platform) || "unknown",
+      followers: null, tier: "Крупный", blogger_category: null, city: null,
+      manager: safeText(d.responsible), kaspi_code: safeText(d.barcode),
+      sku_name: safeText(d.product), deal_type: "paid",
+      cost_kzt: safeInt(d.cost) || 0, product_cost_kzt: 0,
+      planned_date: safeDate(d.plannedDate),
+      published_at: safeDate(d.publishedDate), published_date: safeDate(d.publishedDate),
+      video_url: null, reach: safeInt(d.reach), status: largeDealStatus(d),
+      notes: safeText(d.notes), created_at: now, updated_at: now,
+    });
+  });
+  return rows;
+}
+
+async function syncPlacementsToSupabase(){
+  if(placementsSyncing) return;
+  placementsSyncing = true;
+  let client;
+  try{
+    client = await pgPool.connect();
+    const rows = buildPlacementRows();
+    for(const r of rows){ await upsertOneRow(client, r); }
+    const microIds = rows.filter(r=>r.source==="barter_box_micro").map(r=>r.source_deal_id);
+    const largeIds = rows.filter(r=>r.source==="barter_box_deals").map(r=>r.source_deal_id);
+    await client.query(
+      `DELETE FROM public.influencer_placements WHERE source='barter_box_micro' AND NOT (source_deal_id = ANY($1::text[]))`,
+      [microIds.length ? microIds : ["__none__"]]
+    );
+    await client.query(
+      `DELETE FROM public.influencer_placements WHERE source='barter_box_deals' AND NOT (source_deal_id = ANY($1::text[]))`,
+      [largeIds.length ? largeIds : ["__none__"]]
+    );
+    console.log(`Supabase placements sync OK: ${rows.length} строк обработано`);
+  }catch(e){
+    console.error("Supabase placements sync error:", e.message);
+  }finally{
+    if(client) client.release();
+    placementsSyncing = false;
+  }
+}
+
 /* =========================================================================
    2. Express app
    ========================================================================= */
 const app = express();
-app.use(express.json({limit: "2mb"}));
+// 12mb — интерфейс это один большой index.html (~700 КБ), плюс запас на будущее.
+app.use(express.json({limit: "12mb"}));
+
+/* ---------- Горячее обновление интерфейса (без GitHub) ----------
+   Раньше любая правка интерфейса означала ручную заливку index.html на GitHub и ожидание
+   пересборки на Render. Теперь новую версию можно положить прямо через API: она сохраняется
+   на постоянный диск рядом с данными и отдаётся вместо той, что лежит в образе контейнера.
+   Файл из образа никуда не девается и остаётся запасным вариантом: если новая версия окажется
+   сломанной, достаточно вызвать DELETE /api/app-version — и вернётся та, что пришла с деплоем.
+   При следующем полноценном деплое с GitHub накат с диска НЕ сбрасывается автоматически:
+   иначе свежий интерфейс молча откатился бы на старый. Сбрасывать — только вручную. */
+const APP_HTML_PATH = path.join(DATA_DIR, "index.html");
+const BUNDLED_HTML_PATH = path.join(__dirname, "public", "index.html");
+function activeIndexPath(){
+  try{ if(fs.existsSync(APP_HTML_PATH)) return APP_HTML_PATH; }catch(e){}
+  return BUNDLED_HTML_PATH;
+}
+// Перехватываем index.html ДО express.static, иначе статика отдаст версию из образа.
+app.get(["/", "/index.html"], (req,res)=> res.sendFile(activeIndexPath()));
+
 app.use("/uploads", express.static(UPLOADS_DIR, {maxAge: "30d"}));
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -745,6 +944,9 @@ app.post("/api/influencer-deals", requireAuth, (req,res)=>{
     // Ответственный менеджер — как у микро/средних интеграций. Нужен, чтобы в "Планере блогеров"
     // каждый менеджер мог открыть календарь только по своим блогерам.
     responsible: b.responsible || "",
+    // План по вкладу в продажи на эту интеграцию: сколько выручки она должна принести.
+    // Факт считается моделью из продаж 1С и не редактируется — сравниваем план с ним.
+    plannedContribution: parseInt(b.plannedContribution,10) || 0,
     likes: b.likes || 0, comments: b.comments || 0, saves: b.saves || 0,
     lastUpdatedFrom: "", lastUpdatedAt: "",
     status: b.status || DEAL_STATUSES[0], notes: b.notes || "",
@@ -786,6 +988,7 @@ app.post("/api/influencer-deals/import", requireAuth, (req,res)=>{
       plannedCost: parseInt(r["план_расход"] || r["planned_cost"] || 0, 10) || 0,
       cost: parseInt(r["расход"] || r["cost"] || 0, 10) || 0,
       barcode: (r["шк"] || r["штрихкод"] || r["barcode"] || "").toString().trim(),
+      plannedContribution: parseInt(r["план_вклад"] || r["planned_contribution"] || 0, 10) || 0,
       likes:0, comments:0, saves:0, lastUpdatedFrom:"", lastUpdatedAt:"",
       status: r["статус"] || r["status"] || DEAL_STATUSES[0],
       notes: r["комментарий"] || r["notes"] || "",
@@ -952,12 +1155,111 @@ app.post("/api/sales/import", requireAuth, (req,res)=>{
   res.json({added, updated});
 });
 
+/* ---------- Планы (план/факт) ----------
+   Одна универсальная таблица на все разрезы, чтобы не плодить по справочнику на каждый случай.
+   Запись = (месяц, разрез, ключ, показатель) → число. Разрезы:
+     manager  — ключ это имя ответственного ("Нина"), показатели bloggers/budget/integrations
+     product  — ключ это ШК товара, показатели integrations/budget
+     large    — канал целиком (ключ пустой), показатели bloggers/budget/integrations
+   Факт нигде не хранится: он всегда считается из интеграций на лету, чтобы план и факт
+   не могли разъехаться. Запись с value=0 удаляется — так пустая ячейка означает "плана нет". */
+function planKeyOf(p){ return [p.month, p.scope, p.key||"", p.metric].join("|"); }
+app.get("/api/plans", requireAuth, (req,res)=> res.json(state.plans || []));
+app.post("/api/plans", requireAuth, (req,res)=>{
+  const rows = Array.isArray(req.body && req.body.rows) ? req.body.rows : [req.body||{}];
+  state.plans = state.plans || [];
+  let saved = 0, removed = 0;
+  rows.forEach(b=>{
+    const month = (b.month||"").trim(), scope = (b.scope||"").trim(), metric = (b.metric||"").trim();
+    if(!month || !scope || !metric) return;
+    const rec = {month, scope, key:(b.key||"").toString().trim(), metric, value: Number(b.value)||0};
+    const k = planKeyOf(rec);
+    const idx = state.plans.findIndex(p=>planKeyOf(p)===k);
+    if(!rec.value){ if(idx>=0){ state.plans.splice(idx,1); removed++; } return; }
+    if(idx>=0){ state.plans[idx].value = rec.value; saved++; }
+    else { state.plans.push(Object.assign({id: nextId("plans")}, rec)); saved++; }
+  });
+  persist();
+  res.json({saved, removed, total: state.plans.length});
+});
+
+/* ---------- События по товарам (смена цены, акция, реклама Kaspi) ----------
+   Зачем. Модель вклада блогеров сравнивает продажи дня с недавним уровнем товара. Но уровень
+   меняется и без блогеров: например, 19.08.2026 цену на набор Коллаген+Биотин снизили с 7000
+   до 5900 ₸ — продажи в штуках выросли в 2,55 раза и остались на новой полке. Модель этот
+   скачок раздала тем, кто случайно выложился рядом: 4,5 млн ₸ "вклада" за 17–26 августа.
+   Отметив такое событие, мы говорим расчёту: с этой даты старый уровень больше не эталон,
+   сравнивать с ним нельзя. Пока после события не наберутся новые "чистые" дни, вклад по этому
+   товару не начисляется никому — честнее оставить рост неопознанным, чем приписать его людям. */
+app.get("/api/product-events", requireAuth, (req,res)=> res.json(state.productEvents || []));
+app.post("/api/product-events", requireAuth, (req,res)=>{
+  const b = req.body || {};
+  const barcode = (b.barcode||"").toString().trim();
+  const date = (b.date||"").trim();
+  if(!barcode || !date) return res.status(400).json({error:"нужны ШК и дата"});
+  state.productEvents = state.productEvents || [];
+  const ev = {
+    id: nextId("productEvents"), barcode, date,
+    type: b.type || "Смена цены",
+    priceFrom: parseInt(b.priceFrom,10) || 0,
+    priceTo: parseInt(b.priceTo,10) || 0,
+    note: (b.note||"").trim(),
+  };
+  state.productEvents.push(ev);
+  persist();
+  res.json(ev);
+});
+app.delete("/api/product-events/:id", requireAuth, (req,res)=>{
+  state.productEvents = (state.productEvents || []).filter(e=>e.id !== +req.params.id);
+  persist();
+  res.json({ok:true});
+});
+
+/* ---------- Версия интерфейса ----------
+   Кто может обновлять: только менеджер и маркетолог с правом записи. Аня (readOnly) и водители —
+   нет. Это тот же круг людей, который и так может менять любые данные через остальные ручки,
+   так что новых прав никому не выдаём. */
+function requireStaffWrite(req,res,next){
+  const s = req.session;
+  if(!s || s.readOnly || (s.role!=="manager" && s.role!=="marketer")){
+    return res.status(403).json({error:"нужен доступ менеджера или маркетолога с правом записи"});
+  }
+  next();
+}
+app.get("/api/app-version", requireAuth, (req,res)=>{
+  const p = activeIndexPath();
+  let size = 0, mtime = null;
+  try{ const st = fs.statSync(p); size = st.size; mtime = st.mtime.toISOString(); }catch(e){}
+  res.json({source: p===APP_HTML_PATH ? "disk" : "bundled", size, updatedAt: mtime});
+});
+app.post("/api/app-version", requireAuth, requireStaffWrite, (req,res)=>{
+  const html = (req.body && req.body.html) || "";
+  // Три дешёвые проверки, чтобы случайно не положить на прод пустой или обрезанный файл.
+  if(typeof html !== "string" || html.length < 10000) return res.status(400).json({error:"файл слишком маленький — похоже, обрезан"});
+  if(!/<!DOCTYPE html/i.test(html)) return res.status(400).json({error:"это не HTML-страница"});
+  if(!html.includes("Barter Box")) return res.status(400).json({error:"не похоже на интерфейс Barter Box"});
+  try{
+    // Пишем во временный файл и только потом переименовываем: если процесс упадёт на середине
+    // записи, на диске не останется обрезанного index.html, который сломает сайт всем.
+    const tmp = APP_HTML_PATH + ".tmp";
+    fs.writeFileSync(tmp, html, "utf8");
+    fs.renameSync(tmp, APP_HTML_PATH);
+  }catch(e){ return res.status(500).json({error:"не удалось сохранить: "+e.message}); }
+  res.json({ok:true, size: Buffer.byteLength(html, "utf8"), source:"disk"});
+});
+// Откат на версию из образа контейнера — если накат оказался сломанным.
+app.delete("/api/app-version", requireAuth, requireStaffWrite, (req,res)=>{
+  try{ if(fs.existsSync(APP_HTML_PATH)) fs.unlinkSync(APP_HTML_PATH); }
+  catch(e){ return res.status(500).json({error:"не удалось откатить: "+e.message}); }
+  res.json({ok:true, source:"bundled"});
+});
+
 // 404 для неизвестных API-путей (чтобы не отдавать index.html вместо ошибки)
 app.use("/api", (req,res)=> res.status(404).json({error:"not found"}));
 
 // SPA fallback — всё остальное отдаём как index.html
 app.get(/^(?!\/api).*/, (req,res)=>{
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+  res.sendFile(activeIndexPath());
 });
 
 // Render при деплое сначала посылает процессу SIGTERM и только потом убивает. Успеваем сбросить
@@ -971,6 +1273,15 @@ app.get(/^(?!\/api).*/, (req,res)=>{
     process.exit(0);
   });
 });
+
+syncPlacementsToSupabase().catch(e=> console.error("Supabase sync (старт):", e.message));
+maybeRunDailyAttribution().catch(e=> console.error("Attribution (старт):", e.message));
+pullAttributionFact().catch(e=> console.error("Pull-fact (старт):", e.message));
+setInterval(()=>{
+  syncPlacementsToSupabase().catch(e=> console.error("Supabase sync (интервал):", e.message));
+  maybeRunDailyAttribution().catch(e=> console.error("Attribution (интервал):", e.message));
+  pullAttributionFact().catch(e=> console.error("Pull-fact (интервал):", e.message));
+}, 3*60*1000);
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, ()=>{
