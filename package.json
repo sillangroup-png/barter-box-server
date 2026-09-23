@@ -9,10 +9,11 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "dependencies": {
+    "dependencies": {
     "express": "^4.22.2",
     "multer": "^2.2.0",
-    "node-telegram-bot-api": "^0.66.0"
+    "node-telegram-bot-api": "^0.66.0",
+    "pg": "^8.11.3"
   },
   "license": "ISC"
 }
