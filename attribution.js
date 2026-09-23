@@ -126,6 +126,15 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
 
   const eligible = [];
   for (const p of placements) {
+    // status='published', но дата публикации не заполнена — такое есть (см. историю: упало
+    // на "Invalid time value"). Без даты не построить окно атрибуции — не гадаем, флагуем.
+    if (!p.published_date) {
+      await writeResult(pgPool, p.id, {
+        status: "no_published_date",
+        note: "Статус «опубликовано», но дата публикации не заполнена — заполните дату, тогда посчитается.",
+      });
+      continue;
+    }
     const isSmallTier = p.tier === "Малый" || p.tier === "Микро";
     if (isSmallTier && (!p.reach || p.reach < REACH_MIN)) {
       await writeResult(pgPool, p.id, {
