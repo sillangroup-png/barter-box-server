@@ -1228,6 +1228,7 @@ const AUTO_CONTRIB_STATUS_LABEL = {
   name_mismatch: "название не совпадает с карточкой Kaspi",
   unconfident_price: "цена нестабильна в этот период",
   needs_reach_data: "делили с блогером без охвата — не досчитано",
+  baseline_uncertain: "реклама по товару идёт почти без пауз — база ненадёжна",
 };
 function autoContributionCell(d){
   const status = d.autoContributionStatus;
@@ -1250,6 +1251,11 @@ function autoContributionCell(d){
     const units = d.autoContributionUnits!=null ? Number(d.autoContributionUnits).toLocaleString("ru-RU",{maximumFractionDigits:2}) : "—";
     const kzt = fmtNum(Math.round(d.autoContributionKzt||0));
     return `<span style="color:var(--warn);font-size:11.5px" title="${title}">⚠️ ${units} шт / ${kzt} ₸ (частично)</span>`;
+  }
+  if(status === "baseline_uncertain"){
+    const units = d.autoContributionUnits!=null ? Number(d.autoContributionUnits).toLocaleString("ru-RU",{maximumFractionDigits:2}) : "—";
+    const kzt = fmtNum(Math.round(d.autoContributionKzt||0));
+    return `<span style="color:var(--warn);font-size:11.5px" title="${title}">⚠️ ${units} шт / ${kzt} ₸ (не уверены)</span>`;
   }
   return `<span style="color:var(--ink-mute);font-size:11.5px" title="${title}">⚠️ ${escapeHtml(label)}</span>`;
 }
@@ -2388,7 +2394,7 @@ const UI = {
   microSummaryExpanded: false, // "Сводка по блогерам" свёрнута до 10 строк, пока не нажата "Показать все"
   expandedResponsible: new Set(),
   expandedCohort: new Set(), // какие когорты (топ/средний/мелкий) развёрнуты в "Плане продаж" (клик по "+" показывает разбивку по товарам)
-  collapsedColGroups: new Set(), // свёрнутые группы колонок в широких таблицах (как группировка столбцов в Excel) — "infl-dates", "infl-reach" // какие менеджеры развёрнуты в "Сводке по ответственным" (клик по "+" показывает разбивку по городам/категориям блогеров)
+  collapsedColGroups: new Set(["infl-auto"]), // свёрнутые группы колонок в широких таблицах (как группировка столбцов в Excel) — "infl-dates", "infl-reach", "infl-auto" (новая колонка авто-расчёта по Kaspi — свёрнута по умолчанию, чтобы не мешала, до первого клика "+ Авто (Kaspi)") // какие менеджеры развёрнуты в "Сводке по ответственным" (клик по "+" показывает разбивку по городам/категориям блогеров)
   expandedCategory: new Set(), // какие категории блогеров развёрнуты в "Сводке по категориям" (клик по "+" показывает, кто из менеджеров её ведёт)
   microDashCategory: "", // фильтр категории блогера на дашборде "Микро/средние": "" = все категории
   calendarMonth: "", // выбранный месяц в "Планере блогеров" (см. tplMicroCalendar) — "YYYY-MM", пусто = текущий месяц
@@ -3950,7 +3956,14 @@ function tplInfluencerDeals(){
         ${(()=>{
           const datesCollapsed = UI.collapsedColGroups.has("infl-dates");
           const reachCollapsed = UI.collapsedColGroups.has("infl-reach");
+          const autoCollapsed = UI.collapsedColGroups.has("infl-auto");
           const groupBtn = (key, label, collapsed)=> `<th colspan="${collapsed?1:2}" style="text-align:center;padding:3px;background:var(--action-soft);border-bottom:none">
+            <button class="btn btn-ghost btn-sm colgroup-toggle-btn" data-group="${key}" style="padding:1px 8px;font-size:11px;line-height:1.4">${collapsed?'+ '+label:'− '+label}</button>
+          </th>`;
+          // "Авто (Kaspi)" — колонка сама по себе одна (не пара, как Даты/Охваты), поэтому
+          // кнопка всегда colspan 1: сворачивание/разворачивание не убирает саму колонку из
+          // таблицы, а только делает её компактной (⋯), тот же приём, что и у Дат/Охватов.
+          const groupBtnSingle = (key, label, collapsed)=> `<th colspan="1" style="text-align:center;padding:3px;background:var(--action-soft);border-bottom:none">
             <button class="btn btn-ghost btn-sm colgroup-toggle-btn" data-group="${key}" style="padding:1px 8px;font-size:11px;line-height:1.4">${collapsed?'+ '+label:'− '+label}</button>
           </th>`;
           return `<tr class="col-group-bar">
@@ -3958,6 +3971,7 @@ function tplInfluencerDeals(){
             ${groupBtn("infl-dates","Даты",datesCollapsed)}
             ${groupBtn("infl-reach","Охваты",reachCollapsed)}
             <th colspan="5" style="border:none;background:transparent"></th>
+            ${groupBtnSingle("infl-auto","Авто (Kaspi)",autoCollapsed)}
           </tr>`;
         })()}
         <tr>
@@ -3967,7 +3981,7 @@ function tplInfluencerDeals(){
           <th>#</th><th class="sticky-col">Блогер</th><th>Ответственный</th><th>Платформа</th><th>Продукт</th>
           ${UI.collapsedColGroups.has("infl-dates") ? `<th title="Дата план / Дата факт свёрнуты">Даты</th>` : `<th>Дата план</th><th>Дата факт</th>`}
           ${UI.collapsedColGroups.has("infl-reach") ? `<th title="План охват/клики / Факт охват/клики свёрнуты">Охваты</th>` : `<th>План охват/клики</th><th>Факт охват/клики</th>`}
-          <th>План/факт расход</th><th>Вклад в продажи<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-mute)">план / факт</span></th><th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th><th>ROMI</th><th title="ROAS = вклад в продажи ÷ расход (сумма + стоимость товара). Тот же расчёт, что и ROMI.">ROAS</th><th title="Отдельный авто-расчёт вклада по продажам Kaspi (обновляется раз в сутки). Не заменяет колонку «Вклад в продажи» слева — показан для сверки.">Авто (Kaspi)</th><th>Статус</th><th></th>
+          <th>План/факт расход</th><th>Вклад в продажи<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-mute)">план / факт</span></th><th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th><th>ROMI</th><th title="ROAS = вклад в продажи ÷ расход (сумма + стоимость товара). Тот же расчёт, что и ROMI.">ROAS</th>${UI.collapsedColGroups.has("infl-auto") ? `<th title="Отдельный авто-расчёт вклада по продажам Kaspi — свёрнуто, нажмите «+ Авто (Kaspi)» выше">Авто</th>` : `<th title="Отдельный авто-расчёт вклада по продажам Kaspi (обновляется раз в сутки). Не заменяет колонку «Вклад в продажи» слева — показан для сверки.">Авто (Kaspi)</th>`}<th>Статус</th><th></th>
         </tr></thead>
         <tbody>
           ${rows.map((r,i)=>{
@@ -4001,7 +4015,7 @@ function tplInfluencerDeals(){
               const units = planUnitsFromContribution(contrib, d.barcode);
               return units ? fmtNum(units) : `<span style="color:var(--ink-mute)" title="Нет цены товара по этому ШК — добавьте в «Динамика цен»">—</span>`;
             })()}</td><td>${r.romi==null ? "—" : `<b style="color:${r.romi>=1?'var(--ok)':'var(--warn)'}">${r.romi.toFixed(2)}</b>`}</td><td>${r.romi==null ? "—" : `×${r.romi.toFixed(2)}`}</td>
-              <td>${autoContributionCell(d)}</td>
+              <td>${UI.collapsedColGroups.has("infl-auto") ? `<span style="color:var(--ink-mute);cursor:default" title="Свёрнуто — нажмите «+ Авто (Kaspi)» над таблицей, чтобы показать">⋯</span>` : autoContributionCell(d)}</td>
               <td><select class="deal-status-select" data-id="${d.id}">${DEAL_STATUSES.map(st=>`<option ${st===d.status?'selected':''}>${st}</option>`).join("")}</select></td>
               <td>
                 <button class="btn btn-ghost btn-sm edit-deal-btn" data-id="${d.id}">✎</button>
@@ -4244,7 +4258,7 @@ function tplMicroInfluencers(){
           <th class="sticky-col">Блогер</th><th>Категория блогера</th><th>Ответственный</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
           ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
           ${sortableTh("Вклад в продажи (план/факт)","sales",mf.sort)}<th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th>${sortableTh("ROMI","romi",mf.sort)}
-        <th title="ROAS = вклад в продажи ÷ расход (сумма + стоимость товара). Тот же расчёт, что и ROMI.">ROAS</th><th title="Отдельный авто-расчёт вклада по продажам Kaspi (обновляется раз в сутки). Не заменяет колонку «Вклад в продажи» слева — показан для сверки.">Авто (Kaspi)</th>
+        <th title="ROAS = вклад в продажи ÷ расход (сумма + стоимость товара). Тот же расчёт, что и ROMI.">ROAS</th><th title="Отдельный авто-расчёт вклада по продажам Kaspi (обновляется раз в сутки). Не заменяет колонку «Вклад в продажи» слева — показан для сверки. Тот же переключатель, что и в таблице крупных интеграций.">${UI.collapsedColGroups.has("infl-auto") ? `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">+ Авто</span>` : `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">− Авто (Kaspi)</span>`}</th>
           <th>Статус товара</th><th>Статус видео</th><th>Плановая дата</th><th>Дата выкладки</th><th>Ссылка на Reels</th><th></th>
         </tr></thead>
         <tbody>
@@ -4286,7 +4300,7 @@ function tplMicroInfluencers(){
                 const units = planUnitsFromContribution(contrib, d.barcode);
                 return units ? fmtNum(units) : `<span style="color:var(--ink-mute)" title="Нет цены товара по этому ШК — добавьте в «Динамика цен»">—</span>`;
               })()}</td><td title="Считается автоматически: вклад в продажи ÷ (сумма + стоимость товара)">${(r && r.romi!=null) ? r.romi.toFixed(2) : "—"}</td><td>${(r && r.romi!=null) ? `×${r.romi.toFixed(2)}` : "—"}</td>
-              <td>${autoContributionCell(d)}</td>
+              <td>${UI.collapsedColGroups.has("infl-auto") ? `<span style="color:var(--ink-mute);cursor:default" title="Свёрнуто — нажмите «+ Авто» в заголовке колонки, чтобы показать">⋯</span>` : autoContributionCell(d)}</td>
               <td>${inlineEditSpan(escapeHtml(d.productStatus||"—"), d.id, 'productStatus', d.productStatus||'', 'select', MICRO_PRODUCT_STATUSES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.videoStatus||"—"), d.id, 'videoStatus', d.videoStatus||'', 'select', MICRO_VIDEO_STATUSES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.plannedDate||"—"), d.id, 'plannedDate', d.plannedDate||'', 'date')}</td>
