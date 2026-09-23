@@ -1211,6 +1211,48 @@ function computeInfluencerRomi(){
     return {deal:u.deal, netContribution, romi, hasBaseline, capped: cappedKeys.has(u.key)};
   });
 }
+// ---------- Авто-расчёт вклада из Supabase (Kaspi), отдельная колонка ----------
+// НЕ трогает и НЕ заменяет расчёт выше (computeUnifiedInfluencerRomi, база по salesByDay/1С).
+// Это отдельный, независимый расчёт: считается раз в сутки на сервере (attribution.js) по
+// продажам Kaspi (analytics.v_kaspi_placed_sku), с порогом охвата для мелких/микро блогеров,
+// проверкой стабильности цены и делением прироста между блогерами пропорционально охвату.
+// Пишется в Supabase в auto_contribution_*, оттуда попадает в deal.autoContribution* через
+// pull-fact-from-supabase.js → /api/state. Показывается здесь только для сверки с колонкой
+// "Вклад в продажи" слева — статусы см. в комментариях к колонкам в 01_migration.sql.
+const AUTO_CONTRIB_STATUS_LABEL = {
+  ok: "ок",
+  zero: "прирост не обнаружен",
+  excluded_reach: "охват ниже порога (10 000)",
+  no_sku_code: "ШК не указан",
+  no_sku_data: "нет продаж по ШК в Kaspi за 14 дн.",
+  name_mismatch: "название не совпадает с карточкой Kaspi",
+  unconfident_price: "цена нестабильна в этот период",
+  needs_reach_data: "делили с блогером без охвата — не досчитано",
+};
+function autoContributionCell(d){
+  const status = d.autoContributionStatus;
+  if(!status){
+    return `<span style="color:var(--ink-mute);font-size:11.5px" title="Ещё не считалось: авто-расчёт заводится для размещений, опубликованных от 2 дней назад, и обновляется раз в сутки">— ещё не считалось</span>`;
+  }
+  const label = AUTO_CONTRIB_STATUS_LABEL[status] || status;
+  const note = d.autoContributionNote ? escapeHtml(d.autoContributionNote) : "";
+  const computedAt = d.autoContributionComputedAt ? escapeHtml(String(d.autoContributionComputedAt).slice(0,16).replace("T"," ")) : "";
+  const title = [note, computedAt ? `посчитано: ${computedAt}` : ""].filter(Boolean).join(" · ");
+  if(status === "ok"){
+    const units = d.autoContributionUnits!=null ? Number(d.autoContributionUnits).toLocaleString("ru-RU",{maximumFractionDigits:2}) : "—";
+    const kzt = fmtNum(Math.round(d.autoContributionKzt||0));
+    return `<span style="color:var(--ok);font-size:11.5px" title="${title}"><b>${units} шт</b> / ${kzt} ₸</span>`;
+  }
+  if(status === "zero"){
+    return `<span style="color:var(--ink-mute);font-size:11.5px" title="${title}">0 шт</span>`;
+  }
+  if(status === "needs_reach_data"){
+    const units = d.autoContributionUnits!=null ? Number(d.autoContributionUnits).toLocaleString("ru-RU",{maximumFractionDigits:2}) : "—";
+    const kzt = fmtNum(Math.round(d.autoContributionKzt||0));
+    return `<span style="color:var(--warn);font-size:11.5px" title="${title}">⚠️ ${units} шт / ${kzt} ₸ (частично)</span>`;
+  }
+  return `<span style="color:var(--ink-mute);font-size:11.5px" title="${title}">⚠️ ${escapeHtml(label)}</span>`;
+}
 // from/to — тот же необязательный фильтр периода, что и в marketingSummary; фильтрует по
 // дате интеграции (inflDealDate: факт публикации, а если его нет — план).
 function influencerSummary(from, to){
@@ -3925,7 +3967,7 @@ function tplInfluencerDeals(){
           <th>#</th><th class="sticky-col">Блогер</th><th>Ответственный</th><th>Платформа</th><th>Продукт</th>
           ${UI.collapsedColGroups.has("infl-dates") ? `<th title="Дата план / Дата факт свёрнуты">Даты</th>` : `<th>Дата план</th><th>Дата факт</th>`}
           ${UI.collapsedColGroups.has("infl-reach") ? `<th title="План охват/клики / Факт охват/клики свёрнуты">Охваты</th>` : `<th>План охват/клики</th><th>Факт охват/клики</th>`}
-          <th>План/факт расход</th><th>Вклад в продажи<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-mute)">план / факт</span></th><th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th><th>ROMI</th><th title="ROAS = вклад в продажи ÷ расход (сумма + стоимость товара). Тот же расчёт, что и ROMI.">ROAS</th><th>Статус</th><th></th>
+          <th>План/факт расход</th><th>Вклад в продажи<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-mute)">план / факт</span></th><th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th><th>ROMI</th><th title="ROAS = вклад в продажи ÷ расход (сумма + стоимость товара). Тот же расчёт, что и ROMI.">ROAS</th><th title="Отдельный авто-расчёт вклада по продажам Kaspi (обновляется раз в сутки). Не заменяет колонку «Вклад в продажи» слева — показан для сверки.">Авто (Kaspi)</th><th>Статус</th><th></th>
         </tr></thead>
         <tbody>
           ${rows.map((r,i)=>{
@@ -3959,13 +4001,14 @@ function tplInfluencerDeals(){
               const units = planUnitsFromContribution(contrib, d.barcode);
               return units ? fmtNum(units) : `<span style="color:var(--ink-mute)" title="Нет цены товара по этому ШК — добавьте в «Динамика цен»">—</span>`;
             })()}</td><td>${r.romi==null ? "—" : `<b style="color:${r.romi>=1?'var(--ok)':'var(--warn)'}">${r.romi.toFixed(2)}</b>`}</td><td>${r.romi==null ? "—" : `×${r.romi.toFixed(2)}`}</td>
+              <td>${autoContributionCell(d)}</td>
               <td><select class="deal-status-select" data-id="${d.id}">${DEAL_STATUSES.map(st=>`<option ${st===d.status?'selected':''}>${st}</option>`).join("")}</select></td>
               <td>
                 <button class="btn btn-ghost btn-sm edit-deal-btn" data-id="${d.id}">✎</button>
                 <button class="btn btn-danger btn-sm del-deal-btn" data-id="${d.id}">✕</button>
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="${14 - (UI.collapsedColGroups.has("infl-dates")?1:0) - (UI.collapsedColGroups.has("infl-reach")?1:0)}">${s.rows.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="${15 - (UI.collapsedColGroups.has("infl-dates")?1:0) - (UI.collapsedColGroups.has("infl-reach")?1:0)}">${s.rows.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
     </div>
@@ -4201,7 +4244,7 @@ function tplMicroInfluencers(){
           <th class="sticky-col">Блогер</th><th>Категория блогера</th><th>Ответственный</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
           ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
           ${sortableTh("Вклад в продажи (план/факт)","sales",mf.sort)}<th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th>${sortableTh("ROMI","romi",mf.sort)}
-        <th title="ROAS = вклад в продажи ÷ расход (сумма + стоимость товара). Тот же расчёт, что и ROMI.">ROAS</th>
+        <th title="ROAS = вклад в продажи ÷ расход (сумма + стоимость товара). Тот же расчёт, что и ROMI.">ROAS</th><th title="Отдельный авто-расчёт вклада по продажам Kaspi (обновляется раз в сутки). Не заменяет колонку «Вклад в продажи» слева — показан для сверки.">Авто (Kaspi)</th>
           <th>Статус товара</th><th>Статус видео</th><th>Плановая дата</th><th>Дата выкладки</th><th>Ссылка на Reels</th><th></th>
         </tr></thead>
         <tbody>
@@ -4243,6 +4286,7 @@ function tplMicroInfluencers(){
                 const units = planUnitsFromContribution(contrib, d.barcode);
                 return units ? fmtNum(units) : `<span style="color:var(--ink-mute)" title="Нет цены товара по этому ШК — добавьте в «Динамика цен»">—</span>`;
               })()}</td><td title="Считается автоматически: вклад в продажи ÷ (сумма + стоимость товара)">${(r && r.romi!=null) ? r.romi.toFixed(2) : "—"}</td><td>${(r && r.romi!=null) ? `×${r.romi.toFixed(2)}` : "—"}</td>
+              <td>${autoContributionCell(d)}</td>
               <td>${inlineEditSpan(escapeHtml(d.productStatus||"—"), d.id, 'productStatus', d.productStatus||'', 'select', MICRO_PRODUCT_STATUSES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.videoStatus||"—"), d.id, 'videoStatus', d.videoStatus||'', 'select', MICRO_VIDEO_STATUSES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.plannedDate||"—"), d.id, 'plannedDate', d.plannedDate||'', 'date')}</td>
@@ -4255,7 +4299,7 @@ function tplMicroInfluencers(){
                 <button class="btn btn-danger btn-sm del-micro-btn" data-id="${d.id}">✕</button>
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="23">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="24">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
     </div>
