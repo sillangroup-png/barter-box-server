@@ -126,6 +126,7 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
 
   const eligible = [];
   for (const p of placements) {
+   try {
     // status='published', но дата публикации не заполнена — такое есть (см. историю: упало
     // на "Invalid time value"). Без даты не построить окно атрибуции — не гадаем, флагуем.
     if (!p.published_date) {
@@ -148,6 +149,19 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
       continue;
     }
     eligible.push(p);
+   } catch (e) {
+    // Та же защита, что и ниже для групп по ШК: одна кривая запись не должна ронять
+    // весь проход — фиксируем и идём дальше.
+    log(`[attribution] ошибка на записи id=${p.id}: ${e.message}`);
+    try {
+      await writeResult(pgPool, p.id, {
+        status: "compute_error",
+        note: `Внутренняя ошибка расчёта: ${String(e.message).slice(0, 400)}. Разберите вручную.`,
+      });
+    } catch (e2) {
+      log(`[attribution] не удалось записать статус ошибки для id=${p.id}: ${e2.message}`);
+    }
+   }
   }
 
   const byCode = groupBy(eligible, (p) => p.kaspi_code);
@@ -165,6 +179,12 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
   const staleCutoff = addDaysStr(today, -SKU_STALE_DAYS);
 
   for (const [code, group] of codeEntries) {
+   try {
+    // Всё тело обработки одной группы (один ШК) — в try/catch. Если в данных по
+    // этому конкретному товару окажется что-то, чего мы не предусмотрели (кривая
+    // дата, неожиданный формат и т.п.) — падать должна только ЭТА группа, а не
+    // весь суточный расчёт целиком (см. историю: одна запись без даты публикации
+    // обрушивала вообще всё, и прогресс стоял на месте много часов).
     const pubDates = group.map((p) => p.published_date);
     const minTarget = pubDates.reduce((a, b) => (a < b ? a : b));
     const maxTarget = pubDates.reduce((a, b) => (a > b ? a : b));
@@ -351,6 +371,21 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
       }
       processed++;
     }
+   } catch (e) {
+    // Эта конкретная группа (ШК) не посчиталась — фиксируем причину по каждой её
+    // записи и идём дальше, к следующему товару. Остальной расчёт не страдает.
+    log(`[attribution] ошибка при расчёте ШК ${code}: ${e.message}`);
+    for (const p of group) {
+      try {
+        await writeResult(pgPool, p.id, {
+          status: "compute_error",
+          note: `Внутренняя ошибка расчёта для этого товара: ${String(e.message).slice(0, 400)}. Разберите вручную, остальные размещения это не затронуло.`,
+        });
+      } catch (e2) {
+        log(`[attribution] не удалось даже записать статус ошибки для id=${p.id}: ${e2.message}`);
+      }
+    }
+   }
   }
 
   log(`[attribution] готово, обработано размещений: ${processed}`);
