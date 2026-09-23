@@ -314,12 +314,11 @@ function nextMeasurementId(){
 }
 
 /* ---------- Синхронизация в Supabase (директор видит интеграции у себя) ----------
-   Каждые несколько минут отправляем срез микро/средних и крупных инфлюенс-интеграций
+   Раз в несколько минут отправляем срез микро/средних и крупных инфлюенс-интеграций
    в public.influencer_placements того же Supabase-проекта, что и CRM блогеров.
-   У этой таблицы id — автоинкремент не под нашим контролем, и уникального ключа на
-   (source, source_deal_id, platform) в ней нет (прав добавить его тоже нет), поэтому
-   апсертим вручную: сперва UPDATE по (source, source_deal_id, platform), и если ни одна
-   строка не задета — INSERT. syncing — защита от накладывающихся запусков. */
+   Один барter-box-блогер (микро) = одна строка в этой таблице, даже если публикуется
+   и в Instagram, и в TikTok — таков реальный ключ таблицы: (source, source_deal_id).
+   Upsert через ON CONFLICT по этому ключу. syncing — защита от накладывающихся запусков. */
 const pgPool = new Pool({
   connectionString: "postgresql://crm_nina.zwaynpogmedeqcyzriwi:TMxdRmisrSq6vs2tgmA82GDq@aws-0-eu-central-1.pooler.supabase.com:5432/postgres",
   ssl: { rejectUnauthorized: false },
@@ -328,33 +327,32 @@ const pgPool = new Pool({
 
 let placementsSyncing = false;
 
-async function upsertPlacement(client, r){
-  const upd = await client.query(
-    `UPDATE public.influencer_placements SET
-       blogger_handle=$1, followers=$2, tier=$3, blogger_category=$4, city=$5, manager=$6,
-       kaspi_code=$7, sku_name=$8, deal_type=$9, cost_kzt=$10, product_cost_kzt=$11,
-       planned_date=$12, published_at=$13, published_date=$14, video_url=$15, reach=$16,
-       status=$17, notes=$18, updated_at=$19
-     WHERE source=$20 AND source_deal_id=$21 AND platform=$22`,
-    [r.blogger_handle, r.followers, r.tier, r.blogger_category, r.city, r.manager,
-     r.kaspi_code, r.sku_name, r.deal_type, r.cost_kzt, r.product_cost_kzt,
-     r.planned_date, r.published_at, r.published_date, r.video_url, r.reach,
-     r.status, r.notes, r.updated_at,
-     r.source, r.source_deal_id, r.platform]
-  );
-  if(upd.rowCount > 0) return;
-  await client.query(
-    `INSERT INTO public.influencer_placements
-       (source, source_deal_id, blogger_handle, platform, followers, tier, blogger_category,
-        city, manager, kaspi_code, sku_name, deal_type, cost_kzt, product_cost_kzt,
-        planned_date, published_at, published_date, video_url, reach, status, notes,
-        created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
-    [r.source, r.source_deal_id, r.blogger_handle, r.platform, r.followers, r.tier, r.blogger_category,
-     r.city, r.manager, r.kaspi_code, r.sku_name, r.deal_type, r.cost_kzt, r.product_cost_kzt,
-     r.planned_date, r.published_at, r.published_date, r.video_url, r.reach, r.status, r.notes,
-     r.created_at, r.updated_at]
-  );
+const PLACEMENT_COLS = [
+  "source","source_deal_id","blogger_handle","platform","followers","tier",
+  "blogger_category","city","manager","kaspi_code","sku_name","deal_type",
+  "cost_kzt","product_cost_kzt","planned_date","published_at","published_date",
+  "video_url","reach","status","notes","created_at","updated_at",
+];
+
+function chunkRows(arr, size){ const out=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out; }
+
+async function upsertPlacements(client, rows){
+  if(!rows.length) return;
+  const updateSet = PLACEMENT_COLS.filter(c=>c!=="source" && c!=="source_deal_id" && c!=="created_at").map(c=>`${c}=EXCLUDED.${c}`).join(",");
+  for(const part of chunkRows(rows, 300)){
+    const values = [];
+    const placeholders = part.map((r,i)=>{
+      const base = i*PLACEMENT_COLS.length;
+      values.push(...PLACEMENT_COLS.map(c=> r[c] === undefined ? null : r[c]));
+      return "(" + PLACEMENT_COLS.map((_,j)=>`$${base+j+1}`).join(",") + ")";
+    }).join(",");
+    await client.query(
+      `INSERT INTO public.influencer_placements (${PLACEMENT_COLS.join(",")}) VALUES ${placeholders}
+       ON CONFLICT (source, source_deal_id) WHERE source_deal_id IS NOT NULL
+       DO UPDATE SET ${updateSet}`,
+      values
+    );
+  }
 }
 
 function microDealStatus(d){
@@ -364,12 +362,7 @@ function microDealStatus(d){
   return "planned";
 }
 function largeDealStatus(d){
-  const map = {
-    "Запланирована": "planned",
-    "Опубликована": "published",
-    "Оплачена": "paid",
-    "Закрыта": "published",
-  };
+  const map = { "Запланирована":"planned", "Опубликована":"published", "Оплачена":"paid", "Закрыта":"published" };
   return map[d.status] || "planned";
 }
 
@@ -377,39 +370,26 @@ function buildPlacementRows(){
   const rows = [];
   const now = new Date().toISOString();
   (state.microInfluencerDeals || []).forEach(d=>{
-    const base = {
+    const hasIg = !!d.instagramAccount, hasTt = !!d.tiktokAccount;
+    const platform = hasIg && hasTt ? "Instagram Reels + TikTok" : hasIg ? "Instagram Reels" : hasTt ? "TikTok" : "unknown";
+    const followers = (d.followers||0) + (d.followersTT||0) || null;
+    const reach = (d.factReachReels||0) + (d.factReachTT||0) || null;
+    const extraNote = (hasIg && hasTt && d.tiktokVideoLink) ? ("TikTok: "+d.tiktokVideoLink) : null;
+    rows.push({
       source: "barter_box_micro", source_deal_id: String(d.id),
+      blogger_handle: d.instagramAccount || d.tiktokAccount || ("micro_"+d.id),
+      platform, followers, tier: "Малый",
       blogger_category: d.bloggerCategory || null, city: d.city || null,
       manager: d.responsible || null, kaspi_code: d.barcode || null,
-      sku_name: d.product || null, deal_type: "mixed", tier: "Малый",
+      sku_name: d.product || null, deal_type: "mixed",
+      cost_kzt: d.cost || 0, product_cost_kzt: d.productCost || 0,
       planned_date: d.plannedDate || null,
-      notes: [d.notes, d.paymentStatus ? ("оплата: "+d.paymentStatus) : null].filter(Boolean).join(" / ") || null,
+      published_at: d.publishDate || null, published_date: d.publishDate || null,
+      video_url: d.reelsLink || d.tiktokVideoLink || null, reach,
+      status: microDealStatus(d),
+      notes: [d.notes, d.paymentStatus ? ("оплата: "+d.paymentStatus) : null, extraNote].filter(Boolean).join(" / ") || null,
       created_at: now, updated_at: now,
-    };
-    const status = microDealStatus(d);
-    let costAssigned = false;
-    if(d.instagramAccount){
-      rows.push({
-        ...base, blogger_handle: d.instagramAccount, platform: "Instagram Reels",
-        followers: d.followers || null,
-        cost_kzt: d.cost || 0, product_cost_kzt: d.productCost || 0,
-        published_at: d.publishDate || null, published_date: d.publishDate || null,
-        video_url: d.reelsLink || null, reach: d.factReachReels || null,
-        status,
-      });
-      costAssigned = true;
-    }
-    if(d.tiktokAccount){
-      rows.push({
-        ...base, blogger_handle: d.tiktokAccount, platform: "TikTok",
-        followers: d.followersTT || null,
-        cost_kzt: costAssigned ? 0 : (d.cost || 0),
-        product_cost_kzt: costAssigned ? 0 : (d.productCost || 0),
-        published_at: d.publishDate || null, published_date: d.publishDate || null,
-        video_url: d.tiktokVideoLink || null, reach: d.factReachTT || null,
-        status,
-      });
-    }
+    });
   });
   (state.influencerDeals || []).forEach(d=>{
     rows.push({
@@ -436,13 +416,16 @@ async function syncPlacementsToSupabase(){
     client = await pgPool.connect();
     const rows = buildPlacementRows();
     await client.query("BEGIN");
-    for(const r of rows){ await upsertPlacement(client, r); }
-    const keys = rows.map(r=> r.source_deal_id + "|" + r.platform);
+    await upsertPlacements(client, rows);
+    const microIds = rows.filter(r=>r.source==="barter_box_micro").map(r=>r.source_deal_id);
+    const largeIds = rows.filter(r=>r.source==="barter_box_deals").map(r=>r.source_deal_id);
     await client.query(
-      `DELETE FROM public.influencer_placements
-       WHERE source IN ('barter_box_micro','barter_box_deals')
-         AND NOT ((source_deal_id || '|' || platform) = ANY($1::text[]))`,
-      [keys.length ? keys : ["__none__"]]
+      `DELETE FROM public.influencer_placements WHERE source='barter_box_micro' AND NOT (source_deal_id = ANY($1::text[]))`,
+      [microIds.length ? microIds : ["__none__"]]
+    );
+    await client.query(
+      `DELETE FROM public.influencer_placements WHERE source='barter_box_deals' AND NOT (source_deal_id = ANY($1::text[]))`,
+      [largeIds.length ? largeIds : ["__none__"]]
     );
     await client.query("COMMIT");
     console.log(`Supabase placements sync OK: ${rows.length} строк`);
