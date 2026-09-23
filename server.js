@@ -328,6 +328,29 @@ const pgPool = new Pool({
 
 let placementsSyncing = false;
 
+/* ---------- Авто-расчёт вклада блогеров в продажи (по Kaspi, раз в сутки) ----------
+   Отдельно от синка выше: тот только ОТПРАВЛЯЕТ данные в Supabase, а это СЧИТАЕТ
+   и ЗАБИРАЕТ обратно готовый результат в auto_contribution_* — см. attribution.js
+   и pull-fact-from-supabase.js. Существующий расчёт "Вклад в продажи" на фронтенде
+   (по salesByDay/1С) не трогается, это независимая, отдельная колонка для сверки. */
+const { runDailyAttribution, almatyTodayStr } = require("./attribution.js");
+const { pullFactFromSupabase } = require("./pull-fact-from-supabase.js");
+
+let lastAttributionRunDate = null;
+
+async function maybeRunDailyAttribution(){
+  const today = almatyTodayStr();
+  if(lastAttributionRunDate === today) return; // сегодня уже считали
+  try{
+    await runDailyAttribution(pgPool);
+    await pullFactFromSupabase(pgPool, state, persist);
+    lastAttributionRunDate = today;
+  }catch(e){
+    console.error("Attribution error:", e.message);
+    // lastAttributionRunDate не трогаем — попробует снова на следующем тике
+  }
+}
+
 function safeDate(v){
   if(v===undefined || v===null) return null;
   const s = String(v).trim();
@@ -1232,7 +1255,11 @@ app.get(/^(?!\/api).*/, (req,res)=>{
 });
 
 syncPlacementsToSupabase().catch(e=> console.error("Supabase sync (старт):", e.message));
-setInterval(()=>{ syncPlacementsToSupabase().catch(e=> console.error("Supabase sync (интервал):", e.message)); }, 3*60*1000);
+maybeRunDailyAttribution().catch(e=> console.error("Attribution (старт):", e.message));
+setInterval(()=>{
+  syncPlacementsToSupabase().catch(e=> console.error("Supabase sync (интервал):", e.message));
+  maybeRunDailyAttribution().catch(e=> console.error("Attribution (интервал):", e.message));
+}, 3*60*1000);
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, ()=>{
