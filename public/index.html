@@ -1520,6 +1520,12 @@ function tplInfluencerBrandDashboard(allRows){
 
   const kpi = (label, value, note) => `<div class="kpi"><div class="num" style="color:${INFL_BRAND}">${value}</div><div class="lbl">${label}</div>${note?`<div style="font-size:10px;color:var(--ink-mute);margin-top:3px;line-height:1.35">${note}</div>`:""}</div>`;
   const fmtSigned = (v) => (v>=0?"+":"−") + fmtNum(Math.abs(Math.round(v))) + " ₸";
+  // Сумма авто-расчёта по Kaspi (отдельная колонка "Авто (Kaspi)") за тот же период/фильтр,
+  // что и остальные плашки — суммируем везде, где есть реальное число (включая частично
+  // посчитанные needs_reach_data и неуверенные baseline_uncertain, они не 0, просто с оговоркой).
+  const kaspiAutoStatuses = new Set(["ok","zero","needs_reach_data","baseline_uncertain"]);
+  const kaspiAutoTotal = monthRows.reduce((sum,r)=> sum + (kaspiAutoStatuses.has(r.deal.autoContributionStatus) ? (Number(r.deal.autoContributionKzt)||0) : 0), 0);
+  const kaspiAutoCounted = monthRows.filter(r=>kaspiAutoStatuses.has(r.deal.autoContributionStatus)).length;
 
   const card = (title, borderColor, bg, body) => `
     <div style="border-left:3px solid ${borderColor};background:${bg};border-radius:8px;padding:12px">
@@ -1607,6 +1613,7 @@ function tplInfluencerBrandDashboard(allRows){
       ${kpi("Расходы (факт)", fmtNum(s.totalCost)+" ₸", "сумма колонки «факт расход» — сколько уже реально потратили")}
       ${kpi("План", fmtNum(s.plannedCost + (allPeriod ? (DataManager.state.plans||[]).filter(p=>p.scope==="cohort"&&p.key==="mid"&&p.metric==="budget").reduce((a,p)=>a+(p.value||0),0) : planValue(month,"cohort","mid","budget")))+" ₸", "сумма «план расход» (крупные) + план бюджета когорты «Средний инфлюенс» за месяц")}
       ${kpi("Выручка (вклад)", fmtNum(Math.round(s.totalContribution))+" ₸")}
+      ${kpi("Выручка (Kaspi авто)", fmtNum(Math.round(kaspiAutoTotal))+" ₸", `сумма отдельной колонки «Авто (Kaspi)», посчитано по ${kaspiAutoCounted} из ${monthRows.length}`)}
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2))}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%")}
       ${kpi("ДРР", s.drrPct==null?"—":s.drrPct.toFixed(1)+"%")}
@@ -1874,6 +1881,7 @@ function tplMicroInfluencerBrandDashboard(allRows){
     <div class="grid-kpi">
       ${kpi("Расходы", fmtNum(s.totalCost)+" ₸", "сумма расходов по всем интеграциям месяца")}
       ${kpi("Выручка (вклад)", fmtNum(Math.round(s.totalContribution))+" ₸", "сумма вклада в продажи (только там, где есть ШК)", microContributionExplain(monthRows, month))}
+      ${kpi("Выручка (Kaspi авто)", fmtNum(Math.round(monthRows.reduce((sum,r)=> sum + (["ok","zero","needs_reach_data","baseline_uncertain"].includes(r.deal.autoContributionStatus) ? (Number(r.deal.autoContributionKzt)||0) : 0), 0)))+" ₸", "сумма отдельной колонки «Авто (Kaspi)» за тот же период")}
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2), "вклад в продажи ÷ расходы")}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%", "вклад в продажи ÷ расходы × 100%")}
       ${kpi("ДРР", s.drrPct==null?"—":s.drrPct.toFixed(1)+"%", "расходы ÷ вклад в продажи × 100%")}
@@ -3376,6 +3384,8 @@ function filteredInfluencerDealRows(){
     cost_asc: (a,b)=> (a.deal.cost||0)-(b.deal.cost||0),
     romi_desc: (a,b)=> (b.romi==null?-Infinity:b.romi)-(a.romi==null?-Infinity:a.romi),
     romi_asc: (a,b)=> (a.romi==null?Infinity:a.romi)-(b.romi==null?Infinity:b.romi),
+    kaspi_desc: (a,b)=> (Number(b.deal.autoContributionKzt)||0)-(Number(a.deal.autoContributionKzt)||0),
+    kaspi_asc: (a,b)=> (Number(a.deal.autoContributionKzt)||0)-(Number(b.deal.autoContributionKzt)||0),
   };
   if(sorters[fi.sort]) rows = rows.slice().sort(sorters[fi.sort]);
   return rows;
@@ -3950,6 +3960,8 @@ function tplInfluencerDeals(){
           <option value="cost_asc" ${fi.sort==='cost_asc'?'selected':''}>Расход: сначала меньше</option>
           <option value="romi_desc" ${fi.sort==='romi_desc'?'selected':''}>ROMI: сначала больше</option>
           <option value="romi_asc" ${fi.sort==='romi_asc'?'selected':''}>ROMI: сначала меньше</option>
+          <option value="kaspi_desc" ${fi.sort==='kaspi_desc'?'selected':''}>Авто (Kaspi): сначала больше</option>
+          <option value="kaspi_asc" ${fi.sort==='kaspi_asc'?'selected':''}>Авто (Kaspi): сначала меньше</option>
         </select>
       </div>
       <div class="table-wrap"><table>
@@ -4133,6 +4145,8 @@ function tplMicroInfluencers(){
       const av=(romiById[a.id]||{}).romi, bv=(romiById[b.id]||{}).romi;
       return (av==null?Infinity:av)-(bv==null?Infinity:bv);
     },
+    kaspi_desc: (a,b)=> (Number(b.autoContributionKzt)||0)-(Number(a.autoContributionKzt)||0),
+    kaspi_asc: (a,b)=> (Number(a.autoContributionKzt)||0)-(Number(b.autoContributionKzt)||0),
   };
   if(sorters[mf.sort]) deals = deals.slice().sort(sorters[mf.sort]);
 
@@ -4232,6 +4246,8 @@ function tplMicroInfluencers(){
           <option value="sales_asc" ${mf.sort==='sales_asc'?'selected':''}>Вклад в продажи: сначала меньше</option>
           <option value="romi_desc" ${mf.sort==='romi_desc'?'selected':''}>ROMI: сначала больше</option>
           <option value="romi_asc" ${mf.sort==='romi_asc'?'selected':''}>ROMI: сначала меньше</option>
+          <option value="kaspi_desc" ${mf.sort==='kaspi_desc'?'selected':''}>Авто (Kaspi): сначала больше</option>
+          <option value="kaspi_asc" ${mf.sort==='kaspi_asc'?'selected':''}>Авто (Kaspi): сначала меньше</option>
         </select>
       </div>
       <div class="login-hint" style="margin-bottom:12px">
