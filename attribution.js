@@ -2,33 +2,54 @@
 // attribution.js — автоматический расчёт "вклада в продажи" для интеграций
 // блогеров, на основе продаж Kaspi (analytics.v_kaspi_placed_sku в Supabase).
 //
-// Формализует то, что делалось вручную в чате: порог по охвату, окно
-// атрибуции (день публикации + день после), деление пересекающихся дней по
-// охвату, проверка на скачки/дрейф цены, обработка новых товаров без
-// истории (база = 0), отказ от расчёта при битом/несуществующем ШК вместо
-// угадывания.
+// v2. Что изменилось относительно первой версии и почему:
+//
+// 1) БАЗА ТЕПЕРЬ "СКОЛЬЗЯЩАЯ И ЧИСТАЯ", а не "7 календарных дней перед публикацией".
+//    Раньше: если перед выкладкой шла активная реклама (несколько блогеров подряд),
+//    эти дни всё равно попадали в базу как "обычный уровень" — база завышалась, и
+//    блогер, который выкладывался в затишье ПОСЛЕ такой кампании, выглядел так,
+//    будто ничего не добавил (реальные продажи оказывались НИЖЕ вот этой вздутой
+//    базы). Теперь база каждого дня — среднее по последним BASELINE_DAYS дням,
+//    которые (а) есть в истории продаж и (б) не попадают в окно [публикация;
+//    публикация+1] НИ ОДНОГО размещения по этому ШК (не только из текущей пачки —
+//    вообще любого, даже отсеянного по охвату: реклама была, база всё равно грязная).
+//    Ищем такие дни, отступая назад до BASELINE_LOOKBACK_DAYS — если кампания шла
+//    несколько недель подряд, база возьмётся из последнего действительно чистого
+//    периода перед ней, а не из хвоста кампании. У некоторых товаров (например,
+//    Коллаген+Биотин) реклама идёт настолько плотно, что чистых дней в пределах
+//    BASELINE_LOOKBACK_DAYS может не найтись вообще — база тогда 0, и это НЕ
+//    прячем как уверенный ноль: если чистых дней нашлось меньше MIN_CLEAN_DAYS_TRUST,
+//    статус получается "baseline_uncertain", а не "ok"/"zero" — число может быть
+//    занижено или завышено, доверять ему нельзя, это честно написано в заметке.
+//
+// 2) ОДИН ПРОХОД СЧИТАЕТ И "СВЕЖЕЕ" ОКНО, И ВЕСЬ БЭКЛОГ.
+//    Раньше runDailyAttribution всегда брал только today-2/today-3 — размещения
+//    старше этого НИКОГДА не досчитывались (весь сентябрь и более ранние месяцы
+//    так и остались бы "ещё не считалось" навсегда). Теперь в один проход берём
+//    today-2/today-3 (пересчитываем всегда, т.к. статусы заказов в Kaspi ещё
+//    "оседают" в первые сутки) ПЛЮС любые ещё не посчитанные публикации любой
+//    давности (auto_contribution_status IS NULL) — так бэклог убирается сам,
+//    без отдельного скрипта. Группы по ШК обрабатываются в порядке "сначала
+//    самые свежие публикации" — если процесс не успеет за один тик, сентябрь
+//    досчитается раньше июня.
 //
 // Результат пишется в НОВЫЕ колонки public.influencer_placements
 // (auto_contribution_*, см. 01_migration.sql) — существующее поле
 // "вклад в продажи", которое менеджеры заполняют вручную, не трогается.
-//
-// Запускается РАЗ В СУТКИ (см. integration-snippet.js) для двух последних
-// уже полностью закрытых окон публикации — чтобы не считать по неполному
-// дню и один раз переподтвердить предыдущий день (в Kaspi отмены/статусы
-// заказов ещё немного "оседают" в течение суток).
 // ============================================================================
 
-const REACH_MIN = 10000;                // порог охвата для малых/микро блогеров
-const BASELINE_DAYS = 7;                 // сколько дней брать под базу перед окном
+const REACH_MIN = 10000;                 // порог охвата для малых/микро блогеров
+const BASELINE_DAYS = 7;                 // сколько ЧИСТЫХ дней брать под базу
+const BASELINE_LOOKBACK_DAYS = 60;       // как далеко назад искать чистые дни для базы
+const MIN_CLEAN_DAYS_TRUST = 3;          // меньше стольки чистых дней в базе — не доверяем числу (см. baseline_uncertain)
 const SKU_STALE_DAYS = 14;               // если по ШК нет продаж дольше этого — код считаем битым
-const PRICE_DRIFT_TOLERANCE = 0.03;      // >3% разброса цены в периоде — не считаем, слишком рискованно
+const PRICE_DRIFT_TOLERANCE = 0.03;      // >3% разброса цены — не считаем, слишком рискованно
 const NAME_MATCH_MIN_SHARED_WORDS = 1;   // минимум общих значимых слов между sku_name и названием в Kaspi
 
 // ---------------------------------------------------------------------------
-// Даты. Почему через to_char, а не через Date из pg: колонки типа `date` при
-// чтении в JS легко ловят сдвиг на день туда-сюда из-за таймзоны драйвера.
-// Работаем со строками 'YYYY-MM-DD', которые Postgres формирует сам —
-// однозначно, без клиентской интерпретации.
+// Даты. Через to_char/::text, а не Date из pg: колонки типа `date` при чтении
+// в JS легко ловят сдвиг на день туда-сюда из-за таймзоны драйвера. Работаем
+// со строками 'YYYY-MM-DD', которые Postgres формирует сам — однозначно.
 // ---------------------------------------------------------------------------
 function almatyTodayStr() {
   // Asia/Almaty = UTC+5, без перехода на летнее время
@@ -81,29 +102,25 @@ function groupBy(arr, keyFn) {
 }
 
 // ---------------------------------------------------------------------------
-// Основная функция. Вызывать раз в сутки.
+// Основная функция. Вызывать раз в сутки (можно чаще — для уже посчитанных
+// пар "сегодня-2/сегодня-3" и для пустого бэклога это дешёвые запросы).
 // ---------------------------------------------------------------------------
 async function runDailyAttribution(pgPool, { log = console.log } = {}) {
   const today = almatyTodayStr();
-  // Окно публикации D закрывается на дату D+1. Чтобы окно было полностью
-  // закрыто на момент расчёта, публикация должна быть не позже today-2.
-  // Пересчитываем два последних таких дня (сегодня и вчера относительно
-  // "закрытия") — свежее плюс один повторный проход, т.к. статусы заказов
-  // в Kaspi ещё немного меняются в первые сутки после окна.
-  const targetPublishDates = [addDaysStr(today, -2), addDaysStr(today, -3)];
+  const freshDates = [addDaysStr(today, -2), addDaysStr(today, -3)];
 
-  log(`[attribution] запуск на ${today}, публикации от ${targetPublishDates.join(" и ")}`);
+  log(`[attribution] запуск на ${today}: свежее окно ${freshDates.join(" и ")} + весь ещё не посчитанный бэклог`);
 
   const { rows: placements } = await pgPool.query(
     `SELECT id, tier, reach, kaspi_code, sku_name, published_date::text AS published_date, manager, blogger_handle
      FROM public.influencer_placements
      WHERE status = 'published'
-       AND published_date::date = ANY($1::date[])`,
-    [targetPublishDates]
+       AND (published_date::date = ANY($1::date[]) OR auto_contribution_status IS NULL)`,
+    [freshDates]
   );
 
   if (placements.length === 0) {
-    log("[attribution] нет опубликованных размещений на эти даты — нечего считать");
+    log("[attribution] нечего считать — ни свежего окна, ни бэклога");
     return { processed: 0 };
   }
 
@@ -125,34 +142,30 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
   }
 
   const byCode = groupBy(eligible, (p) => p.kaspi_code);
+
+  // Сначала группы, где есть хотя бы одна свежая (последний месяц данных) публикация —
+  // чтобы если процесс прервётся или не успеет за один тик, недавние месяцы (сейчас
+  // это сентябрь) досчитались раньше, чем старый бэклог с июня.
+  const codeEntries = [...byCode.entries()].sort((a, b) => {
+    const maxA = a[1].reduce((m, p) => (p.published_date > m ? p.published_date : m), "");
+    const maxB = b[1].reduce((m, p) => (p.published_date > m ? p.published_date : m), "");
+    return maxB.localeCompare(maxA); // по убыванию даты — свежие сначала
+  });
+
   let processed = 0;
+  const staleCutoff = addDaysStr(today, -SKU_STALE_DAYS);
 
-  for (const [code, group] of byCode) {
+  for (const [code, group] of codeEntries) {
     const pubDates = group.map((p) => p.published_date);
-    const earliestPub = pubDates.reduce((a, b) => (a < b ? a : b));
-    const latestPub = pubDates.reduce((a, b) => (a > b ? a : b));
-    const baselineStart = addDaysStr(earliestPub, -BASELINE_DAYS);
-    const baselineEnd = addDaysStr(earliestPub, -1);
-    const windowEnd = addDaysStr(latestPub, 1);
-    const staleCutoff = addDaysStr(today, -SKU_STALE_DAYS);
-
-    // Продажи, с реальными датами (order_date уже как есть, без клиентской
-    // конвертации таймзоны — берём текстом).
-    const { rows: history } = await pgPool.query(
-      `SELECT order_date::text AS d, shtuk, cena, tovar
-       FROM analytics.v_kaspi_placed_sku
-       WHERE offer_code = $1 AND order_date BETWEEN $2::date AND $3::date
-       ORDER BY order_date`,
-      [code, baselineStart, windowEnd]
-    );
+    const minTarget = pubDates.reduce((a, b) => (a < b ? a : b));
+    const maxTarget = pubDates.reduce((a, b) => (a > b ? a : b));
+    const windowEnd = addDaysStr(maxTarget, 1);
+    const historyStart = addDaysStr(minTarget, -BASELINE_LOOKBACK_DAYS);
 
     const { rows: recentCheck } = await pgPool.query(
-      `SELECT count(*)::int AS n
-       FROM analytics.v_kaspi_placed_sku
-       WHERE offer_code = $1 AND order_date >= $2::date`,
+      `SELECT count(*)::int AS n FROM analytics.v_kaspi_placed_sku WHERE offer_code = $1 AND order_date >= $2::date`,
       [code, staleCutoff]
     );
-
     if (recentCheck[0].n === 0) {
       for (const p of group) {
         await writeResult(pgPool, p.id, {
@@ -163,15 +176,67 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
       continue;
     }
 
-    // Проверка на дрейф/скачок цены в интересующем периоде — не гадаем.
-    const prices = history.map((r) => Number(r.cena)).filter((v) => v > 0);
-    if (prices.length > 0) {
-      const priceRange = (Math.max(...prices) - Math.min(...prices)) / Math.min(...prices);
+    // Продажи для базы (с большим запасом назад) и для окна.
+    const { rows: history } = await pgPool.query(
+      `SELECT order_date::text AS d, shtuk, cena, tovar
+       FROM analytics.v_kaspi_placed_sku
+       WHERE offer_code = $1 AND order_date BETWEEN $2::date AND $3::date
+       ORDER BY order_date`,
+      [code, historyStart, windowEnd]
+    );
+    const byDate = new Map(history.map((r) => [r.d, { shtuk: Number(r.shtuk), cena: Number(r.cena) }]));
+
+    // Календарь "занятых" дней по этому ШК — ЛЮБОЕ опубликованное размещение
+    // (даже отсеянное по охвату: реклама всё равно была, база рядом с ней грязная),
+    // не только те, что попали в текущую пачку на пересчёт.
+    const { rows: allCodePlacements } = await pgPool.query(
+      `SELECT published_date::text AS d FROM public.influencer_placements
+       WHERE kaspi_code = $1 AND status = 'published'`,
+      [code]
+    );
+    const occupied = new Set();
+    allCodePlacements.forEach((p) => {
+      occupied.add(p.d);
+      occupied.add(addDaysStr(p.d, 1));
+    });
+
+    // База дня D = среднее по последним BASELINE_DAYS чистым (не занятым и с
+    // данными) дням строго до D, отступая назад до BASELINE_LOOKBACK_DAYS.
+    // Не нашли ни одного чистого дня в разумных пределах — база 0 (новый товар
+    // без истории до старта рекламы либо реклама идёт непрерывно давно).
+    function cleanBaselineFor(dateD) {
+      const vals = [];
+      let cursor = addDaysStr(dateD, -1);
+      for (let steps = 0; steps < BASELINE_LOOKBACK_DAYS && vals.length < BASELINE_DAYS; steps++) {
+        if (!occupied.has(cursor) && byDate.has(cursor)) vals.push(byDate.get(cursor).shtuk);
+        cursor = addDaysStr(cursor, -1);
+      }
+      return {
+        value: vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0,
+        cleanCount: vals.length,
+      };
+    }
+
+    const baselineByDate = new Map();
+    for (let d = minTarget; d <= windowEnd; d = addDaysStr(d, 1)) baselineByDate.set(d, cleanBaselineFor(d));
+
+    // Проверка на дрейф/скачок цены — только по реально использованным точкам
+    // (чистые дни, откуда взята база, и дни окна), а не по всему календарю между
+    // ними — иначе случайная старая смена цены за пределами реального расчёта
+    // блокировала бы то, что она не должна блокировать.
+    const usedPriceDates = new Set();
+    for (let d = minTarget; d <= windowEnd; d = addDaysStr(d, 1)) usedPriceDates.add(d);
+    for (const [d] of byDate) if (d >= historyStart && d <= windowEnd && !occupied.has(d)) usedPriceDates.add(d);
+    const pricesUsed = [...usedPriceDates]
+      .map((d) => (byDate.has(d) ? Number(byDate.get(d).cena) : null))
+      .filter((v) => v > 0);
+    if (pricesUsed.length) {
+      const priceRange = (Math.max(...pricesUsed) - Math.min(...pricesUsed)) / Math.min(...pricesUsed);
       if (priceRange > PRICE_DRIFT_TOLERANCE) {
         for (const p of group) {
           await writeResult(pgPool, p.id, {
             status: "unconfident_price",
-            note: `Цена по ШК ${code} нестабильна в период ${baselineStart}–${windowEnd} (от ${Math.min(...prices)} до ${Math.max(...prices)} ₸) — прирост в штуках/деньгах может быть от цены, а не от блогера. Не считаем.`,
+            note: `Цена по ШК ${code} нестабильна в использованных для расчёта днях (от ${Math.min(...pricesUsed)} до ${Math.max(...pricesUsed)} ₸) — прирост в штуках/деньгах может быть от цены, а не от блогера. Не считаем.`,
           });
         }
         continue;
@@ -193,33 +258,22 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
     }
     if (groupChecked.length === 0) continue;
 
-    // База: среднее по дням baselineStart..baselineEnd, где есть данные.
-    // Если данных в базовом периоде нет вообще, а в окне есть — это новый
-    // товар без истории, база = 0 (не отказываемся считать).
-    const byDate = new Map(history.map((r) => [r.d, { shtuk: Number(r.shtuk), cena: Number(r.cena) }]));
-    const baselineVals = [];
-    for (let d = baselineStart; d <= baselineEnd; d = addDaysStr(d, 1)) {
-      if (byDate.has(d)) baselineVals.push(byDate.get(d).shtuk);
-    }
-    const baselineAvg = baselineVals.length
-      ? baselineVals.reduce((a, b) => a + b, 0) / baselineVals.length
-      : 0;
-
-    // Прирост по каждому дню окна, floor на 0 (отрицательное не приписываем).
-    const dayIncrement = new Map(); // date -> {units, kzt}
-    for (let d = earliestPub; d <= windowEnd; d = addDaysStr(d, 1)) {
+    // Прирост по каждому дню окна: факт минус СВОЯ база этого дня, floor на 0.
+    const dayIncrement = new Map();
+    for (let d = minTarget; d <= windowEnd; d = addDaysStr(d, 1)) {
       const rec = byDate.get(d);
       const actualUnits = rec ? rec.shtuk : 0;
-      const price = rec ? rec.cena : prices[prices.length - 1] || 0;
-      const incUnits = Math.max(0, actualUnits - baselineAvg);
+      const price = rec ? rec.cena : pricesUsed[pricesUsed.length - 1] || 0;
+      const base = baselineByDate.get(d).value;
+      const incUnits = Math.max(0, actualUnits - base);
       dayIncrement.set(d, { units: incUnits, kzt: incUnits * price });
     }
 
-    // Делим каждый день окна между теми, чьё окно (публикация + день после)
-    // его покрывает, пропорционально охвату.
+    // Делим каждый день окна между теми, чьё окно (публикация + день после) его
+    // покрывает, пропорционально охвату — как и раньше, без изменений.
     const totals = new Map(groupChecked.map((p) => [p.id, { units: 0, kzt: 0, missingReachDays: 0, sharedWith: new Set() }]));
 
-    for (let d = earliestPub; d <= windowEnd; d = addDaysStr(d, 1)) {
+    for (let d = minTarget; d <= windowEnd; d = addDaysStr(d, 1)) {
       const participants = groupChecked.filter((p) => d >= p.published_date && d <= addDaysStr(p.published_date, 1));
       if (participants.length === 0) continue;
       const inc = dayIncrement.get(d) || { units: 0, kzt: 0 };
@@ -262,12 +316,29 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
       } else {
         const units = Math.round(t.units * 100) / 100;
         const kzt = Math.round(t.kzt);
-        await writeResult(pgPool, p.id, {
-          status: units > 0 ? "ok" : "zero",
-          units,
-          kzt,
-          note: `База ${baselineAvg.toFixed(1)} шт/день (${baselineStart}–${baselineEnd}), окно ${p.published_date}–${addDaysStr(p.published_date, 1)}${groupChecked.length > 1 ? `, делили с: ${groupChecked.filter((x) => x.id !== p.id).map((x) => x.blogger_handle).join(", ")}` : ""}.`,
-        });
+        // Доверяем базе, только если на КАЖДЫЙ день окна этого размещения (публикация
+        // + день после) нашлось достаточно чистых дней. Если реклама по товару идёт
+        // настолько плотно, что чистых дней почти нет (см. Коллаген+Биотин) — база
+        // может быть занижена (или вовсе 0), и число, посчитанное на ней, не заслуживает
+        // доверия наравне с обычным "ok". Не гадаем — помечаем отдельным статусом.
+        const windowDates = [p.published_date, addDaysStr(p.published_date, 1)];
+        const minCleanInWindow = Math.min(...windowDates.map((d) => baselineByDate.get(d).cleanCount));
+        const base = baselineByDate.get(p.published_date);
+        if (minCleanInWindow < MIN_CLEAN_DAYS_TRUST) {
+          await writeResult(pgPool, p.id, {
+            status: "baseline_uncertain",
+            units,
+            kzt,
+            note: `По этому ШК почти нет "чистых" дней без чужой рекламы за последние ${BASELINE_LOOKBACK_DAYS} дн. (нашлось только ${minCleanInWindow} из ${BASELINE_DAYS} нужных) — база ${base.value.toFixed(1)} шт/день ненадёжна, число ${units} шт / ${kzt} ₸ может быть занижено или завышено. Проверьте вручную.`,
+          });
+        } else {
+          await writeResult(pgPool, p.id, {
+            status: units > 0 ? "ok" : "zero",
+            units,
+            kzt,
+            note: `База ${base.value.toFixed(1)} шт/день (скользящая, по ${base.cleanCount} чистым дням без рекламы по этому ШК), окно ${p.published_date}–${addDaysStr(p.published_date, 1)}${groupChecked.length > 1 ? `, делили с: ${groupChecked.filter((x) => x.id !== p.id).map((x) => x.blogger_handle).join(", ")}` : ""}.`,
+          });
+        }
       }
       processed++;
     }
