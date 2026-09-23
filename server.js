@@ -15,6 +15,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const express = require("express");
 const multer = require("multer");
+const { Pool } = require("pg");
 
 // DATA_DIR/UPLOADS_DIR можно переопределить переменными окружения — это нужно,
 // когда на хостинге (например, Render) подключён постоянный диск на отдельном
@@ -310,6 +311,131 @@ function nextMeasurementId(){
   let max = 0;
   state.publications.forEach(p=> p.measurements.forEach(m=>{ if(m.id>max) max=m.id; }));
   return max + 1;
+}
+
+/* ---------- Синхронизация в Supabase (директор видит интеграции у себя) ----------
+   Каждые несколько минут отправляем срез микро/средних и крупных инфлюенс-интеграций
+   в public.influencer_placements того же Supabase-проекта, что и CRM блогеров.
+   У этой таблицы id — автоинкремент не под нашим контролем, и уникального ключа на
+   (source, source_deal_id, platform) в ней нет (прав добавить его тоже нет), поэтому
+   апсертим вручную: сперва UPDATE по (source, source_deal_id, platform), и если ни одна
+   строка не задета — INSERT. syncing — защита от накладывающихся запусков. */
+const pgPool = new Pool({
+  connectionString: "postgresql://crm_nina.zwaynpogmedeqcyzriwi:TMxdRmisrSq6vs2tgmA82GDq@aws-0-eu-central-1.pooler.supabase.com:5432/postgres",
+  ssl: { rejectUnauthorized: false },
+  max: 3, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000,
+});
+
+let placementsSyncing = false;
+
+async function upsertPlacement(client, r){
+  const upd = await client.query(
+    `UPDATE public.influencer_placements SET
+       blogger_handle=$1, followers=$2, tier=$3, blogger_category=$4, city=$5, manager=$6,
+       kaspi_code=$7, sku_name=$8, deal_type=$9, cost_kzt=$10, product_cost_kzt=$11,
+       planned_date=$12, published_at=$13, published_date=$14, video_url=$15, reach=$16,
+       status=$17, notes=$18, updated_at=$19
+     WHERE source=$20 AND source_deal_id=$21 AND platform=$22`,
+    [r.blogger_handle, r.followers, r.tier, r.blogger_category, r.city, r.manager,
+     r.kaspi_code, r.sku_name, r.deal_type, r.cost_kzt, r.product_cost_kzt,
+     r.planned_date, r.published_at, r.published_date, r.video_url, r.reach,
+     r.status, r.notes, r.updated_at,
+     r.source, r.source_deal_id, r.platform]
+  );
+  if(upd.rowCount > 0) return;
+  await client.query(
+    `INSERT INTO public.influencer_placements
+       (source, source_deal_id, blogger_handle, platform, followers, tier, blogger_category,
+        city, manager, kaspi_code, sku_name, deal_type, cost_kzt, product_cost_kzt,
+        planned_date, published_at, published_date, video_url, reach, status, notes,
+        created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+    [r.source, r.source_deal_id, r.blogger_handle, r.platform, r.followers, r.tier, r.blogger_category,
+     r.city, r.manager, r.kaspi_code, r.sku_name, r.deal_type, r.cost_kzt, r.product_cost_kzt,
+     r.planned_date, r.published_at, r.published_date, r.video_url, r.reach, r.status, r.notes,
+     r.created_at, r.updated_at]
+  );
+}
+
+function buildPlacementRows(){
+  const rows = [];
+  const now = new Date().toISOString();
+  (state.microInfluencerDeals || []).forEach(d=>{
+    const base = {
+      source: "barter_box_micro", source_deal_id: String(d.id),
+      blogger_category: d.bloggerCategory || null, city: d.city || null,
+      manager: d.responsible || null, kaspi_code: d.barcode || null,
+      sku_name: d.product || null, deal_type: "micro", tier: "Малый",
+      planned_date: d.plannedDate || null,
+      notes: [d.notes, d.paymentStatus ? ("оплата: "+d.paymentStatus) : null].filter(Boolean).join(" / ") || null,
+      created_at: now, updated_at: now,
+    };
+    let costAssigned = false;
+    if(d.instagramAccount){
+      rows.push({
+        ...base, blogger_handle: d.instagramAccount, platform: "Instagram Reels",
+        followers: d.followers || null,
+        cost_kzt: d.cost || 0, product_cost_kzt: d.productCost || 0,
+        published_at: d.publishDate || null, published_date: d.publishDate || null,
+        video_url: d.reelsLink || null, reach: d.factReachReels || null,
+        status: d.videoStatus || d.productStatus || "не указано",
+      });
+      costAssigned = true;
+    }
+    if(d.tiktokAccount){
+      rows.push({
+        ...base, blogger_handle: d.tiktokAccount, platform: "TikTok",
+        followers: d.followersTT || null,
+        cost_kzt: costAssigned ? 0 : (d.cost || 0),
+        product_cost_kzt: costAssigned ? 0 : (d.productCost || 0),
+        published_at: d.publishDate || null, published_date: d.publishDate || null,
+        video_url: d.tiktokVideoLink || null, reach: d.factReachTT || null,
+        status: d.videoStatus || d.productStatus || "не указано",
+      });
+    }
+  });
+  (state.influencerDeals || []).forEach(d=>{
+    rows.push({
+      source: "barter_box_deals", source_deal_id: String(d.id),
+      blogger_handle: d.blogerLogin || ("deal_"+d.id), platform: d.platform || "unknown",
+      followers: null, tier: "Крупный", blogger_category: null, city: null,
+      manager: d.responsible || null, kaspi_code: d.barcode || null,
+      sku_name: d.product || null, deal_type: "large",
+      cost_kzt: d.cost || 0, product_cost_kzt: 0,
+      planned_date: d.plannedDate || null,
+      published_at: d.publishedDate || null, published_date: d.publishedDate || null,
+      video_url: null, reach: d.reach || null, status: d.status || "не указано",
+      notes: d.notes || null, created_at: now, updated_at: now,
+    });
+  });
+  return rows;
+}
+
+async function syncPlacementsToSupabase(){
+  if(placementsSyncing) return;
+  placementsSyncing = true;
+  let client;
+  try{
+    client = await pgPool.connect();
+    const rows = buildPlacementRows();
+    await client.query("BEGIN");
+    for(const r of rows){ await upsertPlacement(client, r); }
+    const keys = rows.map(r=> r.source_deal_id + "|" + r.platform);
+    await client.query(
+      `DELETE FROM public.influencer_placements
+       WHERE source IN ('barter_box_micro','barter_box_deals')
+         AND NOT ((source_deal_id || '|' || platform) = ANY($1::text[]))`,
+      [keys.length ? keys : ["__none__"]]
+    );
+    await client.query("COMMIT");
+    console.log(`Supabase placements sync OK: ${rows.length} строк`);
+  }catch(e){
+    if(client) await client.query("ROLLBACK").catch(()=>{});
+    console.error("Supabase placements sync error:", e.message);
+  }finally{
+    if(client) client.release();
+    placementsSyncing = false;
+  }
 }
 
 /* =========================================================================
@@ -1093,6 +1219,9 @@ app.get(/^(?!\/api).*/, (req,res)=>{
     process.exit(0);
   });
 });
+
+syncPlacementsToSupabase().catch(e=> console.error("Supabase sync (старт):", e.message));
+setInterval(()=>{ syncPlacementsToSupabase().catch(e=> console.error("Supabase sync (интервал):", e.message)); }, 3*60*1000);
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, ()=>{
