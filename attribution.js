@@ -2,36 +2,42 @@
 // attribution.js — автоматический расчёт "вклада в продажи" для интеграций
 // блогеров, на основе продаж Kaspi (analytics.v_kaspi_placed_sku в Supabase).
 //
-// v2. Что изменилось относительно первой версии и почему:
+// v3. Что нового по сравнению с v2 и почему:
 //
-// 1) БАЗА ТЕПЕРЬ "СКОЛЬЗЯЩАЯ И ЧИСТАЯ", а не "7 календарных дней перед публикацией".
-//    Раньше: если перед выкладкой шла активная реклама (несколько блогеров подряд),
-//    эти дни всё равно попадали в базу как "обычный уровень" — база завышалась, и
-//    блогер, который выкладывался в затишье ПОСЛЕ такой кампании, выглядел так,
-//    будто ничего не добавил (реальные продажи оказывались НИЖЕ вот этой вздутой
-//    базы). Теперь база каждого дня — среднее по последним BASELINE_DAYS дням,
-//    которые (а) есть в истории продаж и (б) не попадают в окно [публикация;
-//    публикация+1] НИ ОДНОГО размещения по этому ШК (не только из текущей пачки —
-//    вообще любого, даже отсеянного по охвату: реклама была, база всё равно грязная).
-//    Ищем такие дни, отступая назад до BASELINE_LOOKBACK_DAYS — если кампания шла
-//    несколько недель подряд, база возьмётся из последнего действительно чистого
-//    периода перед ней, а не из хвоста кампании. У некоторых товаров (например,
-//    Коллаген+Биотин) реклама идёт настолько плотно, что чистых дней в пределах
-//    BASELINE_LOOKBACK_DAYS может не найтись вообще — база тогда 0, и это НЕ
-//    прячем как уверенный ноль: если чистых дней нашлось меньше MIN_CLEAN_DAYS_TRUST,
-//    статус получается "baseline_uncertain", а не "ok"/"zero" — число может быть
-//    занижено или завышено, доверять ему нельзя, это честно написано в заметке.
+// 1) АВТО-ИСПРАВЛЕНИЕ МЁРТВЫХ/УСТАРЕВШИХ ШК ПО НАЗВАНИЮ.
+//    Раньше: если по ШК из barter-box нет продаж — просто флагуем "no_sku_data" и
+//    ждём, пока кто-то вручную найдёт правильный код (так было со "скульптор
+//    01/02", потом с "тушь"/LashLust — Kaspi переносит товар на новую карточку,
+//    а ШК в barter-box остаётся старым). Теперь при "коде без продаж" система
+//    сама ищет среди РЕАЛЬНО живых кодов в Kaspi (за последние SKU_STALE_DAYS)
+//    товар, чьё название заметно совпадает с sku_name из barter-box (≥2 общих
+//    значимых слова — порог строже, чем для простой сверки, т.к. тут решение
+//    принимается автоматически, не просто предупреждение). Если находится РОВНО
+//    один такой код — используем его, а в заметке честно пишем, что код заменён
+//    автоматически. Если совпадений 0 или больше одного — не гадаем, остаётся
+//    no_sku_data, как раньше.
 //
-// 2) ОДИН ПРОХОД СЧИТАЕТ И "СВЕЖЕЕ" ОКНО, И ВЕСЬ БЭКЛОГ.
-//    Раньше runDailyAttribution всегда брал только today-2/today-3 — размещения
-//    старше этого НИКОГДА не досчитывались (весь сентябрь и более ранние месяцы
-//    так и остались бы "ещё не считалось" навсегда). Теперь в один проход берём
-//    today-2/today-3 (пересчитываем всегда, т.к. статусы заказов в Kaspi ещё
-//    "оседают" в первые сутки) ПЛЮС любые ещё не посчитанные публикации любой
-//    давности (auto_contribution_status IS NULL) — так бэклог убирается сам,
-//    без отдельного скрипта. Группы по ШК обрабатываются в порядке "сначала
-//    самые свежие публикации" — если процесс не успеет за один тик, сентябрь
-//    досчитается раньше июня.
+// 2) СЕМЬИ ТОВАРОВ: НАБОР + ОТДЕЛЬНЫЕ ШАМПУНЬ/БАЛЬЗАМ СЧИТАЮТСЯ ВМЕСТЕ.
+//    Коллаген+Биотин и Коллаген+Аминокислоты продаются и набором, и отдельными
+//    шампунем/бальзамом той же линейки — блогер может спровоцировать покупку
+//    любого варианта, поэтому считать нужно суммарный прирост по всей семье
+//    кодов, а не только по тому одному ШК, что указан в конкретном размещении.
+//    См. FAMILY_CODES — список зашит вручную (не auto-detect), т.к. это два
+//    конкретных, явно названных случая, а не общее правило для всех товаров.
+//
+// 3) БАЗА "СКОЛЬЗЯЩАЯ И ЧИСТАЯ" (без изменений с v2): среднее по последним
+//    BASELINE_DAYS чистым (без рекламы) дням, ищем вглубь до BASELINE_LOOKBACK_DAYS.
+//    Если чистых дней меньше MIN_CLEAN_DAYS_TRUST — статус "baseline_uncertain",
+//    число не прячем, но доверять ему нельзя наравне с "ok".
+//
+// 4) ЦЕНА НЕ БЛОКИРУЕТ РАСЧЁТ (без изменений с v2): штуки от цены не зависят,
+//    ₸ считается по факту цены каждого дня — при разбросе цены просто пометка
+//    в заметке, не отказ считать.
+//
+// 5) ОДИН ПРОХОД СЧИТАЕТ И "СВЕЖЕЕ" ОКНО, И ВЕСЬ БЭКЛОГ (без изменений с v2):
+//    today-2/today-3 пересчитываются всегда, плюс любые ещё не посчитанные
+//    публикации любой давности — сентябрь и раньше добираются сами, свежие
+//    месяцы в приоритете при сортировке групп.
 //
 // Результат пишется в НОВЫЕ колонки public.influencer_placements
 // (auto_contribution_*, см. 01_migration.sql) — существующее поле
@@ -44,7 +50,23 @@ const BASELINE_LOOKBACK_DAYS = 60;       // как далеко назад ис�
 const MIN_CLEAN_DAYS_TRUST = 3;          // меньше стольки чистых дней в базе — не доверяем числу (см. baseline_uncertain)
 const SKU_STALE_DAYS = 14;               // если по ШК нет продаж дольше этого — код считаем битым
 const PRICE_DRIFT_TOLERANCE = 0.03;      // >3% разброса цены — не блокируем расчёт, только помечаем в заметке
-const NAME_MATCH_MIN_SHARED_WORDS = 1;   // минимум общих значимых слов между sku_name и названием в Kaspi
+const NAME_MATCH_MIN_SHARED_WORDS = 1;   // порог для мягкой сверки (name_mismatch — предупреждение, не блокирует)
+const AUTO_RESOLVE_MIN_SHARED_WORDS = 2; // порог для автозамены мёртвого ШК на живой (строже — тут решение принимается молча)
+
+// Семьи товаров: набор + отдельные позиции той же линейки считаются вместе (см.
+// пункт 2 выше). Ключ — служебное имя семьи, значение — все ШК, которые нужно
+// суммировать. Коды подтверждены напрямую в Kaspi (analytics.v_kaspi_placed_sku).
+const FAMILY_CODES = {
+  biotin_family: ["2000000034256", "SKUA000787900", "SKUA000788000"], // набор, шампунь, бальзам — Коллаген+Биотин
+  amino_family: ["2000000034263", "SKUA000392700", "SKUA000392900"],  // набор, шампунь, бальзам — Коллаген+Аминокислоты
+};
+const CODE_TO_FAMILY = {};
+for (const [fam, codes] of Object.entries(FAMILY_CODES)) {
+  for (const c of codes) CODE_TO_FAMILY[c] = fam;
+}
+function codesForKey(key) {
+  return FAMILY_CODES[key] || [key];
+}
 
 // ---------------------------------------------------------------------------
 // Даты. Через to_char/::text, а не Date из pg: колонки типа `date` при чтении
@@ -69,13 +91,18 @@ function normalizeWords(s) {
     .split(/[^a-zа-я0-9]+/i)
     .filter((w) => w.length >= 4); // короткие служебные слова не считаем
 }
-function nameLooksRelated(skuName, kaspiTovar) {
-  const a = new Set(normalizeWords(skuName));
-  const b = new Set(normalizeWords(kaspiTovar));
-  if (a.size === 0 || b.size === 0) return true; // нечего сравнивать — не блокируем
+function sharedWordCount(nameA, nameB) {
+  const a = new Set(normalizeWords(nameA));
+  const b = new Set(normalizeWords(nameB));
   let shared = 0;
   for (const w of a) if (b.has(w)) shared++;
-  return shared >= NAME_MATCH_MIN_SHARED_WORDS;
+  return shared;
+}
+function nameLooksRelated(skuName, kaspiTovar) {
+  const a = normalizeWords(skuName);
+  const b = normalizeWords(kaspiTovar);
+  if (a.length === 0 || b.length === 0) return true; // нечего сравнивать — не блокируем
+  return sharedWordCount(skuName, kaspiTovar) >= NAME_MATCH_MIN_SHARED_WORDS;
 }
 
 async function writeResult(pgPool, id, { status, units = null, kzt = null, note = "" }) {
@@ -108,6 +135,7 @@ function groupBy(arr, keyFn) {
 async function runDailyAttribution(pgPool, { log = console.log } = {}) {
   const today = almatyTodayStr();
   const freshDates = [addDaysStr(today, -2), addDaysStr(today, -3)];
+  const staleCutoff = addDaysStr(today, -SKU_STALE_DAYS);
 
   log(`[attribution] запуск на ${today}: свежее окно ${freshDates.join(" и ")} + весь ещё не посчитанный бэклог`);
 
@@ -150,8 +178,6 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
     }
     eligible.push(p);
    } catch (e) {
-    // Та же защита, что и ниже для групп по ШК: одна кривая запись не должна ронять
-    // весь проход — фиксируем и идём дальше.
     log(`[attribution] ошибка на записи id=${p.id}: ${e.message}`);
     try {
       await writeResult(pgPool, p.id, {
@@ -164,11 +190,103 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
    }
   }
 
-  const byCode = groupBy(eligible, (p) => p.kaspi_code);
+  // --- Авто-исправление мёртвых ШК по названию (см. пункт 1 в шапке файла) ---
+  // Живой каталог: все офферы с продажами за последние SKU_STALE_DAYS — по нему
+  // ищем, куда мог "переехать" товар с мёртвого кода. Один запрос на весь прогон.
+  const { rows: catalogRows } = await pgPool.query(
+    `SELECT offer_code, tovar FROM analytics.v_kaspi_placed_sku
+     WHERE order_date >= $1::date GROUP BY offer_code, tovar`,
+    [staleCutoff]
+  );
 
-  // Сначала группы, где есть хотя бы одна свежая (последний месяц данных) публикация —
-  // чтобы если процесс прервётся или не успеет за один тик, недавние месяцы (сейчас
-  // это сентябрь) досчитались раньше, чем старый бэклог с июня.
+  // Частотный словарь слов по всему живому каталогу. Нужен, чтобы отличать
+  // РАЗЛИЧИТЕЛЬНЫЕ слова конкретного товара ("lashlust", "magnif eye",
+  // "скульптор") от общих для бренда/категории слов ("mixit", "для", "тушь",
+  // "крем", "набор"), которые встречаются в доброй половине каталога и потому
+  // ничего не различают — по ним "тушь" совпадёт сразу с 3-4 разными тушами.
+  // Слово, встречающееся более чем в GENERIC_WORD_MAX_DOCS разных названиях
+  // каталога, в счёт совпадений не идёт.
+  const wordDocFreq = new Map();
+  for (const c of catalogRows) {
+    for (const w of new Set(normalizeWords(c.tovar))) wordDocFreq.set(w, (wordDocFreq.get(w) || 0) + 1);
+  }
+  const GENERIC_WORD_MAX_DOCS = Math.max(3, Math.round(catalogRows.length * 0.03));
+  function distinctiveWords(name) {
+    return normalizeWords(name).filter((w) => (wordDocFreq.get(w) || 1) <= GENERIC_WORD_MAX_DOCS);
+  }
+  function distinctiveSharedWordCount(nameA, nameB) {
+    const a = new Set(distinctiveWords(nameA));
+    const b = new Set(normalizeWords(nameB));
+    let shared = 0;
+    for (const w of a) if (b.has(w)) shared++;
+    return shared;
+  }
+
+  const byOriginalCode = groupBy(eligible, (p) => p.kaspi_code);
+  const codeResolution = new Map(); // originalCode -> resolvedCode | null (не нашли)
+  const resolutionNote = new Map(); // originalCode -> текст для заметки
+
+  for (const [origCode, grp] of byOriginalCode) {
+    if (CODE_TO_FAMILY[origCode]) { codeResolution.set(origCode, origCode); continue; } // уже родной код семьи
+    const { rows: check } = await pgPool.query(
+      `SELECT count(*)::int AS n FROM analytics.v_kaspi_placed_sku WHERE offer_code = $1 AND order_date >= $2::date`,
+      [origCode, staleCutoff]
+    );
+    if (check[0].n > 0) { codeResolution.set(origCode, origCode); continue; } // код живой, всё в порядке
+
+    // Код мёртвый — ищем среди живого каталога совпадение по названию. В
+    // barter-box у одного и того же ШК бывают и подробные названия ("Тушь для
+    // ресниц с эффектом максимального объёма-MIXIT Make Up LashLust Volume Max
+    // Mascara"), и однословные ("тушь" — так писали часть менеджеров). Решение
+    // принимаем ОДНО на весь код, по самому подробному названию, какое есть в
+    // группе — оно надёжнее; общие слова бренда/категории ("mixit", "тушь",
+    // "для") не считаем — иначе любая тушь совпадёт с любой тушью. Берём того
+    // живого кандидата, у кого различительных совпадений заметно БОЛЬШЕ, чем у
+    // всех прочих (не просто "набралось >= порога" — а "явно лучше второго
+    // места"); если явного лидера нет — не гадаем, оставляем как было.
+    const namesRanked = [...new Set(grp.map((p) => p.sku_name).filter(Boolean))]
+      .map((name) => ({ name, words: distinctiveWords(name) }))
+      .filter((x) => x.words.length > 0)
+      .sort((a, b) => b.words.length - a.words.length);
+
+    if (namesRanked.length === 0) {
+      codeResolution.set(origCode, null); // названия нет или оно целиком из общих слов — сверять не с чем
+      continue;
+    }
+    const bestName = namesRanked[0].name;
+    const threshold = Math.min(AUTO_RESOLVE_MIN_SHARED_WORDS, namesRanked[0].words.length);
+
+    const scored = [];
+    for (const c of catalogRows) {
+      const score = distinctiveSharedWordCount(bestName, c.tovar);
+      if (score >= threshold) scored.push({ code: c.offer_code, score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+
+    if (scored.length === 0) {
+      codeResolution.set(origCode, null); // ни одного похожего живого товара
+    } else if (scored.length === 1 || scored[0].score > scored[1].score) {
+      const resolved = scored[0].code;
+      codeResolution.set(origCode, resolved);
+      resolutionNote.set(origCode, ` ШК автоматически заменён с ${origCode} на ${resolved} — в Kaspi товар переехал на новую карточку, название совпало (по "${bestName}").`);
+      log(`[attribution] авто-замена ШК: ${origCode} → ${resolved} (по названию: ${bestName}, счёт ${scored[0].score} против ${scored[1] ? scored[1].score : 0} у второго места)`);
+    } else {
+      codeResolution.set(origCode, null); // несколько одинаково похожих — не гадаем
+    }
+  }
+
+  // Пересобираем группы: по семье (если код входит в семью), иначе по
+  // резолвленному коду (если нашли замену), иначе по исходному коду как раньше
+  // (сработает no_sku_data ниже, ничего не потеряно относительно v2).
+  const byCode = groupBy(eligible, (p) => {
+    if (CODE_TO_FAMILY[p.kaspi_code]) return CODE_TO_FAMILY[p.kaspi_code];
+    const resolved = codeResolution.get(p.kaspi_code);
+    return resolved || p.kaspi_code;
+  });
+
+  // Сначала группы, где есть хотя бы одна свежая публикация — чтобы если процесс
+  // прервётся или не успеет за один тик, недавние месяцы (сейчас это сентябрь)
+  // досчитались раньше, чем старый бэклог с июня.
   const codeEntries = [...byCode.entries()].sort((a, b) => {
     const maxA = a[1].reduce((m, p) => (p.published_date > m ? p.published_date : m), "");
     const maxB = b[1].reduce((m, p) => (p.published_date > m ? p.published_date : m), "");
@@ -176,15 +294,19 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
   });
 
   let processed = 0;
-  const staleCutoff = addDaysStr(today, -SKU_STALE_DAYS);
 
-  for (const [code, group] of codeEntries) {
+  for (const [productKey, group] of codeEntries) {
    try {
-    // Всё тело обработки одной группы (один ШК) — в try/catch. Если в данных по
-    // этому конкретному товару окажется что-то, чего мы не предусмотрели (кривая
-    // дата, неожиданный формат и т.п.) — падать должна только ЭТА группа, а не
-    // весь суточный расчёт целиком (см. историю: одна запись без даты публикации
-    // обрушивала вообще всё, и прогресс стоял на месте много часов).
+    // Всё тело обработки одной группы (один товар — код, семья или резолвленный
+    // код) — в try/catch. Если в данных окажется что-то, чего мы не предусмотрели
+    // — падать должна только ЭТА группа, а не весь суточный расчёт целиком.
+    const isFamily = !!FAMILY_CODES[productKey];
+    // Все "сырые" ШК, под которыми может копиться реклама по этому продукту: коды
+    // семьи (если семья) плюс любые исходные ШК, реально встретившиеся в группе
+    // (после авто-замены сюда попадают и старые мёртвые коды, чтобы их реклама
+    // тоже засчиталась как "занятый" день).
+    const rawCodes = [...new Set([...(FAMILY_CODES[productKey] || [productKey]), ...group.map((p) => p.kaspi_code)])];
+
     const pubDates = group.map((p) => p.published_date);
     const minTarget = pubDates.reduce((a, b) => (a < b ? a : b));
     const maxTarget = pubDates.reduce((a, b) => (a > b ? a : b));
@@ -192,36 +314,52 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
     const historyStart = addDaysStr(minTarget, -BASELINE_LOOKBACK_DAYS);
 
     const { rows: recentCheck } = await pgPool.query(
-      `SELECT count(*)::int AS n FROM analytics.v_kaspi_placed_sku WHERE offer_code = $1 AND order_date >= $2::date`,
-      [code, staleCutoff]
+      `SELECT count(*)::int AS n FROM analytics.v_kaspi_placed_sku WHERE offer_code = ANY($1::text[]) AND order_date >= $2::date`,
+      [rawCodes, staleCutoff]
     );
     if (recentCheck[0].n === 0) {
       for (const p of group) {
         await writeResult(pgPool, p.id, {
           status: "no_sku_data",
-          note: `По ШК ${code} нет продаж в Kaspi за последние ${SKU_STALE_DAYS} дн. Похоже, код битый/старый — проверьте вручную (см. историю: так было со "скульптор 01/02").`,
+          note: `По ШК ${p.kaspi_code} нет продаж в Kaspi за последние ${SKU_STALE_DAYS} дн., и автоматически найти замену по названию не удалось (совпадений 0 или больше одного) — проверьте вручную.`,
         });
       }
       continue;
     }
 
-    // Продажи для базы (с большим запасом назад) и для окна.
+    // Продажи для базы и для окна — суммируем по дню, если товар представлен
+    // несколькими ШК (семья: набор + отдельные позиции).
     const { rows: history } = await pgPool.query(
-      `SELECT order_date::text AS d, shtuk, cena, tovar
+      `SELECT order_date::text AS d, SUM(shtuk) AS shtuk, SUM(shtuk*cena) AS revenue
        FROM analytics.v_kaspi_placed_sku
-       WHERE offer_code = $1 AND order_date BETWEEN $2::date AND $3::date
-       ORDER BY order_date`,
-      [code, historyStart, windowEnd]
+       WHERE offer_code = ANY($1::text[]) AND order_date BETWEEN $2::date AND $3::date
+       GROUP BY order_date ORDER BY order_date`,
+      [rawCodes, historyStart, windowEnd]
     );
-    const byDate = new Map(history.map((r) => [r.d, { shtuk: Number(r.shtuk), cena: Number(r.cena) }]));
+    const byDate = new Map(
+      history.map((r) => {
+        const shtuk = Number(r.shtuk);
+        const revenue = Number(r.revenue);
+        return [r.d, { shtuk, cena: shtuk > 0 ? revenue / shtuk : 0 }]; // cena — средневзвешенная цена дня
+      })
+    );
 
-    // Календарь "занятых" дней по этому ШК — ЛЮБОЕ опубликованное размещение
-    // (даже отсеянное по охвату: реклама всё равно была, база рядом с ней грязная),
-    // не только те, что попали в текущую пачку на пересчёт.
+    // Названия для сверки — все, что реально продавались под этими кодами
+    // (для семьи это разом "набор", "шампунь", "бальзам" — sku_name может
+    // упоминать любое из них).
+    const { rows: tovarRows } = await pgPool.query(
+      `SELECT DISTINCT tovar FROM analytics.v_kaspi_placed_sku WHERE offer_code = ANY($1::text[]) AND order_date >= $2::date`,
+      [rawCodes, historyStart]
+    );
+    const kaspiTovars = tovarRows.map((r) => r.tovar).filter(Boolean);
+
+    // Календарь "занятых" дней — ЛЮБОЕ опубликованное размещение с одним из
+    // rawCodes (даже отсеянное по охвату: реклама всё равно была, база рядом
+    // с ней грязная), не только те, что попали в текущую пачку на пересчёт.
     const { rows: allCodePlacements } = await pgPool.query(
       `SELECT published_date::text AS d FROM public.influencer_placements
-       WHERE kaspi_code = $1 AND status = 'published'`,
-      [code]
+       WHERE kaspi_code = ANY($1::text[]) AND status = 'published' AND published_date IS NOT NULL`,
+      [rawCodes]
     );
     const occupied = new Set();
     allCodePlacements.forEach((p) => {
@@ -231,8 +369,6 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
 
     // База дня D = среднее по последним BASELINE_DAYS чистым (не занятым и с
     // данными) дням строго до D, отступая назад до BASELINE_LOOKBACK_DAYS.
-    // Не нашли ни одного чистого дня в разумных пределах — база 0 (новый товар
-    // без истории до старта рекламы либо реклама идёт непрерывно давно).
     function cleanBaselineFor(dateD) {
       const vals = [];
       let cursor = addDaysStr(dateD, -1);
@@ -249,12 +385,8 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
     const baselineByDate = new Map();
     for (let d = minTarget; d <= windowEnd; d = addDaysStr(d, 1)) baselineByDate.set(d, cleanBaselineFor(d));
 
-    // Цена по ШК: раньше при разбросе цены > 3% мы вообще ОТКАЗЫВАЛИСЬ считать
-    // (unconfident_price) — по факту это блокировало слишком много размещений и
-    // не давало отчитаться даже по штукам, хотя штуки от цены не зависят вовсе.
-    // Теперь: штуки считаем всегда, ₸ — каждый день своей РЕАЛЬНОЙ ценой на тот
-    // день (это уже так и было ниже, price = rec.cena за конкретный день, а не
-    // одна усреднённая цена на всё окно) — поэтому смена цены посреди периода не
+    // Цена: штуки считаем всегда, ₸ — каждый день своей реальной (средневзвешенной,
+    // если товар = семья) ценой на тот день, поэтому смена цены посреди периода не
     // искажает ₸-сумму задним числом. Если цена всё же прыгала — не блокируем,
     // а просто помечаем это в заметке к результату, для сведения.
     const usedPriceDates = new Set();
@@ -273,14 +405,19 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
       }
     }
 
-    // Название в Kaspi для сверки с sku_name из barter-box
-    const kaspiTovar = history.length ? history[history.length - 1].tovar : "";
+    const familyNote = isFamily
+      ? ` Считалось суммарно по всей линейке (набор + отдельные шампунь/бальзам): ${FAMILY_CODES[productKey].join(", ")}.`
+      : "";
+
+    // Сверка названия — мягкая, только предупреждение (не блокирует): сравниваем
+    // с ЛЮБЫМ из реально продающихся названий под этими кодами, не только с одним.
     const groupChecked = [];
     for (const p of group) {
-      if (!nameLooksRelated(p.sku_name, kaspiTovar)) {
+      const related = kaspiTovars.length === 0 || kaspiTovars.some((t) => nameLooksRelated(p.sku_name, t));
+      if (!related) {
         await writeResult(pgPool, p.id, {
           status: "name_mismatch",
-          note: `Название в barter-box ("${p.sku_name}") не похоже на товар по ШК ${code} в Kaspi ("${kaspiTovar}"). Похоже на опечатку в ШК (см. историю: так было с bota.kasss) — проверьте вручную.`,
+          note: `Название в barter-box ("${p.sku_name}") не похоже ни на одно название товара по ШК ${p.kaspi_code} в Kaspi (${kaspiTovars.slice(0, 3).map((t) => `"${t}"`).join(", ")}). Проверьте вручную.${resolutionNote.get(p.kaspi_code) || ""}`,
         });
         continue;
       }
@@ -300,7 +437,7 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
     }
 
     // Делим каждый день окна между теми, чьё окно (публикация + день после) его
-    // покрывает, пропорционально охвату — как и раньше, без изменений.
+    // покрывает, пропорционально охвату — без изменений.
     const totals = new Map(groupChecked.map((p) => [p.id, { units: 0, kzt: 0, missingReachDays: 0, sharedWith: new Set() }]));
 
     for (let d = minTarget; d <= windowEnd; d = addDaysStr(d, 1)) {
@@ -336,21 +473,17 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
 
     for (const p of groupChecked) {
       const t = totals.get(p.id);
+      const resNote = resolutionNote.get(p.kaspi_code) || "";
       if (t.missingReachDays > 0) {
         await writeResult(pgPool, p.id, {
           status: "needs_reach_data",
           units: Math.round(t.units * 100) / 100,
           kzt: Math.round(t.kzt),
-          note: `Охват не заполнен, а в ${t.missingReachDays} дн. окна тот же товар публиковали ещё: ${[...t.sharedWith].join(", ") || "—"}. Без охвата долю не разделить — заполните охват и пересчитается. Частично посчитанное (дни, где делить было не с кем): ${Math.round(t.units * 100) / 100} шт / ${Math.round(t.kzt)} ₸.`,
+          note: `Охват не заполнен, а в ${t.missingReachDays} дн. окна тот же товар публиковали ещё: ${[...t.sharedWith].join(", ") || "—"}. Без охвата долю не разделить — заполните охват и пересчитается. Частично посчитанное (дни, где делить было не с кем): ${Math.round(t.units * 100) / 100} шт / ${Math.round(t.kzt)} ₸.${familyNote}${resNote}`,
         });
       } else {
         const units = Math.round(t.units * 100) / 100;
         const kzt = Math.round(t.kzt);
-        // Доверяем базе, только если на КАЖДЫЙ день окна этого размещения (публикация
-        // + день после) нашлось достаточно чистых дней. Если реклама по товару идёт
-        // настолько плотно, что чистых дней почти нет (см. Коллаген+Биотин) — база
-        // может быть занижена (или вовсе 0), и число, посчитанное на ней, не заслуживает
-        // доверия наравне с обычным "ok". Не гадаем — помечаем отдельным статусом.
         const windowDates = [p.published_date, addDaysStr(p.published_date, 1)];
         const minCleanInWindow = Math.min(...windowDates.map((d) => baselineByDate.get(d).cleanCount));
         const base = baselineByDate.get(p.published_date);
@@ -359,23 +492,21 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
             status: "baseline_uncertain",
             units,
             kzt,
-            note: `По этому ШК почти нет "чистых" дней без чужой рекламы за последние ${BASELINE_LOOKBACK_DAYS} дн. (нашлось только ${minCleanInWindow} из ${BASELINE_DAYS} нужных) — база ${base.value.toFixed(1)} шт/день ненадёжна, число ${units} шт / ${kzt} ₸ может быть занижено или завышено. Проверьте вручную.`,
+            note: `По этому товару почти нет "чистых" дней без чужой рекламы за последние ${BASELINE_LOOKBACK_DAYS} дн. (нашлось только ${minCleanInWindow} из ${BASELINE_DAYS} нужных) — база ${base.value.toFixed(1)} шт/день ненадёжна, число ${units} шт / ${kzt} ₸ может быть занижено или завышено. Проверьте вручную.${familyNote}${resNote}`,
           });
         } else {
           await writeResult(pgPool, p.id, {
             status: units > 0 ? "ok" : "zero",
             units,
             kzt,
-            note: `База ${base.value.toFixed(1)} шт/день (скользящая, по ${base.cleanCount} чистым дням без рекламы по этому ШК), окно ${p.published_date}–${addDaysStr(p.published_date, 1)}${groupChecked.length > 1 ? `, делили с: ${groupChecked.filter((x) => x.id !== p.id).map((x) => x.blogger_handle).join(", ")}` : ""}.${priceNote}`,
+            note: `База ${base.value.toFixed(1)} шт/день (скользящая, по ${base.cleanCount} чистым дням без рекламы по этому товару), окно ${p.published_date}–${addDaysStr(p.published_date, 1)}${groupChecked.length > 1 ? `, делили с: ${groupChecked.filter((x) => x.id !== p.id).map((x) => x.blogger_handle).join(", ")}` : ""}.${priceNote}${familyNote}${resNote}`,
           });
         }
       }
       processed++;
     }
    } catch (e) {
-    // Эта конкретная группа (ШК) не посчиталась — фиксируем причину по каждой её
-    // записи и идём дальше, к следующему товару. Остальной расчёт не страдает.
-    log(`[attribution] ошибка при расчёте ШК ${code}: ${e.message}`);
+    log(`[attribution] ошибка при расчёте товара ${productKey}: ${e.message}`);
     for (const p of group) {
       try {
         await writeResult(pgPool, p.id, {
