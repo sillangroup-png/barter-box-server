@@ -357,6 +357,22 @@ async function upsertPlacement(client, r){
   );
 }
 
+function microDealStatus(d){
+  if(d.videoStatus === "опубликовано") return "published";
+  if(d.paymentStatus === "оплачено") return "paid";
+  if(d.productStatus === "товар доставлен" || d.productStatus === "товар заказан") return "product_sent";
+  return "planned";
+}
+function largeDealStatus(d){
+  const map = {
+    "Запланирована": "planned",
+    "Опубликована": "published",
+    "Оплачена": "paid",
+    "Закрыта": "published",
+  };
+  return map[d.status] || "planned";
+}
+
 function buildPlacementRows(){
   const rows = [];
   const now = new Date().toISOString();
@@ -365,11 +381,12 @@ function buildPlacementRows(){
       source: "barter_box_micro", source_deal_id: String(d.id),
       blogger_category: d.bloggerCategory || null, city: d.city || null,
       manager: d.responsible || null, kaspi_code: d.barcode || null,
-      sku_name: d.product || null, deal_type: "micro", tier: "Малый",
+      sku_name: d.product || null, deal_type: "mixed", tier: "Малый",
       planned_date: d.plannedDate || null,
       notes: [d.notes, d.paymentStatus ? ("оплата: "+d.paymentStatus) : null].filter(Boolean).join(" / ") || null,
       created_at: now, updated_at: now,
     };
+    const status = microDealStatus(d);
     let costAssigned = false;
     if(d.instagramAccount){
       rows.push({
@@ -378,7 +395,7 @@ function buildPlacementRows(){
         cost_kzt: d.cost || 0, product_cost_kzt: d.productCost || 0,
         published_at: d.publishDate || null, published_date: d.publishDate || null,
         video_url: d.reelsLink || null, reach: d.factReachReels || null,
-        status: d.videoStatus || d.productStatus || "не указано",
+        status,
       });
       costAssigned = true;
     }
@@ -390,7 +407,7 @@ function buildPlacementRows(){
         product_cost_kzt: costAssigned ? 0 : (d.productCost || 0),
         published_at: d.publishDate || null, published_date: d.publishDate || null,
         video_url: d.tiktokVideoLink || null, reach: d.factReachTT || null,
-        status: d.videoStatus || d.productStatus || "не указано",
+        status,
       });
     }
   });
@@ -400,11 +417,11 @@ function buildPlacementRows(){
       blogger_handle: d.blogerLogin || ("deal_"+d.id), platform: d.platform || "unknown",
       followers: null, tier: "Крупный", blogger_category: null, city: null,
       manager: d.responsible || null, kaspi_code: d.barcode || null,
-      sku_name: d.product || null, deal_type: "large",
+      sku_name: d.product || null, deal_type: "paid",
       cost_kzt: d.cost || 0, product_cost_kzt: 0,
       planned_date: d.plannedDate || null,
       published_at: d.publishedDate || null, published_date: d.publishedDate || null,
-      video_url: null, reach: d.reach || null, status: d.status || "не указано",
+      video_url: null, reach: d.reach || null, status: largeDealStatus(d),
       notes: d.notes || null, created_at: now, updated_at: now,
     });
   });
