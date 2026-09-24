@@ -61,6 +61,7 @@ const AUTH = {
 // отдельными переменными окружения (та же логика, что и у основных ролей — реальные
 // логин/пароль не должны попадать в публичный репозиторий).
 const MARKETER_VIEWERS = [
+  {name:"Анельжан", login: process.env.ANELJAN_LOGIN || null, password: process.env.ANELJAN_PASSWORD || null},
   {name:"Анна", login: process.env.ANNA_LOGIN || null, password: process.env.ANNA_PASSWORD || null},
   // Служебная учётка для автоматической ежедневной синхронизации со вторым проектом
   // (аналитика маркетплейса Kaspi/MIXIT, marketplace-server) — читает /api/state по расписанию,
