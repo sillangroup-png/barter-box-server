@@ -427,6 +427,10 @@ const Api = {
   // Планы: одна ручка на всё — принимает и одну строку, и пачку (для заливки месяца целиком).
   savePlans: (rows)=> apiFetch("/api/plans", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
 
+  // Ручной SKU живого товара в Kaspi — когда ШК из 1С устарел/битый, менеджер
+  // вписывает правильный код сам; auto-расчёт берёт продажи по нему.
+  saveProductSku: (barcode, sku)=> apiFetch("/api/product-sku", {method:"POST", headers:jsonHeaders, body:JSON.stringify({barcode, sku})}),
+
   createMicroDeal: (d)=> apiFetch("/api/micro-influencer-deals", {method:"POST", headers:jsonHeaders, body:JSON.stringify(d)}),
   updateMicroDeal: (id, changes)=> apiFetch("/api/micro-influencer-deals/"+id, {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
   deleteMicroDeal: (id)=> apiFetch("/api/micro-influencer-deals/"+id, {method:"DELETE"}),
@@ -440,7 +444,7 @@ const Api = {
    ОТКУДА берутся данные и КАК они изменяются)
    ========================================================================= */
 const DataManager = {
-  state: {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[], microInfluencerDeals:[], productEvents:[], plans:[]},
+  state: {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[], microInfluencerDeals:[], productEvents:[], plans:[], productSkuOverrides:[]},
   async load(){ this.state = await Api.getState(); return this.state; },
   async refresh(){ this.state = await Api.getState(); return this.state; },
   find(collection, id){ return this.state[collection].find(i=> (i.id===id) || (i.code===id)); },
@@ -3395,6 +3399,24 @@ function filteredInfluencerDealRows(){
    по блогерам и бюджету — на крупных, по товарам — на обеих. Хранится одной универсальной
    таблицей (месяц, разрез, ключ, показатель) → число, см. /api/plans на сервере.
    Факт нигде не хранится и всегда считается из интеграций, поэтому план и факт не разъезжаются. */
+// Ручной SKU живого товара в Kaspi (см. Api.saveProductSku / server.js /api/product-sku):
+// когда ШК из 1С в Kaspi битый/устарел (товар "переехал" на новую карточку), менеджер
+// вписывает сюда правильный живой код — auto-расчёт вклада берёт продажи по нему.
+function skuOverrideByBarcode(barcode){
+  const bc = (barcode||"").trim();
+  if(!bc) return "";
+  const rec = (DataManager.state.productSkuOverrides||[]).find(x=>x.barcode===bc);
+  return rec ? (rec.sku||"") : "";
+}
+function skuOverrideCell(barcode){
+  const bc = (barcode||"").trim();
+  if(!bc) return "";
+  const sku = skuOverrideByBarcode(bc);
+  return `<span class="sku-override-cell" data-barcode="${escapeHtml(bc)}"
+    style="color:var(--ink-mute);font-size:11px;cursor:pointer;border-bottom:1px dashed var(--line-2)"
+    title="Кликните, чтобы указать правильный живой SKU в Kaspi — например, если ШК из 1С устарел и Kaspi перенёс товар на новую карточку"
+    >SKU: ${sku ? escapeHtml(sku) : '<span style="opacity:.6">не задан</span>'}</span>`;
+}
 function planValue(month, scope, key, metric){
   const p = (DataManager.state.plans || []).find(x=>
     x.month===month && x.scope===scope && (x.key||"")===(key||"") && x.metric===metric);
@@ -3503,7 +3525,7 @@ function tplPlanProducts(month){
             const pb = planValue(month,"product",r.barcode,"budget");
             const sched = productScheduled(month, r.barcode);
             return `<tr>
-              <td>${escapeHtml(r.name)}<br><span style="color:var(--ink-mute);font-size:11px">ШК ${escapeHtml(r.barcode)}</span></td>
+              <td>${escapeHtml(r.name)}<br><span style="color:var(--ink-mute);font-size:11px">ШК ${escapeHtml(r.barcode)}</span><br>${skuOverrideCell(r.barcode)}</td>
               ${planCell(month,"product",r.barcode,"integrations",{auto:sched.integrations})}
               <td>${r.integrations}</td>
               ${planProgressCell(r.integrations, pi)}
@@ -3554,7 +3576,7 @@ function tplMicroPlanProducts(month){
             const pb = planValue(month,"productMicro",r.barcode,"budget");
             const sched = productScheduledMicro(month, r.barcode);
             return `<tr>
-              <td>${escapeHtml(r.name)}<br><span style="color:var(--ink-mute);font-size:11px">ШК ${escapeHtml(r.barcode)}</span></td>
+              <td>${escapeHtml(r.name)}<br><span style="color:var(--ink-mute);font-size:11px">ШК ${escapeHtml(r.barcode)}</span><br>${skuOverrideCell(r.barcode)}</td>
               ${planCell(month,"productMicro",r.barcode,"integrations",{auto:sched.integrations})}
               <td>${r.integrations}</td>
               ${planProgressCell(r.integrations, pi)}
@@ -3793,6 +3815,30 @@ function wirePlanCells(){
         const value = parseInt(input.value,10)||0;
         try{
           await Api.savePlans([{month:d.month, scope:d.scope, key:d.key, metric:d.metric, value}]);
+          await DataManager.refresh(); renderDeskTab();
+        }catch(e){ toast(e.message, true); renderDeskTab(); }
+      };
+      input.onkeydown = e=>{
+        if(e.key==="Enter"){ e.preventDefault(); save(); }
+        if(e.key==="Escape"){ done = true; renderDeskTab(); }
+      };
+      input.onblur = save;
+    };
+  });
+  document.querySelectorAll(".sku-override-cell").forEach(cell=>{
+    cell.onclick = ()=>{
+      if(cell.querySelector("input")) return;
+      const barcode = cell.dataset.barcode;
+      const current = skuOverrideByBarcode(barcode);
+      cell.innerHTML = `<input type="text" value="${escapeHtml(current)}" placeholder="напр. SKUA000932200" style="width:150px;padding:2px 6px;font-size:11px" />`;
+      const input = cell.querySelector("input");
+      input.focus(); input.select();
+      let done = false;
+      const save = async ()=>{
+        if(done) return; done = true;
+        const sku = input.value.trim();
+        try{
+          await Api.saveProductSku(barcode, sku);
           await DataManager.refresh(); renderDeskTab();
         }catch(e){ toast(e.message, true); renderDeskTab(); }
       };
