@@ -61,7 +61,6 @@ const AUTH = {
 // отдельными переменными окружения (та же логика, что и у основных ролей — реальные
 // логин/пароль не должны попадать в публичный репозиторий).
 const MARKETER_VIEWERS = [
-  {name:"Анельжан", login: process.env.ANELJAN_LOGIN || null, password: process.env.ANELJAN_PASSWORD || null},
   {name:"Анна", login: process.env.ANNA_LOGIN || null, password: process.env.ANNA_PASSWORD || null},
   // Служебная учётка для автоматической ежедневной синхронизации со вторым проектом
   // (аналитика маркетплейса Kaspi/MIXIT, marketplace-server) — читает /api/state по расписанию,
@@ -167,7 +166,7 @@ function findDriverByPhoneOrCode(input){
 /* =========================================================================
    1. ХРАНИЛИЩЕ: всё состояние — один объект в памяти, зеркалится в JSON-файл
    ========================================================================= */
-function emptyState(){ return {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[], microInfluencerDeals:[], productEvents:[], plans:[]}; }
+function emptyState(){ return {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[], microInfluencerDeals:[], productEvents:[], plans:[], productSkuOverrides:[]}; }
 
 function seedState(){
   const drivers = [
@@ -270,7 +269,7 @@ function seedState(){
     salesByDay.push({id: salesByDay.length+1, date:d, product:"Уход премиум", revenue: revenue*3500});
   }
 
-  return {drivers, campaigns, orders, returns, publications, influencerDeals, salesByDay, microInfluencerDeals: [], productEvents: [], plans: []};
+  return {drivers, campaigns, orders, returns, publications, influencerDeals, salesByDay, microInfluencerDeals: [], productEvents: [], plans: [], productSkuOverrides: []};
 }
 
 let state = loadState();
@@ -338,17 +337,37 @@ const { runDailyAttribution, almatyTodayStr } = require("./attribution.js");
 const { pullFactFromSupabase } = require("./pull-fact-from-supabase.js");
 
 let lastAttributionRunDate = null;
+let attributionRunning = false; // защита от повторного запуска: если первый проход
+  // (особенно первый после деплоя — считает весь бэклог, может идти много минут)
+  // не успел закончиться за 3 минуты до следующего тика, второй запускать НЕ надо —
+  // иначе оба борются за одно и то же соединение с базой и всё замедляют ещё больше.
 
 async function maybeRunDailyAttribution(){
+  if(attributionRunning) return; // предыдущий проход ещё не закончился
   const today = almatyTodayStr();
-  if(lastAttributionRunDate === today) return; // сегодня уже считали
+  if(lastAttributionRunDate === today) return; // сегодня уже посчитали
+  attributionRunning = true;
   try{
     await runDailyAttribution(pgPool);
-    await pullFactFromSupabase(pgPool, state, persist);
     lastAttributionRunDate = today;
   }catch(e){
     console.error("Attribution error:", e.message);
     // lastAttributionRunDate не трогаем — попробует снова на следующем тике
+  }finally{
+    attributionRunning = false;
+  }
+}
+
+// Забрать готовый результат на фронтенд — ОТДЕЛЬНО от расчёта выше и не дожидаясь
+// его полного завершения. Расчёт всего бэклога может идти долго, а строки в
+// auto_contribution_* появляются в Supabase постепенно, по мере готовности —
+// эта функция подтягивает то, что уже готово, на каждом тике, чтобы во фронтенде
+// цифры появлялись частями, а не разом только после того, как досчитается вообще всё.
+async function pullAttributionFact(){
+  try{
+    await pullFactFromSupabase(pgPool, state, persist);
+  }catch(e){
+    console.error("Pull-fact error:", e.message);
   }
 }
 
@@ -376,6 +395,20 @@ const PLACEMENT_COLS = [
   "cost_kzt","product_cost_kzt","planned_date","published_at","published_date",
   "video_url","reach","status","notes","created_at","updated_at",
 ];
+
+// Ручной SKU живого товара в Kaspi, заданный менеджером во фронтенде для конкретного
+// ШК (см. /api/product-sku ниже) — когда ШК из 1С устарел/битый, а авто-подбор по
+// названию не справился или менеджер уже и так знает правильный код. Отдельной
+// колонки под него в Supabase нет (чтобы не просить директора гонять ALTER TABLE
+// ещё раз) — при синхронизации он просто ПОДМЕНЯЕТ собой kaspi_code: в Supabase и
+// в attribution.js уходит уже правильный живой код, ШК из 1С в самом barter-box
+// (state.influencerDeals / state.microInfluencerDeals) при этом не трогается.
+function skuOverrideFor(barcode){
+  const bc = (barcode||"").toString().trim();
+  if(!bc) return null;
+  const rec = (state.productSkuOverrides||[]).find(x=>x.barcode===bc);
+  return rec && rec.sku ? rec.sku : null;
+}
 
 async function upsertOneRow(client, r){
   const values = PLACEMENT_COLS.map(c=> r[c] === undefined ? null : r[c]);
@@ -418,7 +451,7 @@ function buildPlacementRows(){
       blogger_handle: safeText(d.instagramAccount) || safeText(d.tiktokAccount) || ("micro_"+d.id),
       platform, followers, tier: "Малый",
       blogger_category: safeText(d.bloggerCategory), city: safeText(d.city),
-      manager: safeText(d.responsible), kaspi_code: safeText(d.barcode),
+      manager: safeText(d.responsible), kaspi_code: skuOverrideFor(d.barcode) || safeText(d.barcode),
       sku_name: safeText(d.product), deal_type: "mixed",
       cost_kzt: safeInt(d.cost) || 0, product_cost_kzt: safeInt(d.productCost) || 0,
       planned_date: safeDate(d.plannedDate),
@@ -434,7 +467,7 @@ function buildPlacementRows(){
       source: "barter_box_deals", source_deal_id: String(d.id),
       blogger_handle: safeText(d.blogerLogin) || ("deal_"+d.id), platform: safeText(d.platform) || "unknown",
       followers: null, tier: "Крупный", blogger_category: null, city: null,
-      manager: safeText(d.responsible), kaspi_code: safeText(d.barcode),
+      manager: safeText(d.responsible), kaspi_code: skuOverrideFor(d.barcode) || safeText(d.barcode),
       sku_name: safeText(d.product), deal_type: "paid",
       cost_kzt: safeInt(d.cost) || 0, product_cost_kzt: 0,
       planned_date: safeDate(d.plannedDate),
@@ -1190,6 +1223,26 @@ app.post("/api/product-events", requireAuth, (req,res)=>{
   persist();
   res.json(ev);
 });
+/* ---------- Ручной SKU для Kaspi (когда ШК из 1С устарел/битый) ----------
+   Один товар (ШК) — одна запись. Пустое значение sku удаляет override и
+   возвращает товар на авто-подбор по названию (см. attribution.js). */
+app.get("/api/product-sku", requireAuth, (req,res)=> res.json(state.productSkuOverrides || []));
+app.post("/api/product-sku", requireAuth, (req,res)=>{
+  const b = req.body || {};
+  const barcode = (b.barcode||"").toString().trim();
+  const sku = (b.sku||"").toString().trim();
+  if(!barcode) return res.status(400).json({error:"нужен ШК товара"});
+  state.productSkuOverrides = state.productSkuOverrides || [];
+  const idx = state.productSkuOverrides.findIndex(x=>x.barcode===barcode);
+  if(!sku){
+    if(idx>=0){ state.productSkuOverrides.splice(idx,1); persist(); }
+    return res.json({ok:true, removed: idx>=0});
+  }
+  if(idx>=0){ state.productSkuOverrides[idx].sku = sku; state.productSkuOverrides[idx].updatedAt = new Date().toISOString(); }
+  else{ state.productSkuOverrides.push({id: nextId("productSkuOverrides"), barcode, sku, updatedAt: new Date().toISOString()}); }
+  persist();
+  res.json({ok:true});
+});
 app.delete("/api/product-events/:id", requireAuth, (req,res)=>{
   state.productEvents = (state.productEvents || []).filter(e=>e.id !== +req.params.id);
   persist();
@@ -1257,9 +1310,11 @@ app.get(/^(?!\/api).*/, (req,res)=>{
 
 syncPlacementsToSupabase().catch(e=> console.error("Supabase sync (старт):", e.message));
 maybeRunDailyAttribution().catch(e=> console.error("Attribution (старт):", e.message));
+pullAttributionFact().catch(e=> console.error("Pull-fact (старт):", e.message));
 setInterval(()=>{
   syncPlacementsToSupabase().catch(e=> console.error("Supabase sync (интервал):", e.message));
   maybeRunDailyAttribution().catch(e=> console.error("Attribution (интервал):", e.message));
+  pullAttributionFact().catch(e=> console.error("Pull-fact (интервал):", e.message));
 }, 3*60*1000);
 
 const PORT = process.env.PORT || 3001;
