@@ -3414,7 +3414,7 @@ function skuOverrideCell(barcode){
   const sku = skuOverrideByBarcode(bc);
   return `<span class="sku-override-cell" data-barcode="${escapeHtml(bc)}"
     style="color:var(--ink-mute);font-size:11px;cursor:pointer;border-bottom:1px dashed var(--line-2)"
-    title="Кликните, чтобы указать правильный живой SKU в Kaspi — например, если ШК из 1С устарел и Kaspi перенёс товар на новую карточку"
+    title="Кликните, чтобы указать правильный живой SKU в Kaspi — например, если ШК из 1С устарел и Kaspi перенёс товар на новую карточку. Если карточек в Kaspi две — впишите оба SKU через запятую, продажи по ним сложатся"
     >SKU: ${sku ? escapeHtml(sku) : '<span style="opacity:.6">не задан</span>'}</span>`;
 }
 function planValue(month, scope, key, metric){
@@ -3830,7 +3830,7 @@ function wirePlanCells(){
       if(cell.querySelector("input")) return;
       const barcode = cell.dataset.barcode;
       const current = skuOverrideByBarcode(barcode);
-      cell.innerHTML = `<input type="text" value="${escapeHtml(current)}" placeholder="напр. SKUA000932200" style="width:150px;padding:2px 6px;font-size:11px" />`;
+      cell.innerHTML = `<input type="text" value="${escapeHtml(current)}" placeholder="SKUA000932200 (если две карточки — через запятую)" style="width:220px;padding:2px 6px;font-size:11px" />`;
       const input = cell.querySelector("input");
       input.focus(); input.select();
       let done = false;
