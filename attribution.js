@@ -47,6 +47,16 @@
 //    него нет. Для этого файла ничего не меняется: он как всегда читает
 //    kaspi_code и считает его источником истины.
 //
+// 7) ДВА (ИЛИ БОЛЬШЕ) SKU НА ОДИН ТОВАР. Иногда у товара в Kaspi две живые
+//    карточки сразу (например, старую не сняли с продажи, когда завели новую).
+//    В поле SKU во фронтенде можно вписать несколько кодов через запятую —
+//    kaspi_code тогда хранит их одной строкой ("SKUA1, SKUA2"). splitCodes()
+//    ниже разбирает такую строку на отдельные коды; дальше это работает точно
+//    так же, как готовая "семья" товаров (пункт 2) — продажи по всем кодам
+//    суммируются в один сигнал. Ручному multi-SKU коду, в отличие от обычного
+//    одиночного, не нужна проверка на "мёртвый" — раз человек вписал несколько
+//    кодов сам, доверяем как есть.
+//
 // Результат пишется в НОВЫЕ колонки public.influencer_placements
 // (auto_contribution_*, см. 01_migration.sql) — существующее поле
 // "вклад в продажи", которое менеджеры заполняют вручную, не трогается.
@@ -74,6 +84,16 @@ for (const [fam, codes] of Object.entries(FAMILY_CODES)) {
 }
 function codesForKey(key) {
   return FAMILY_CODES[key] || [key];
+}
+
+// Разбирает строку с одним или несколькими кодами (ручной multi-SKU, см. пункт 7
+// в шапке файла) на массив отдельных кодов. Разделители — запятая, плюс, точка с
+// запятой или пробел, вперемешку. Один код возвращается как массив из одного.
+function splitCodes(raw) {
+  return (raw || "")
+    .split(/[,+;\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +256,12 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
 
   for (const [origCode, grp] of byOriginalCode) {
     if (CODE_TO_FAMILY[origCode]) { codeResolution.set(origCode, origCode); continue; } // уже родной код семьи
+    if (splitCodes(origCode).length > 1) {
+      // Несколько кодов вручную в одном поле SKU (см. пункт 7) — доверяем как
+      // есть, авто-подбор и проверку на "мёртвый код" для них не делаем.
+      codeResolution.set(origCode, origCode);
+      continue;
+    }
     const { rows: check } = await pgPool.query(
       `SELECT count(*)::int AS n FROM analytics.v_kaspi_placed_sku WHERE offer_code = $1 AND order_date >= $2::date`,
       [origCode, staleCutoff]
@@ -309,11 +335,18 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
     // код) — в try/catch. Если в данных окажется что-то, чего мы не предусмотрели
     // — падать должна только ЭТА группа, а не весь суточный расчёт целиком.
     const isFamily = !!FAMILY_CODES[productKey];
+    const isManualMulti = !isFamily && splitCodes(productKey).length > 1;
     // Все "сырые" ШК, под которыми может копиться реклама по этому продукту: коды
-    // семьи (если семья) плюс любые исходные ШК, реально встретившиеся в группе
-    // (после авто-замены сюда попадают и старые мёртвые коды, чтобы их реклама
-    // тоже засчиталась как "занятый" день).
-    const rawCodes = [...new Set([...(FAMILY_CODES[productKey] || [productKey]), ...group.map((p) => p.kaspi_code)])];
+    // семьи (если семья) или разобранные вручную multi-SKU коды (см. пункт 7),
+    // плюс любые исходные ШК, реально встретившиеся в группе (после авто-замены
+    // сюда попадают и старые мёртвые коды, чтобы их реклама тоже засчиталась как
+    // "занятый" день).
+    const rawCodes = [
+      ...new Set([
+        ...(FAMILY_CODES[productKey] || splitCodes(productKey)),
+        ...group.flatMap((p) => splitCodes(p.kaspi_code)),
+      ]),
+    ];
 
     const pubDates = group.map((p) => p.published_date);
     const minTarget = pubDates.reduce((a, b) => (a < b ? a : b));
@@ -364,9 +397,14 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
     // Календарь "занятых" дней — ЛЮБОЕ опубликованное размещение с одним из
     // rawCodes (даже отсеянное по охвату: реклама всё равно была, база рядом
     // с ней грязная), не только те, что попали в текущую пачку на пересчёт.
+    // kaspi_code в самой таблице может хранить НЕСКОЛЬКО кодов через запятую
+    // (ручной multi-SKU, см. пункт 7) — поэтому сравниваем не строку целиком,
+    // а разобранный на отдельные коды массив (тем же способом, что splitCodes
+    // в JS) на пересечение с rawCodes.
     const { rows: allCodePlacements } = await pgPool.query(
       `SELECT published_date::text AS d FROM public.influencer_placements
-       WHERE kaspi_code = ANY($1::text[]) AND status = 'published' AND published_date IS NOT NULL`,
+       WHERE status = 'published' AND published_date IS NOT NULL
+         AND regexp_split_to_array(trim(kaspi_code), '[,+;\\s]+') && $1::text[]`,
       [rawCodes]
     );
     const occupied = new Set();
@@ -415,6 +453,8 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
 
     const familyNote = isFamily
       ? ` Считалось суммарно по всей линейке (набор + отдельные шампунь/бальзам): ${FAMILY_CODES[productKey].join(", ")}.`
+      : isManualMulti
+      ? ` Считалось суммарно по нескольким SKU, вписанным вручную в одно поле: ${rawCodes.join(", ")}.`
       : "";
 
     // Сверка названия — мягкая, только предупреждение (не блокирует): сравниваем
