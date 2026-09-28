@@ -5972,7 +5972,10 @@ function wireDeskTab(){
       const reader = new FileReader();
       reader.onload = async ()=>{
         const rows = parseCsv(String(reader.result));
-        try{ const res = await Api.importDeals(rows); toast(`Импортировано интеграций: ${res.added}`); }
+        try{
+          const res = await Api.importDeals(rows);
+          toast(`Добавлено новых: ${res.added}, обновлено существующих: ${res.updated||0}`);
+        }
         catch(e){ toast(e.message, true); }
         e.target.value = "";
         await DataManager.refresh(); render();
@@ -5985,12 +5988,14 @@ function wireDeskTab(){
     // расходился с тем, что маркетолог видит на экране.
     document.getElementById("export-deal-csv-btn").onclick = ()=>{
       const rows = filteredInfluencerDealRows();
-      const header = ["блогер","ответственный","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","план_вклад","вклад_в_продажи","romi","статус"];
+      // "id" первой колонкой — чтобы "Импорт CSV" мог узнать в строке уже существующую
+      // интеграцию и обновить её, а не завести дубль (см. /api/influencer-deals/import).
+      const header = ["id","блогер","ответственный","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","план_вклад","вклад_в_продажи","romi","статус"];
       const lines = [header.map(csvEscape).join(",")];
       rows.forEach(r=>{
         const d = r.deal;
         lines.push([
-          d.blogerLogin, d.responsible||"", d.platform, d.product, d.barcode||"",
+          d.id, d.blogerLogin, d.responsible||"", d.platform, d.product, d.barcode||"",
           d.plannedDate||"", d.publishedDate||"",
           d.plannedReach||0, d.plannedClicks||0, d.reach||0, d.clicks||0,
           d.plannedCost||0, d.cost||0, d.plannedContribution||0,
