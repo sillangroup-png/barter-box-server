@@ -61,7 +61,6 @@ const AUTH = {
 // отдельными переменными окружения (та же логика, что и у основных ролей — реальные
 // логин/пароль не должны попадать в публичный репозиторий).
 const MARKETER_VIEWERS = [
-  {name:"Анельжан", login: process.env.ANELJAN_LOGIN || null, password: process.env.ANELJAN_PASSWORD || null},
   {name:"Анна", login: process.env.ANNA_LOGIN || null, password: process.env.ANNA_PASSWORD || null},
   // Служебная учётка для автоматической ежедневной синхронизации со вторым проектом
   // (аналитика маркетплейса Kaspi/MIXIT, marketplace-server) — читает /api/state по расписанию,
@@ -986,12 +985,12 @@ app.delete("/api/influencer-deals/:id", requireAuth, (req,res)=>{
 app.post("/api/influencer-deals/import", requireAuth, (req,res)=>{
   const {rows} = req.body || {};
   if(!Array.isArray(rows)) return res.status(400).json({error:"rows[] обязателен"});
-  let added = 0;
+  let added = 0, updated = 0;
   rows.forEach(r=>{
     const blogerLogin = (r["блогер"] || r["blogger"] || r["логин"] || "").trim();
     if(!blogerLogin) return;
-    state.influencerDeals.push({
-      id: nextId("influencerDeals"), blogerLogin,
+    const fields = {
+      blogerLogin,
       platform: r["платформа"] || r["platform"] || PLATFORMS[0],
       product: r["продукт"] || r["product"] || "",
       plannedDate: r["план_дата"] || r["planned_date"] || "",
@@ -1003,15 +1002,30 @@ app.post("/api/influencer-deals/import", requireAuth, (req,res)=>{
       plannedCost: parseInt(r["план_расход"] || r["planned_cost"] || 0, 10) || 0,
       cost: parseInt(r["расход"] || r["cost"] || 0, 10) || 0,
       barcode: (r["шк"] || r["штрихкод"] || r["barcode"] || "").toString().trim(),
+      responsible: r["ответственный"] || r["responsible"] || "",
       plannedContribution: parseInt(r["план_вклад"] || r["planned_contribution"] || 0, 10) || 0,
-      likes:0, comments:0, saves:0, lastUpdatedFrom:"", lastUpdatedAt:"",
       status: r["статус"] || r["status"] || DEAL_STATUSES[0],
       notes: r["комментарий"] || r["notes"] || "",
-    });
-    added++;
+    };
+    // Строка со своим id (как в "Экспорт CSV" этой же таблицы — см. ниже) обновляет
+    // существующую интеграцию вместо создания дубля. Раньше id в экспорт не попадал,
+    // и цикл "выгрузить → поправить в Excel → загрузить обратно" молча плодил вторые
+    // копии тех же блогеров вместо обновления исходных строк.
+    const rowId = parseInt(r["id"] || r["ID"], 10);
+    const existing = rowId ? state.influencerDeals.find(d=>d.id===rowId) : null;
+    if(existing){
+      Object.assign(existing, fields);
+      updated++;
+    } else {
+      state.influencerDeals.push(Object.assign(
+        {id: nextId("influencerDeals"), likes:0, comments:0, saves:0, lastUpdatedFrom:"", lastUpdatedAt:""},
+        fields
+      ));
+      added++;
+    }
   });
   persist();
-  res.json({added});
+  res.json({added, updated});
 });
 
 // ---------- инфлюенс интеграции микро/средние (отв. Нина) ----------
