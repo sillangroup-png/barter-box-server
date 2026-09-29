@@ -71,6 +71,14 @@ const PRICE_DRIFT_TOLERANCE = 0.03;      // >3% разброса цены — н
 const NAME_MATCH_MIN_SHARED_WORDS = 1;   // порог для мягкой сверки (name_mismatch — предупреждение, не блокирует)
 const AUTO_RESOLVE_MIN_SHARED_WORDS = 2; // порог для автозамены мёртвого ШК на живой (строже — тут решение принимается молча)
 
+// Статусы, которые считаются "ожидающими" — число могло измениться с прошлого
+// расчёта (заполнили охват, накопилась чистая база, обновился каталог Kaspi,
+// поправили название/ШК), поэтому их пересчитываем каждую ночь, а не только
+// в 2-дневном свежем окне после публикации. Ограничиваем возрастом публикации,
+// чтобы бэклог не рос бесконечно за счёт записей, которые уже не исправить.
+const PENDING_RETRY_STATUSES = ["needs_reach_data", "baseline_uncertain", "no_sku_data", "name_mismatch"];
+const PENDING_RETRY_MAX_AGE_DAYS = 90;
+
 // Семьи товаров: набор + отдельные позиции той же линейки считаются вместе (см.
 // пункт 2 выше). Ключ — служебное имя семьи, значение — все ШК, которые нужно
 // суммировать. Коды подтверждены напрямую в Kaspi (analytics.v_kaspi_placed_sku).
@@ -164,15 +172,20 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
   const today = almatyTodayStr();
   const freshDates = [addDaysStr(today, -2), addDaysStr(today, -3)];
   const staleCutoff = addDaysStr(today, -SKU_STALE_DAYS);
+  const pendingRetryCutoff = addDaysStr(today, -PENDING_RETRY_MAX_AGE_DAYS);
 
-  log(`[attribution] запуск на ${today}: свежее окно ${freshDates.join(" и ")} + весь ещё не посчитанный бэклог`);
+  log(`[attribution] запуск на ${today}: свежее окно ${freshDates.join(" и ")} + весь ещё не посчитанный бэклог + ожидающие статусы (${PENDING_RETRY_STATUSES.join(", ")}) моложе ${PENDING_RETRY_MAX_AGE_DAYS} дн.`);
 
   const { rows: placements } = await pgPool.query(
     `SELECT id, tier, reach, kaspi_code, sku_name, published_date::text AS published_date, manager, blogger_handle
      FROM public.influencer_placements
      WHERE status = 'published'
-       AND (published_date::date = ANY($1::date[]) OR auto_contribution_status IS NULL)`,
-    [freshDates]
+       AND (
+         published_date::date = ANY($1::date[])
+         OR auto_contribution_status IS NULL
+         OR (auto_contribution_status = ANY($2::text[]) AND published_date::date >= $3::date)
+       )`,
+    [freshDates, PENDING_RETRY_STATUSES, pendingRetryCutoff]
   );
 
   if (placements.length === 0) {
