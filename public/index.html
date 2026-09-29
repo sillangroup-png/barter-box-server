@@ -1530,6 +1530,11 @@ function tplInfluencerBrandDashboard(allRows){
   const kaspiAutoStatuses = new Set(["ok","zero","needs_reach_data","baseline_uncertain"]);
   const kaspiAutoTotal = monthRows.reduce((sum,r)=> sum + (kaspiAutoStatuses.has(r.deal.autoContributionStatus) ? (Number(r.deal.autoContributionKzt)||0) : 0), 0);
   const kaspiAutoCounted = monthRows.filter(r=>kaspiAutoStatuses.has(r.deal.autoContributionStatus)).length;
+  // ДРР — по просьбе Нины считаем от факт.выручки Kaspi (auto_contribution_kzt), а не от старого
+  // "вклада в продажи" (ROMI-движок по 1С): выручка Kaspi точнее отражает, что реально продалось.
+  // Остальные метрики (ROMI, ROAS, аплифт, лучший/худший блогер) её не просили менять — их формула
+  // и источник (s.totalContribution) не тронуты.
+  const drrFromKaspiPct = kaspiAutoTotal>0 ? s.totalCost/kaspiAutoTotal*100 : null;
 
   const card = (title, borderColor, bg, body) => `
     <div style="border-left:3px solid ${borderColor};background:${bg};border-radius:8px;padding:12px">
@@ -1620,7 +1625,7 @@ function tplInfluencerBrandDashboard(allRows){
       ${kpi("Выручка (Kaspi авто)", fmtNum(Math.round(kaspiAutoTotal))+" ₸", `сумма отдельной колонки «Авто (Kaspi)», посчитано по ${kaspiAutoCounted} из ${monthRows.length}`)}
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2))}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%")}
-      ${kpi("ДРР", s.drrPct==null?"—":s.drrPct.toFixed(1)+"%")}
+      ${kpi("ДРР", drrFromKaspiPct==null?"—":drrFromKaspiPct.toFixed(1)+"%", "расходы ÷ выручка Kaspi (авто) × 100%")}
       ${kpi("CPV", s.cpv==null?"—":(Math.round(s.cpv*100)/100)+" ₸")}
       ${kpi("Охват", fmtNum(s.totalReach))}
       ${kpi("Прирост ₸/просмотр", s.upliftPerView==null?"—":(Math.round(s.upliftPerView*100)/100)+" ₸")}
@@ -1833,6 +1838,17 @@ function tplMicroInfluencerBrandDashboard(allRows){
   const dashCategory = availableCategories.includes(UI.microDashCategory) ? UI.microDashCategory : "";
   const monthRows = dashCategory ? periodRows.filter(r=>catOf(r)===dashCategory) : periodRows;
   const s = microInfluencerBrandStats(monthRows);
+  // Сумма авто-расчёта по Kaspi (отдельная колонка "Авто (Kaspi)") — та же логика, что и в
+  // дашборде крупных: считаем везде, где есть реальное число, включая частично посчитанные
+  // needs_reach_data и неуверенные baseline_uncertain (это не 0, просто с оговоркой).
+  const kaspiAutoStatuses = new Set(["ok","zero","needs_reach_data","baseline_uncertain"]);
+  const kaspiAutoTotal = monthRows.reduce((sum,r)=> sum + (kaspiAutoStatuses.has(r.deal.autoContributionStatus) ? (Number(r.deal.autoContributionKzt)||0) : 0), 0);
+  const kaspiAutoCounted = monthRows.filter(r=>kaspiAutoStatuses.has(r.deal.autoContributionStatus)).length;
+  // ДРР — по просьбе Нины считаем от факт.выручки Kaspi (auto_contribution_kzt), а не от старого
+  // "вклада в продажи" (ROMI-движок по 1С): выручка Kaspi точнее отражает, что реально продалось.
+  // Остальные метрики (ROMI, ROAS, аплифт, лучший/худший блогер) её не просили менять — их формула
+  // и источник (s.totalContribution) не тронуты.
+  const drrFromKaspiPct = kaspiAutoTotal>0 ? s.totalCost/kaspiAutoTotal*100 : null;
 
   const MAX_MONTH_TABS = 6;
   const recentMonths = Array.from(new Set([...months.slice(-MAX_MONTH_TABS), ...(allPeriod?[]:[month])])).sort();
@@ -1885,10 +1901,10 @@ function tplMicroInfluencerBrandDashboard(allRows){
     <div class="grid-kpi">
       ${kpi("Расходы", fmtNum(s.totalCost)+" ₸", "сумма расходов по всем интеграциям месяца")}
       ${kpi("Выручка (вклад)", fmtNum(Math.round(s.totalContribution))+" ₸", "сумма вклада в продажи (только там, где есть ШК)", microContributionExplain(monthRows, month))}
-      ${kpi("Выручка (Kaspi авто)", fmtNum(Math.round(monthRows.reduce((sum,r)=> sum + (["ok","zero","needs_reach_data","baseline_uncertain"].includes(r.deal.autoContributionStatus) ? (Number(r.deal.autoContributionKzt)||0) : 0), 0)))+" ₸", "сумма отдельной колонки «Авто (Kaspi)» за тот же период")}
+      ${kpi("Выручка (Kaspi авто)", fmtNum(Math.round(kaspiAutoTotal))+" ₸", `сумма отдельной колонки «Авто (Kaspi)», посчитано по ${kaspiAutoCounted} из ${monthRows.length}`)}
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2), "вклад в продажи ÷ расходы")}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%", "вклад в продажи ÷ расходы × 100%")}
-      ${kpi("ДРР", s.drrPct==null?"—":s.drrPct.toFixed(1)+"%", "расходы ÷ вклад в продажи × 100%")}
+      ${kpi("ДРР", drrFromKaspiPct==null?"—":drrFromKaspiPct.toFixed(1)+"%", "расходы ÷ выручка Kaspi (авто) × 100%")}
       ${kpi("CPV", s.cpv==null?"—":(Math.round(s.cpv*100)/100)+" ₸", "расходы ÷ факт.охват (Reels + TikTok)")}
       ${kpi("Охват", fmtNum(s.totalReach), "сумма факт.охвата всех интеграций месяца")}
       ${kpi("Прирост ₸/просмотр", s.upliftPerView==null?"—":(Math.round(s.upliftPerView*100)/100)+" ₸", "вклад в продажи ÷ факт.охват")}
