@@ -33,12 +33,25 @@ async function pullOne(pgPool, dealsArray, source, { log }) {
 
   for (const deal of dealsArray) {
     const r = byDealId.get(String(deal.id));
-    if (!r) continue; // ещё не считалось (рано, вне текущего окна и т.п.)
+    // v5: строки в Supabase нет (ещё не синкнулась / удалена) — старый результат в
+    // state.json НЕ оставляем: раньше он висел в кэше бессрочно, в т.ч. суммы окна D0–D2.
+    if (!r) {
+      if (deal.autoContributionStatus != null || deal.autoContributionKzt != null || deal.autoContributionUnits != null) {
+        deal.autoContributionUnits = null;
+        deal.autoContributionKzt = null;
+        deal.autoContributionStatus = null;
+        deal.autoContributionNote = null;
+        deal.autoContributionComputedAt = null;
+        updated++;
+      }
+      continue;
+    }
 
-    // Ничего в существующих полях (manualContribution, plannedContribution, noImpact)
-    // не трогаем — авто-расчёт кладётся в отдельные поля, только для сверки.
-    deal.autoContributionUnits = r.auto_contribution_units === null ? null : Number(r.auto_contribution_units);
-    deal.autoContributionKzt = r.auto_contribution_kzt === null ? null : Number(r.auto_contribution_kzt);
+    // Суммы берём ТОЛЬКО у статусов с числом (ok / zero). У остальных — null,
+    // даже если в базе что-то осталось: во фронтенде это «—», а не число.
+    const hasNumber = r.auto_contribution_status === "ok" || r.auto_contribution_status === "zero";
+    deal.autoContributionUnits = hasNumber && r.auto_contribution_units !== null ? Number(r.auto_contribution_units) : null;
+    deal.autoContributionKzt = hasNumber && r.auto_contribution_kzt !== null ? Number(r.auto_contribution_kzt) : null;
     deal.autoContributionStatus = r.auto_contribution_status;
     deal.autoContributionNote = r.auto_contribution_note;
     deal.autoContributionComputedAt = r.auto_contribution_computed_at;
