@@ -389,6 +389,27 @@ function safeText(v){
   return s ? s.slice(0,2000) : null;
 }
 
+// Без протокола ("instagram.com/x" или голый логин) браузер на фронтенде трактует
+// ссылку как относительный путь на самом barter-box, а не переход на внешний сайт
+// (баг был в проде — ссылки из CSV-импорта сохранялись без https://). Нормализуем
+// уже на сервере, чтобы это не могло повториться независимо от того, как именно
+// значение попало в систему (ручной ввод, CSV-импорт, сторонний источник).
+function normalizeLinkUrl(v){
+  const s = String(v||"").trim();
+  if(!s) return "";
+  if(/^https?:\/\//i.test(s)) return s;
+  if(/^\/\//.test(s)) return "https:" + s;
+  return "https://" + s.replace(/^\/+/, "");
+}
+function normalizeInstagramUrl(v){
+  const s = String(v||"").trim();
+  if(!s) return "";
+  if(/^https?:\/\//i.test(s)) return s;
+  if(/instagram\.com/i.test(s)) return normalizeLinkUrl(s);
+  const handle = s.replace(/^@/, "").replace(/^\/+/, "").trim();
+  return handle ? "https://instagram.com/" + handle : "";
+}
+
 const PLACEMENT_COLS = [
   "source","source_deal_id","blogger_handle","platform","followers","tier",
   "blogger_category","city","manager","kaspi_code","sku_name","deal_type",
@@ -970,7 +991,7 @@ app.post("/api/influencer-deals", requireAuth, (req,res)=>{
     // Ссылка на профиль Instagram и на конкретный Reels — те же поля, что у микро/средних
     // (instagramAccount/reelsLink), просто под своими именами здесь: blogerLogin у крупных уже
     // занят под @логин, а не под ссылку.
-    instagramLink: b.instagramLink || "", reelsLink: b.reelsLink || "",
+    instagramLink: normalizeInstagramUrl(b.instagramLink || ""), reelsLink: normalizeLinkUrl(b.reelsLink || ""),
     status: b.status || DEAL_STATUSES[0], notes: b.notes || "",
   };
   state.influencerDeals.push(deal);
@@ -980,7 +1001,10 @@ app.post("/api/influencer-deals", requireAuth, (req,res)=>{
 app.patch("/api/influencer-deals/:id", requireAuth, (req,res)=>{
   const d = state.influencerDeals.find(d=>d.id===+req.params.id);
   if(!d) return res.status(404).json({error:"not found"});
-  Object.assign(d, req.body || {});
+  const body = Object.assign({}, req.body || {});
+  if("instagramLink" in body) body.instagramLink = normalizeInstagramUrl(body.instagramLink);
+  if("reelsLink" in body) body.reelsLink = normalizeLinkUrl(body.reelsLink);
+  Object.assign(d, body);
   persist();
   res.json(d);
 });
@@ -1013,8 +1037,8 @@ app.post("/api/influencer-deals/import", requireAuth, (req,res)=>{
       responsible: r["ответственный"] || r["responsible"] || "",
       bloggerCategory: r["категория"] || r["категория блогера"] || r["blogger_category"] || "",
       plannedContribution: parseInt(r["план_вклад"] || r["planned_contribution"] || 0, 10) || 0,
-      instagramLink: r["instagram"] || r["ссылка на instagram"] || r["instagram_link"] || "",
-      reelsLink: r["ссылка на reels"] || r["ссылка_на_reels"] || r["reels_link"] || "",
+      instagramLink: normalizeInstagramUrl(r["instagram"] || r["ссылка на instagram"] || r["instagram_link"] || ""),
+      reelsLink: normalizeLinkUrl(r["ссылка на reels"] || r["ссылка_на_reels"] || r["reels_link"] || ""),
       status: r["статус"] || r["status"] || DEAL_STATUSES[0],
       notes: r["комментарий"] || r["notes"] || "",
     };
@@ -1050,14 +1074,14 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
     id: nextId("microInfluencerDeals"),
     responsible: b.responsible || "Нина",
     blogerName: b.blogerName, bloggerCategory: b.bloggerCategory || "", phone: b.phone || "",
-    instagramAccount: b.instagramAccount || "", followers: b.followers || 0, er: b.er || 0, avgReach: b.avgReach || 0,
+    instagramAccount: normalizeInstagramUrl(b.instagramAccount || ""), followers: b.followers || 0, er: b.er || 0, avgReach: b.avgReach || 0,
     tiktokAccount: b.tiktokAccount || "", followersTT: b.followersTT || 0, erTT: b.erTT || 0, avgReachTT: b.avgReachTT || 0,
     cost: b.cost || 0, productCost: b.productCost || 0, paymentStatus: b.paymentStatus || MICRO_PAYMENT_STATUSES[0],
     conditions: b.conditions || "", paymentMethod: b.paymentMethod || "", iin: b.iin || "",
     city: b.city || "", address: b.address || "",
     product: b.product || "", barcode: b.barcode || "", productCategory: b.productCategory || "",
     productStatus: b.productStatus || "", videoStatus: b.videoStatus || "",
-    reelsLink: b.reelsLink || "", factReachReels: b.factReachReels || 0,
+    reelsLink: normalizeLinkUrl(b.reelsLink || ""), factReachReels: b.factReachReels || 0,
     tiktokVideoLink: b.tiktokVideoLink || "", factReachTT: b.factReachTT || 0,
     plannedDate: b.plannedDate || "", publishDate: b.publishDate || "", notes: b.notes || "",
   };
@@ -1068,7 +1092,11 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
 app.patch("/api/micro-influencer-deals/:id", requireAuth, (req,res)=>{
   const d = state.microInfluencerDeals.find(d=>d.id===+req.params.id);
   if(!d) return res.status(404).json({error:"not found"});
-  Object.assign(d, req.body || {});
+  const body = Object.assign({}, req.body || {});
+  if("instagramAccount" in body) body.instagramAccount = normalizeInstagramUrl(body.instagramAccount);
+  if("reelsLink" in body) body.reelsLink = normalizeLinkUrl(body.reelsLink);
+  if("tiktokVideoLink" in body) body.tiktokVideoLink = normalizeLinkUrl(body.tiktokVideoLink);
+  Object.assign(d, body);
   persist();
   res.json(d);
 });
@@ -1105,7 +1133,7 @@ app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
       blogerName,
       bloggerCategory: r["категория блогера"] || r["blogger_category"] || "",
       phone: (r["телефон"] || r["номер телефона"] || r["phone"] || "").toString().trim(),
-      instagramAccount: r["instagram"] || r["аккаунт instagram"] || "",
+      instagramAccount: normalizeInstagramUrl(r["instagram"] || r["аккаунт instagram"] || ""),
       followers: parseInt(r["подписчики"] || r["followers"] || 0, 10) || 0,
       er: parseFloat(r["er"] || 0) || 0,
       avgReach: parseInt(r["ср. охваты"] || r["ср охваты"] || r["avg_reach"] || 0, 10) || 0,
@@ -1126,7 +1154,7 @@ app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
       productCategory: r["категория товара"] || r["category"] || "",
       productStatus: r["статус товара"] || "",
       videoStatus: r["статус видео"] || "",
-      reelsLink: r["ссылка на reels"] || r["reels_link"] || "",
+      reelsLink: normalizeLinkUrl(r["ссылка на reels"] || r["reels_link"] || ""),
       factReachReels: parseInt(r["факт охват reels"] || 0, 10) || 0,
       tiktokVideoLink: r["ссылка на видео тт"] || r["tiktok_link"] || "",
       factReachTT: parseInt(r["факт охват тт"] || 0, 10) || 0,
