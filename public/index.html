@@ -1643,15 +1643,6 @@ function tplInfluencerBrandDashboard(allRows){
 
   const kpi = (label, value, note) => `<div class="kpi"><div class="num" style="color:${INFL_BRAND}">${value}</div><div class="lbl">${label}</div>${note?`<div style="font-size:10px;color:var(--ink-mute);margin-top:3px;line-height:1.35">${note}</div>`:""}</div>`;
   const fmtSigned = (v) => (v>=0?"+":"−") + fmtNum(Math.abs(Math.round(v))) + " ₸";
-  // v5 (D0): суммируем ТОЛЬКО реальные числа (статусы ok/zero). "Недостаточно данных",
-  // незакончившийся день и т.п. — это "—", а не число с оговоркой, в сумму не идут.
-  // ДРР считается по тем же интеграциям, что и выручка (расход тех, у кого число есть),
-  // иначе в знаменателе/числителе были бы разные наборы интеграций.
-  const kaspiRows = monthRows.filter(r=>autoContributionHasNumber(r.deal));
-  const kaspiAutoTotal = kaspiRows.reduce((sum,r)=> sum + Number(r.deal.autoContributionKzt), 0);
-  const kaspiAutoCounted = kaspiRows.length;
-  const kaspiCost = kaspiRows.reduce((sum,r)=> sum + (r.deal.cost||0), 0);
-  const drrFromKaspiPct = kaspiAutoTotal>0 ? kaspiCost/kaspiAutoTotal*100 : null;
 
   const card = (title, borderColor, bg, body) => `
     <div style="border-left:3px solid ${borderColor};background:${bg};border-radius:8px;padding:12px">
@@ -1738,11 +1729,10 @@ function tplInfluencerBrandDashboard(allRows){
     <div class="grid-kpi">
       ${kpi("Расходы (факт)", fmtNum(s.totalCost)+" ₸", "сумма колонки «факт расход» — сколько уже реально потратили")}
       ${kpi("План", fmtNum(s.plannedCost + (allPeriod ? (DataManager.state.plans||[]).filter(p=>p.scope==="cohort"&&p.key==="mid"&&p.metric==="budget").reduce((a,p)=>a+(p.value||0),0) : planValue(month,"cohort","mid","budget")))+" ₸", "сумма «план расход» (крупные) + план бюджета когорты «Средний инфлюенс» за месяц")}
-      ${kpi("Выручка (вклад)", fmtNum(Math.round(s.totalContribution))+" ₸")}
-      ${kpi("Выручка (Kaspi авто)", fmtNum(Math.round(kaspiAutoTotal))+" ₸", `сумма отдельной колонки «Авто (Kaspi)», посчитано по ${kaspiAutoCounted} из ${monthRows.length}`)}
+      ${kpi("Выручка (Kaspi)", fmtNum(Math.round(s.totalContribution))+" ₸", `заказы Kaspi день в день — посчитано по ${s.coveredCount} из ${monthRows.length} интеграций, у остальных «—» (нет обоснованного фона/охвата)`)}
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2), `по ${s.coveredCount} из ${monthRows.length} интеграций, где вклад посчитан`)}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%", `по ${s.coveredCount} из ${monthRows.length} интеграций, где вклад посчитан`)}
-      ${kpi("ДРР", drrFromKaspiPct==null?"—":drrFromKaspiPct.toFixed(1)+"%", `расход тех ${kaspiAutoCounted} интеграций, где есть число Kaspi ÷ их выручка Kaspi × 100%`)}
+      ${kpi("ДРР", s.drrPct==null?"—":s.drrPct.toFixed(1)+"%", `расходы ÷ выручка Kaspi × 100% — по тем же ${s.coveredCount} интеграциям`)}
       ${kpi("CPV", s.cpv==null?"—":(Math.round(s.cpv*100)/100)+" ₸")}
       ${kpi("Охват", fmtNum(s.totalReach))}
       ${kpi("Прирост ₸/просмотр", s.upliftPerView==null?"—":(Math.round(s.upliftPerView*100)/100)+" ₸")}
@@ -1897,7 +1887,7 @@ function microInfluencerBrandStats(monthRows){
   return {totalCost, totalReach, totalContribution, coveredCost, coveredCount, dealsCount, publishedCount, paidCount, romi, roasPct, drrPct, cpv, upliftPerView, upliftPerDeal,
     bloggerAgg, bestBlogger, worstBlogger, bestDeal, worstDeal};
 }
-// Человекочитаемое объяснение конкретной цифры "Выручка (вклад)" за месяц — по просьбе Нины:
+// Человекочитаемое объяснение конкретной цифры "Выручка (Kaspi)" за месяц — по просьбе Нины:
 // не просто формула, а разбивка — сколько интеграций с ШК учтено, из них скольким реально
 // посчитан вклад, было ли в тот же день пересечение с крупными блогерами по тому же SKU
 // (тогда сумма дня делится между всеми по охвату на сервере — attribution.js v5, правило D0).
@@ -1959,15 +1949,6 @@ function tplMicroInfluencerBrandDashboard(allRows){
   const dashCategory = availableCategories.includes(UI.microDashCategory) ? UI.microDashCategory : "";
   const monthRows = dashCategory ? periodRows.filter(r=>catOf(r)===dashCategory) : periodRows;
   const s = microInfluencerBrandStats(monthRows);
-  // v5 (D0): суммируем ТОЛЬКО реальные числа (статусы ok/zero). "Недостаточно данных",
-  // незакончившийся день и т.п. — это "—", а не число с оговоркой, в сумму не идут.
-  // ДРР считается по тем же интеграциям, что и выручка (расход тех, у кого число есть),
-  // иначе в знаменателе/числителе были бы разные наборы интеграций.
-  const kaspiRows = monthRows.filter(r=>autoContributionHasNumber(r.deal));
-  const kaspiAutoTotal = kaspiRows.reduce((sum,r)=> sum + Number(r.deal.autoContributionKzt), 0);
-  const kaspiAutoCounted = kaspiRows.length;
-  const kaspiCost = kaspiRows.reduce((sum,r)=> sum + (microDealTotalCost(r.deal)), 0);
-  const drrFromKaspiPct = kaspiAutoTotal>0 ? kaspiCost/kaspiAutoTotal*100 : null;
 
   const MAX_MONTH_TABS = 6;
   const recentMonths = Array.from(new Set([...months.slice(-MAX_MONTH_TABS), ...(allPeriod?[]:[month])])).sort();
@@ -1980,7 +1961,7 @@ function tplMicroInfluencerBrandDashboard(allRows){
 
   const qMark = (formula) => `<span title="${escapeHtml(formula)}" style="display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:var(--line-2);color:var(--ink-mute);font-size:10px;font-weight:700;cursor:help;vertical-align:middle;margin-left:4px">?</span>`;
   // detail — необязательная развёрнутая расшифровка именно для тултипа (значок "?"), когда короткой
-  // формулы недостаточно (см. "Выручка (вклад)" ниже — microContributionExplain). Короткая подпись
+  // формулы недостаточно (см. "Выручка (Kaspi)" ниже — microContributionExplain). Короткая подпись
   // под цифрой всегда показывает formula, а не detail — так под каждой цифрой не разрастается текст.
   const kpi = (label, value, formula, detail) => `<div class="kpi"><div class="num" style="color:${MICRO_BRAND}">${value}</div><div class="lbl">${label}${formula?qMark(detail||formula):""}</div>${formula?`<div style="font-size:10px;color:var(--ink-mute);margin-top:3px;line-height:1.35">${formula}</div>`:""}</div>`;
   const fmtSigned = (v) => (v>=0?"+":"−") + fmtNum(Math.abs(Math.round(v))) + " ₸";
@@ -2019,11 +2000,10 @@ function tplMicroInfluencerBrandDashboard(allRows){
 
     <div class="grid-kpi">
       ${kpi("Расходы", fmtNum(s.totalCost)+" ₸", "сумма расходов по всем интеграциям месяца")}
-      ${kpi("Выручка (вклад)", fmtNum(Math.round(s.totalContribution))+" ₸", "сумма вклада в продажи (только там, где есть ШК)", microContributionExplain(monthRows, month))}
-      ${kpi("Выручка (Kaspi авто)", fmtNum(Math.round(kaspiAutoTotal))+" ₸", `сумма отдельной колонки «Авто (Kaspi)», посчитано по ${kaspiAutoCounted} из ${monthRows.length}`)}
+      ${kpi("Выручка (Kaspi)", fmtNum(Math.round(s.totalContribution))+" ₸", `заказы Kaspi день в день — посчитано по ${s.coveredCount} из ${monthRows.length} интеграций, у остальных «—» (нет обоснованного фона/охвата)`, microContributionExplain(monthRows, month))}
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2), `вклад ÷ расходы — по ${s.coveredCount} из ${monthRows.length} интеграций, где вклад посчитан`)}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%", `вклад ÷ расходы × 100% — по ${s.coveredCount} из ${monthRows.length}`)}
-      ${kpi("ДРР", drrFromKaspiPct==null?"—":drrFromKaspiPct.toFixed(1)+"%", `расход тех ${kaspiAutoCounted} интеграций, где есть число Kaspi ÷ их выручка Kaspi × 100%`)}
+      ${kpi("ДРР", s.drrPct==null?"—":s.drrPct.toFixed(1)+"%", `расходы ÷ выручка Kaspi × 100% — по тем же ${s.coveredCount} интеграциям`)}
       ${kpi("CPV", s.cpv==null?"—":(Math.round(s.cpv*100)/100)+" ₸", "расходы ÷ факт.охват (Reels + TikTok)")}
       ${kpi("Охват", fmtNum(s.totalReach), "сумма факт.охвата всех интеграций месяца")}
       ${kpi("Прирост ₸/просмотр", s.upliftPerView==null?"—":(Math.round(s.upliftPerView*100)/100)+" ₸", "вклад в продажи ÷ факт.охват")}
@@ -7038,6 +7018,32 @@ async function runSelfTests(){
       if(M[72002].hasBaseline) throw new Error("микро needs_reach_data → «—»");
     } finally {
       DataManager.state.influencerDeals = savedDeals; DataManager.state.microInfluencerDeals = savedMicro; DataManager.state.salesByDay = savedSales;
+    }
+  });
+  TestSuite.test("D0: на дашбордах одна плашка «Выручка (Kaspi)» (без отдельной «Kaspi авто»), ROMI/ДРР по тем же интеграциям", ()=>{
+    const savedDeals = DataManager.state.influencerDeals, savedMicro = DataManager.state.microInfluencerDeals;
+    const savedIM = UI.inflMonth, savedMM = UI.microMonth;
+    try{
+      DataManager.state.influencerDeals = [
+        {id:73001, blogerLogin:"@a", barcode:"X", publishedDate:"2026-09-10", plannedDate:"2026-09-10", cost:100000, reach:50000, status:"Опубликована", autoContributionStatus:"ok", autoContributionKzt:300000},
+        {id:73002, blogerLogin:"@b", barcode:"X", publishedDate:"2026-09-11", plannedDate:"2026-09-11", cost:50000, reach:10000, status:"Опубликована", autoContributionStatus:"baseline_uncertain", autoContributionKzt:null},
+      ];
+      DataManager.state.microInfluencerDeals = [
+        {id:73101, blogerName:"m", barcode:"X", publishDate:"2026-09-10", cost:10000, productCost:0, videoStatus:"опубликовано", autoContributionStatus:"ok", autoContributionKzt:20000},
+      ];
+      UI.inflMonth = "2026-09"; UI.microMonth = "2026-09";
+      const htmlL = tplInfluencerBrandDashboard(computeInfluencerRomi());
+      const htmlM = tplMicroInfluencerBrandDashboard(computeMicroInfluencerRomi());
+      [htmlL, htmlM].forEach((h,i)=>{
+        if(h.includes("Kaspi авто")) throw new Error("не должно быть отдельной плашки «Kaspi авто» ("+i+")");
+        if(h.includes("Выручка (вклад)")) throw new Error("не должно быть отдельной плашки «Выручка (вклад)» ("+i+")");
+        if((h.match(/>Выручка \(Kaspi\)</g)||[]).length!==1) throw new Error("должна быть ровно одна плашка «Выручка (Kaspi)» ("+i+")");
+      });
+      if(!/300[\s\u00a0]000 ₸/.test(htmlL)) throw new Error("выручка крупных = 300 000 ₸ (только посчитанная интеграция)");
+      if(!htmlL.includes("×3.00")) throw new Error("ROMI = 300 000 ÷ 100 000 (расход только посчитанной интеграции)");
+    } finally {
+      DataManager.state.influencerDeals = savedDeals; DataManager.state.microInfluencerDeals = savedMicro;
+      UI.inflMonth = savedIM; UI.microMonth = savedMM;
     }
   });
   TestSuite.test("D0: autoContributionCell показывает сумму только для ok/zero, у остальных статусов «—» без числа", ()=>{
