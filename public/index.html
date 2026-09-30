@@ -439,6 +439,10 @@ const Api = {
   deleteMicroDeal: (id)=> apiFetch("/api/micro-influencer-deals/"+id, {method:"DELETE"}),
   bulkDeleteMicroDeals: (ids)=> apiFetch("/api/micro-influencer-deals/bulk-delete", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids})}),
   importMicroDeals: (rows)=> apiFetch("/api/micro-influencer-deals/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
+
+  // Разовая миграция "убрать 1С, сохранив уже посчитанные ROMI/ROAS как есть" (30.09.2026) —
+  // см. maybeFreezeManualRomi() и /api/influencer-romi-freeze на сервере.
+  freezeManualRomi: (large, micro)=> apiFetch("/api/influencer-romi-freeze", {method:"POST", headers:jsonHeaders, body:JSON.stringify({large, micro})}),
 };
 
 /* =========================================================================
@@ -448,10 +452,44 @@ const Api = {
    ========================================================================= */
 const DataManager = {
   state: {drivers:[], campaigns:[], orders:[], returns:[], publications:[], influencerDeals:[], salesByDay:[], microInfluencerDeals:[], productEvents:[], plans:[], productSkuOverrides:[]},
-  async load(){ this.state = await Api.getState(); return this.state; },
+  async load(){ this.state = await Api.getState(); await maybeFreezeManualRomi(); return this.state; },
   async refresh(){ this.state = await Api.getState(); return this.state; },
   find(collection, id){ return this.state[collection].find(i=> (i.id===id) || (i.code===id)); },
 };
+
+// Разовая миграция при первой загрузке после отключения "Продажи по дням (1С)" (30.09.2026).
+// Зачем: панель "Продажи по дням (1С)" тормозила интерфейс на большом объёме записей, а сами
+// продажи Kaspi и так синхронизируются в Supabase отдельным авто-расчётом (колонка "Авто
+// (Kaspi)"), поэтому ручной 1С-импорт убираем. Но ROMI/ROAS уже посчитанных интеграций должны
+// остаться РОВНО такими же, как были до удаления — а не обнулиться из-за пропавшей истории.
+// Поэтому здесь, ОДИН раз, пока salesByDay ещё жива, считаем текущие значения теми же функциями,
+// что всегда их и показывали (computeInfluencerRomi/computeMicroInfluencerRomi — ничего не
+// переписано), и просим сервер сохранить эти числа на каждой интеграции ("заморозить") и следом
+// очистить salesByDay. computeInfluencerRomi()/computeMicroInfluencerRomi() уже умеют показывать
+// замороженный снимок вместо пересчёта (см. поле frozenAt на сделке) — после миграции они не
+// зависят от salesByDay вообще.
+// Идемпотентно и безопасно при повторных вызовах: сервер выставляет salesByDayFrozen=true только
+// один раз и дальше просто отвечает {alreadyDone:true}, ничего не пересчитывая.
+async function maybeFreezeManualRomi(){
+  try{
+    if(!(UI.role==="manager" || UI.role==="marketer")) return;
+    const st = DataManager.state;
+    if(!st || st.salesByDayFrozen) return;
+    if(!Array.isArray(st.salesByDay) || !st.salesByDay.length) return;
+    const large = computeInfluencerRomi().map(r=>({id:r.deal.id, netContribution:r.netContribution, romi:r.romi, hasBaseline:r.hasBaseline, capped:r.capped}));
+    const micro = computeMicroInfluencerRomi().map(r=>({id:r.deal.id, netContribution:r.netContribution, romi:r.romi, hasBaseline:r.hasBaseline, capped:r.capped}));
+    const res = await Api.freezeManualRomi(large, micro);
+    if(res && res.ok && !res.alreadyDone){
+      toast(`Продажи 1С убраны — ROMI/ROAS ${res.large} крупных и ${res.micro} микро-интеграций сохранены как было`);
+    }
+    // Перечитываем state: теперь у интеграций проставлен frozenAt, а salesByDay пуста.
+    DataManager.state = await Api.getState();
+  }catch(e){
+    // Не блокируем работу из-за сбоя миграции — переживём его молча и попробуем на следующей
+    // загрузке (флаг на сервере не установится, пока миграция не пройдёт целиком успешно).
+    console.error("Миграция заморозки ROMI/ROAS (убрать 1С) не выполнена:", e);
+  }
+}
 
 let isOnline = true;
 function setConnStatus(online){
@@ -1212,6 +1250,13 @@ function computeUnifiedInfluencerRomi(){
 function computeInfluencerRomi(){
   const {units, contribution, baselineByProduct, cappedKeys} = computeUnifiedInfluencerRomi();
   return units.filter(u=>u.type==='large').map(u=>{
+    // Заморожено миграцией "убрать 1С" (30.09.2026, см. /api/influencer-romi-freeze и
+    // maybeFreezeManualRomi()) — для этой интеграции ROMI/ROAS больше НЕ пересчитывается по
+    // salesByDay (истории 1С там уже нет), а берётся снимком на момент миграции, чтобы число
+    // осталось ровно таким, каким его видели до удаления 1С-данных.
+    if(u.deal.frozenAt){
+      return {deal:u.deal, netContribution:u.deal.frozenNetContribution, romi:u.deal.frozenRomi, hasBaseline:!!u.deal.frozenHasBaseline, capped:!!u.deal.frozenCapped};
+    }
     const netContribution = Math.round(contribution[u.key]||0);
     const hasBaseline = baselineByProduct[u.matchKey]!=null;
     const romi = (hasBaseline && u.cost>0) ? (netContribution / u.cost) : null;
@@ -1355,6 +1400,10 @@ function microDealMatchKey(d){ return (d.barcode||"").trim() || d.product; }
 function computeMicroInfluencerRomi(){
   const {units, contribution, baselineByProduct, cappedKeys} = computeUnifiedInfluencerRomi();
   return units.filter(u=>u.type==='micro').map(u=>{
+    // См. комментарий в computeInfluencerRomi() — тот же снимок, для микро/средних.
+    if(u.deal.frozenAt){
+      return {deal:u.deal, netContribution:u.deal.frozenNetContribution, romi:u.deal.frozenRomi, hasBaseline:!!u.deal.frozenHasBaseline, capped:!!u.deal.frozenCapped};
+    }
     const netContribution = Math.round(contribution[u.key]||0);
     const hasBaseline = baselineByProduct[u.matchKey]!=null;
     const romi = (hasBaseline && u.cost>0) ? (netContribution / u.cost) : null;
@@ -1909,7 +1958,7 @@ function tplMicroInfluencerBrandDashboard(allRows){
         ? `<b>Показатели ниже — только по категории «${escapeHtml(dashCategory)}»</b> (${monthRows.length} из ${periodRows.length} опубликованных интеграций месяца). Остальные блоки страницы фильтр категории не затрагивает.<br>`
         : `Показатели ниже — по всем категориям блогеров; чтобы посмотреть отдельно (лайфстайл, бьюти, эксперты…), выберите категорию в списке справа.<br>`}
       Показаны только уже опубликованные интеграции (оплаченные, но ещё не выложенные — не учитываются, появятся сами после выкладки).
-      ROMI считается только там, где у интеграции есть ШК (или совпадает название товара) и в «Продажи по дням (1С)» есть история продаж этого товара.
+      ROMI по интеграциям до 30.09.2026 — зафиксированное значение (см. отключение «Продажи по дням (1С)»); по новым интеграциям эта колонка «нет данных», ориентируйтесь на «Авто (Kaspi)».
     </div>
 
     <div class="grid-kpi">
@@ -3959,8 +4008,7 @@ function tplProductEvents(){
 }
 function tplInfluencerDeals(){
   const s = influencerSummary();
-  const {salesByDay} = DataManager.state; const inflResponsibles = [...new Set(DataManager.state.influencerDeals.map(d=>d.responsible).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ru"));
-  const salesSorted = salesByDay.slice().sort((a,b)=> a.date<b.date?1:-1).slice(0,30);
+  const inflResponsibles = [...new Set(DataManager.state.influencerDeals.map(d=>d.responsible).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ru"));
 
   const fi = UI.inflFilter;
   const months = inflAvailableMonths();
@@ -4014,10 +4062,10 @@ function tplInfluencerDeals(){
         </div>
       </div>
       <div class="login-hint" style="margin-bottom:12px">
-        ROMI считается по продажам из «Продажи по дням (1С)» ниже: база — среднее по дням без чьей-либо
-        активности, вклад каждой интеграции живёт 3 дня (100% / 50% / 20%) и делится между теми, кто активен
-        в этот день одновременно. Если по товару ещё нет ни одного «чистого» дня — ROMI покажет «нет данных»:
-        догрузите историю продаж за 2–4 недели до первой интеграции по этому товару.
+        Ручной импорт «Продажи по дням (1С)» отключён (30.09.2026) — ROMI/ROAS уже посчитанных
+        интеграций сохранены как были на момент отключения и больше не пересчитываются. У новых
+        интеграций эта колонка будет показывать «нет данных»: для сверки используйте «Авто
+        (Kaspi)» справа — отдельный автоматический расчёт по продажам Kaspi.
       </div>
       <div class="toolbar" style="margin-bottom:12px">
         <input type="search" class="fill" id="infl-search" placeholder="Поиск по логину блогера" value="${escapeHtml(fi.search)}">
@@ -4075,14 +4123,14 @@ function tplInfluencerDeals(){
           <th>#</th><th class="sticky-col">Блогер</th><th>Ответственный</th><th>Категория</th><th>Платформа</th><th>Продукт</th>
           ${UI.collapsedColGroups.has("infl-dates") ? `<th title="Дата план / Дата факт свёрнуты">Даты</th>` : `<th>Дата план</th><th>Дата факт</th>`}
           ${UI.collapsedColGroups.has("infl-reach") ? `<th title="План охват/клики / Факт охват/клики свёрнуты">Охваты</th>` : `<th>План охват/клики</th><th>Факт охват/клики</th>`}
-          <th>План/факт расход</th><th>Вклад в продажи<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-mute)">план / факт</span></th><th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th><th>ROAS, ×</th><th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (оплата блогеру). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th>${UI.collapsedColGroups.has("infl-auto") ? `<th title="Отдельный авто-расчёт вклада по продажам Kaspi — предварительная расчётная оценка, соответствие регламенту attr-01 не подтверждено — свёрнуто, нажмите «+ Авто (Kaspi)» выше">Авто</th>` : `<th title="Отдельный авто-расчёт вклада по продажам Kaspi (окно D0–D2 после публикации, веса по дням 0,60/0,30/0,10, обновляется раз в сутки) — предварительная расчётная оценка; соответствие действующему регламенту attr-01 не подтверждено, первоисточник методики ещё разыскивается. Расчётная атрибуция, а не подтверждённая сумма покупок конкретного блогера — персональных промокодов нет. Не заменяет колонку «Вклад в продажи» слева — показан для сверки.">Авто (Kaspi)</th>`}<th>Статус</th><th></th>
+          <th>План/факт расход</th><th>Вклад в продажи<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-mute)">план / факт</span></th><th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th><th>ROAS, ×</th><th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (оплата блогеру). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th>${UI.collapsedColGroups.has("infl-auto") ? `<th title="Отдельный авто-расчёт вклада по продажам Kaspi — предварительная расчётная оценка, соответствие регламенту attr-01 не подтверждено — свёрнуто, нажмите «+ Авто (Kaspi)» выше">Авто</th>` : `<th title="Отдельный авто-расчёт вклада по продажам Kaspi (окно D0–D2 после публикации, веса по дням 0,60/0,30/0,10, обновляется раз в сутки) — предварительная расчётная оценка; соответствие действующему регламенту attr-01 не подтверждено, первоисточник методики ещё разыскивается. Расчётная атрибуция, а не подтверждённая сумма покупок конкретного блогера — персональных промокодов нет. Не заменяет колонку «Вклад в продажи» слева — показан для сверки.">Авто (Kaspi)</th>`}<th>Ссылка на Reels</th><th>Статус</th><th></th>
         </tr></thead>
         <tbody>
           ${rows.map((r,i)=>{
             const d = r.deal;
             return `<tr>
               <td>${i+1}</td>
-              <td class="sticky-col"><b>${escapeHtml(d.blogerLogin)}</b>${d.lastUpdatedFrom==="telegram"?' <span class="badge badge-progress" title="Обновлено через Telegram-бота">TG</span>':''}</td>
+              <td class="sticky-col"><b>${escapeHtml(d.blogerLogin)}</b>${d.instagramLink?` <a href="${escapeHtml(d.instagramLink)}" target="_blank" rel="noopener" title="Ссылка на Instagram">IG</a>`:''}${d.lastUpdatedFrom==="telegram"?' <span class="badge badge-progress" title="Обновлено через Telegram-бота">TG</span>':''}</td>
               <td>${d.responsible ? escapeHtml(d.responsible) : `<span style="color:var(--ink-mute)">—</span>`}</td>
               <td>${inlineEditSpan(d.bloggerCategory ? escapeHtml(d.bloggerCategory) : `<span style="color:var(--ink-mute)">—</span>`, d.id, 'bloggerCategory', d.bloggerCategory||'', 'select', LARGE_BLOGGER_CATEGORIES)}</td>
               <td>${escapeHtml(d.platform)}</td>
@@ -4111,44 +4159,21 @@ function tplInfluencerDeals(){
               return units ? fmtNum(units) : `<span style="color:var(--ink-mute)" title="Нет цены товара по этому ШК — добавьте в «Динамика цен»">—</span>`;
             })()}</td><td>${r.romi==null ? "—" : `<b style="color:${r.romi>=1?'var(--ok)':'var(--warn)'}">${r.romi.toFixed(2)}</b>`}</td><td>${r.romi==null ? "—" : `×${r.romi.toFixed(2)}`}</td>
               <td>${UI.collapsedColGroups.has("infl-auto") ? `<span style="color:var(--ink-mute);cursor:default" title="Свёрнуто — нажмите «+ Авто (Kaspi)» над таблицей, чтобы показать">⋯</span>` : autoContributionCell(d)}</td>
+              <td>${d.reelsLink
+                ? `<a href="${escapeHtml(d.reelsLink)}" target="_blank" rel="noopener">${escapeHtml(d.reelsLink)}</a> ${inlineEditSpan("✎", d.id, 'reelsLink', d.reelsLink, 'text')}`
+                : inlineEditSpan("—", d.id, 'reelsLink', '', 'text')}</td>
               <td><select class="deal-status-select" data-id="${d.id}">${DEAL_STATUSES.map(st=>`<option ${st===d.status?'selected':''}>${st}</option>`).join("")}</select></td>
               <td>
                 <button class="btn btn-ghost btn-sm edit-deal-btn" data-id="${d.id}">✎</button>
                 <button class="btn btn-danger btn-sm del-deal-btn" data-id="${d.id}">✕</button>
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="${16 - (UI.collapsedColGroups.has("infl-dates")?1:0) - (UI.collapsedColGroups.has("infl-reach")?1:0)}">${s.rows.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="${17 - (UI.collapsedColGroups.has("infl-dates")?1:0) - (UI.collapsedColGroups.has("infl-reach")?1:0)}">${s.rows.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
     </div>
 
     ${tplInfluencerTopBloggers(s.rows)}
-
-    <div class="panel">
-      <div class="panel-title">
-        Продажи по дням (1С)
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-ghost btn-sm" id="template-sale-csv-btn">Шаблон CSV</button>
-          <button class="btn btn-ghost btn-sm" id="import-sale-csv-btn">Импорт CSV</button>
-          <input type="file" id="import-sale-csv-input" accept=".csv" class="hide">
-          <button class="btn btn-primary btn-sm" id="new-sale-btn">+ Продажи за день</button>
-        </div>
-      </div>
-      <div class="login-hint" style="margin-bottom:12px">
-        Для расчёта ROMI важно догрузить историю за 2–4 недели до первой интеграции по товару (одной строкой
-        на день+товар — при повторной загрузке той же пары дата+товар значение просто перезапишется).
-      </div>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Дата</th><th>Продукт</th><th>Выручка</th><th></th></tr></thead>
-        <tbody>
-          ${salesSorted.map(row=>`<tr>
-            <td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.product)}${row.barcode?`<br><span style="color:var(--ink-mute);font-size:11px">ШК ${escapeHtml(row.barcode)}</span>`:""}</td><td>${fmtNum(row.revenue)} ₸</td>
-            <td><button class="btn btn-danger btn-sm del-sale-btn" data-id="${row.id}">✕</button></td>
-          </tr>`).join("") || `<tr><td class="empty" colspan="4">Продаж пока не загружено</td></tr>`}
-        </tbody>
-      </table></div>
-      ${salesByDay.length>30 ? `<div style="margin-top:8px;color:var(--ink-mute);font-size:11.5px">Показаны последние 30 записей из ${salesByDay.length}</div>` : ""}
-    </div>
   `;
 }
 
@@ -5169,7 +5194,7 @@ function knownProductNames(){
 }
 function modalDeal(existing){
   const isEdit = !!existing;
-  const d = existing || {blogerLogin:"", platform:PLATFORMS[0], product:"", barcode:"", responsible:"", bloggerCategory:"", plannedDate:"", publishedDate:"", plannedReach:0, plannedClicks:0, reach:0, clicks:0, likes:0, comments:0, saves:0, cost:0, plannedCost:0, plannedContribution:0, notes:""};
+  const d = existing || {blogerLogin:"", platform:PLATFORMS[0], product:"", barcode:"", responsible:"", bloggerCategory:"", plannedDate:"", publishedDate:"", plannedReach:0, plannedClicks:0, reach:0, clicks:0, likes:0, comments:0, saves:0, cost:0, plannedCost:0, plannedContribution:0, instagramLink:"", reelsLink:"", notes:""};
   const botHint = d.lastUpdatedFrom==="telegram"
     ? `<div class="login-hint">Последнее обновление — из Telegram-бота (${escapeHtml((d.lastUpdatedAt||"").replace("T"," ").slice(0,16))}). Лайки/комментарии/сохранения ниже — из распознанного скриншота.</div>`
     : "";
@@ -5198,6 +5223,10 @@ function modalDeal(existing){
     <datalist id="product-suggestions">${knownProductNames().map(p=>`<option value="${escapeHtml(p)}">`).join("")}</datalist>
     ${botHint}
     <div class="login-hint">Если укажешь ШК — вклад в продажи и ROMI будут считаться по нему (надёжнее, чем по названию товара из разных источников).</div>
+    <div class="form-row">
+      <div class="field"><label>Ссылка на Instagram</label><input id="m-instagram-link" placeholder="https://instagram.com/..." value="${escapeHtml(d.instagramLink||'')}"></div>
+      <div class="field"><label>Ссылка на Reels</label><input id="m-reels-link" placeholder="https://instagram.com/reel/..." value="${escapeHtml(d.reelsLink||'')}"></div>
+    </div>
     <div class="field"><label>Комментарий</label><textarea id="m-notes">${escapeHtml(d.notes||"")}</textarea></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="m-cancel">Отмена</button>
@@ -5225,6 +5254,8 @@ function modalDeal(existing){
       plannedCost: parseInt(document.getElementById("m-planned-cost").value,10)||0,
       plannedContribution: parseInt(document.getElementById("m-planned-contribution").value,10)||0,
       cost: parseInt(document.getElementById("m-cost").value,10)||0,
+      instagramLink: document.getElementById("m-instagram-link").value.trim(),
+      reelsLink: document.getElementById("m-reels-link").value.trim(),
       notes: document.getElementById("m-notes").value.trim(),
     };
     try{
@@ -5234,37 +5265,8 @@ function modalDeal(existing){
   };
 }
 
-function modalSale(){
-  const today = todayStr();
-  openModal(`
-    <h3>Продажи за день (из 1С)</h3>
-    <div class="form-row">
-      <div class="field"><label>Дата</label><input id="m-sdate" type="date" value="${today}"></div>
-      <div class="field"><label>Продукт</label><input id="m-sproduct" list="product-suggestions" placeholder="Название товара как в 1С"></div>
-      <div class="field"><label>Штрихкод (ШК)</label><input id="m-sbarcode" placeholder="необязательно, но надёжнее"></div>
-      <div class="field"><label>Выручка, ₸</label><input id="m-srevenue" type="number" value="0"></div>
-    </div>
-    <datalist id="product-suggestions">${knownProductNames().map(p=>`<option value="${escapeHtml(p)}">`).join("")}</datalist>
-    <div class="login-hint">Если для этой пары дата+ШК (или дата+продукт, если ШК не указан) запись уже есть — значение перезапишется.</div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" id="m-cancel">Отмена</button>
-      <button class="btn btn-primary" id="m-save">Сохранить</button>
-    </div>
-  `);
-  document.getElementById("m-cancel").onclick = closeModal;
-  document.getElementById("m-save").onclick = async ()=>{
-    const btn = document.getElementById("m-save");
-    try{
-      await withBusy(btn, ()=> Api.saveSale({
-        date: document.getElementById("m-sdate").value,
-        product: document.getElementById("m-sproduct").value.trim(),
-        barcode: document.getElementById("m-sbarcode").value.trim(),
-        revenue: parseInt(document.getElementById("m-srevenue").value,10)||0,
-      }));
-      closeModal(); toast("Продажи сохранены"); await DataManager.refresh(); render();
-    }catch(e){ toast(e.message, true); }
-  };
-}
+// modalSale() (ручной ввод "Продажи за день (из 1С)") убран 30.09.2026 вместе с панелью
+// "Продажи по дням (1С)" — см. maybeFreezeManualRomi() и комментарий у tplInfluencerDeals().
 
 /* ---------- "Планер блогеров" — календарь плановых/фактических дат публикаций (см. AskUserQuestion
    в диалоге: план, если есть, иначе факт — та же логика, что и у microDealDate(); ссылка в карточке —
@@ -5896,7 +5898,6 @@ function wireDeskTab(){
 
   else if(UI.tab==="influencerDeals"){
     document.getElementById("new-deal-btn").onclick = ()=> modalDeal(null);
-    document.getElementById("new-sale-btn").onclick = ()=> modalSale();
 
     wirePlanCells();
 
@@ -5990,16 +5991,9 @@ function wireDeskTab(){
         catch(e){ toast(e.message, true); render(); }
       };
     });
-    document.querySelectorAll(".del-sale-btn").forEach(btn=>{
-      btn.onclick = async ()=>{
-        try{ await Api.deleteSale(parseInt(btn.dataset.id,10)); await DataManager.refresh(); render(); }
-        catch(e){ toast(e.message, true); }
-      };
-    });
-
     document.getElementById("template-deal-csv-btn").onclick = ()=>{
-      const header = ["блогер","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","статус","категория","комментарий"];
-      const example = ["@big_blogger","Instagram Reels","Уход премиум","4650358455500","2026-07-20","2026-07-20","200000","4000","","","400000","400000","Запланирована","Бьюти",""];
+      const header = ["блогер","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","статус","категория","instagram","ссылка_на_reels","комментарий"];
+      const example = ["@big_blogger","Instagram Reels","Уход премиум","4650358455500","2026-07-20","2026-07-20","200000","4000","","","400000","400000","Запланирована","Бьюти","https://instagram.com/big_blogger","",""];
       const csv = [header, example].map(row=>row.map(csvEscape).join(",")).join("\n");
       downloadFile("barter-box-influencer-deals-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
       toast("Шаблон скачан");
@@ -6029,7 +6023,7 @@ function wireDeskTab(){
       const rows = filteredInfluencerDealRows();
       // "id" первой колонкой — чтобы "Импорт CSV" мог узнать в строке уже существующую
       // интеграцию и обновить её, а не завести дубль (см. /api/influencer-deals/import).
-      const header = ["id","блогер","ответственный","категория","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","план_вклад","вклад_в_продажи","romi","статус"];
+      const header = ["id","блогер","ответственный","категория","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","план_вклад","вклад_в_продажи","romi","статус","instagram","ссылка_на_reels"];
       const lines = [header.map(csvEscape).join(",")];
       rows.forEach(r=>{
         const d = r.deal;
@@ -6040,33 +6034,11 @@ function wireDeskTab(){
           d.plannedCost||0, d.cost||0, d.plannedContribution||0,
           r.hasBaseline ? r.netContribution : "нет данных",
           r.romi==null ? "" : r.romi.toFixed(2),
-          d.status
+          d.status, d.instagramLink||"", d.reelsLink||""
         ].map(csvEscape).join(","));
       });
       downloadFile("barter-box-influencer-deals-export.csv", "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
       toast("Таблица выгружена");
-    };
-
-    document.getElementById("template-sale-csv-btn").onclick = ()=>{
-      const header = ["дата","продукт","шк","выручка"];
-      const example = ["2026-07-01","Уход премиум","4650358455500","145000"];
-      const csv = [header, example].map(row=>row.map(csvEscape).join(",")).join("\n");
-      downloadFile("barter-box-sales-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
-      toast("Шаблон скачан — удобно для загрузки истории 1С задним числом");
-    };
-    document.getElementById("import-sale-csv-btn").onclick = ()=> document.getElementById("import-sale-csv-input").click();
-    document.getElementById("import-sale-csv-input").onchange = (e)=>{
-      const file = e.target.files[0];
-      if(!file) return;
-      const reader = new FileReader();
-      reader.onload = async ()=>{
-        const rows = parseCsv(String(reader.result));
-        try{ const res = await Api.importSales(rows); toast(`Продажи: добавлено ${res.added}, обновлено ${res.updated}`); }
-        catch(e){ toast(e.message, true); }
-        e.target.value = "";
-        await DataManager.refresh(); render();
-      };
-      reader.readAsText(file, "UTF-8");
     };
   }
 
@@ -8903,11 +8875,9 @@ async function runSelfTests(){
       UI.tab = "influencerDeals";
       UI.inflFilter = {search:"", sort:"default", month:""};
       DataManager.state.influencerDeals = [{id:9802, blogerLogin:"@csv_test", platform:"Instagram Reels", product:"Товар", barcode:"", plannedDate:"2026-07-01", publishedDate:"2026-07-01", plannedReach:0, plannedClicks:0, reach:0, clicks:0, plannedCost:0, cost:1000, status:"Запланирована"}];
-      DataManager.state.sales = [];
       renderDeskShell();
       checkButton("export-deal-csv-btn", "Инфлюенс крупные: Экспорт CSV");
       checkButton("template-deal-csv-btn", "Инфлюенс крупные: Шаблон CSV");
-      checkButton("template-sale-csv-btn", "Продажи: Шаблон CSV");
 
       // Инфлюенс интеграции микро/средние
       UI.tab = "microInfluencers";
