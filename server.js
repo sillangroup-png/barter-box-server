@@ -328,31 +328,31 @@ const pgPool = new Pool({
 
 let placementsSyncing = false;
 
-/* ---------- Авто-расчёт вклада блогеров в продажи (по Kaspi, раз в сутки) ----------
-   Отдельно от синка выше: тот только ОТПРАВЛЯЕТ данные в Supabase, а это СЧИТАЕТ
-   и ЗАБИРАЕТ обратно готовый результат в auto_contribution_* — см. attribution.js
-   и pull-fact-from-supabase.js. Существующий расчёт "Вклад в продажи" на фронтенде
-   (по salesByDay/1С) не трогается, это независимая, отдельная колонка для сверки. */
-const { runDailyAttribution, almatyTodayStr } = require("./attribution.js");
+/* ---------- Авто-расчёт вклада блогеров в продажи (Kaspi, день в день, D0) ----------
+   Синк выше ОТПРАВЛЯЕТ интеграции в Supabase, attribution.js СЧИТАЕТ auto_contribution_*,
+   pull-fact-from-supabase.js ЗАБИРАЕТ результат обратно. С v5 это единственный источник
+   "Вклада в продажи"/ROMI/ROAS для интеграций с сентября (см. kaspiContributionOf() во
+   фронтенде). Расчёт v5 пересчитывает ВСЕ опубликованные интеграции целиком одним
+   проходом (несколько запросов, без цикла по товарам), поэтому гоняем его раз в час,
+   а не раз в сутки: исправленный ШК/охват/дата попадают в цифру в течение часа, и
+   первый же прогон после деплоя затирает все старые результаты окна D0–D2. */
+const { runDailyAttribution } = require("./attribution.js");
 const { pullFactFromSupabase } = require("./pull-fact-from-supabase.js");
 
-let lastAttributionRunDate = null;
-let attributionRunning = false; // защита от повторного запуска: если первый проход
-  // (особенно первый после деплоя — считает весь бэклог, может идти много минут)
-  // не успел закончиться за 3 минуты до следующего тика, второй запускать НЕ надо —
-  // иначе оба борются за одно и то же соединение с базой и всё замедляют ещё больше.
+const ATTRIBUTION_EVERY_MS = 60*60*1000;
+let lastAttributionRunAt = 0;
+let attributionRunning = false; // защита от наложения двух прогонов
 
 async function maybeRunDailyAttribution(){
-  if(attributionRunning) return; // предыдущий проход ещё не закончился
-  const today = almatyTodayStr();
-  if(lastAttributionRunDate === today) return; // сегодня уже посчитали
+  if(attributionRunning) return;
+  if(Date.now() - lastAttributionRunAt < ATTRIBUTION_EVERY_MS) return;
   attributionRunning = true;
   try{
     await runDailyAttribution(pgPool);
-    lastAttributionRunDate = today;
+    lastAttributionRunAt = Date.now();
   }catch(e){
     console.error("Attribution error:", e.message);
-    // lastAttributionRunDate не трогаем — попробует снова на следующем тике
+    // lastAttributionRunAt не трогаем — попробует снова на следующем тике
   }finally{
     attributionRunning = false;
   }
@@ -1407,14 +1407,16 @@ app.get(/^(?!\/api).*/, (req,res)=>{
   });
 });
 
-syncPlacementsToSupabase().catch(e=> console.error("Supabase sync (старт):", e.message));
-maybeRunDailyAttribution().catch(e=> console.error("Attribution (старт):", e.message));
-pullAttributionFact().catch(e=> console.error("Pull-fact (старт):", e.message));
-setInterval(()=>{
-  syncPlacementsToSupabase().catch(e=> console.error("Supabase sync (интервал):", e.message));
-  maybeRunDailyAttribution().catch(e=> console.error("Attribution (интервал):", e.message));
-  pullAttributionFact().catch(e=> console.error("Pull-fact (интервал):", e.message));
-}, 3*60*1000);
+// Последовательно: сначала отправить свежие интеграции (ШК/дата/охват), потом считать,
+// потом забрать результат — иначе расчёт шёл бы по устаревшим строкам, а фронтенд
+// получал бы результат прошлого прогона.
+async function placementsTick(label){
+  await syncPlacementsToSupabase().catch(e=> console.error(`Supabase sync (${label}):`, e.message));
+  await maybeRunDailyAttribution().catch(e=> console.error(`Attribution (${label}):`, e.message));
+  await pullAttributionFact().catch(e=> console.error(`Pull-fact (${label}):`, e.message));
+}
+placementsTick("старт");
+setInterval(()=> placementsTick("интервал"), 3*60*1000);
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, ()=>{
