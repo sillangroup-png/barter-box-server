@@ -504,6 +504,29 @@ function setConnStatus(online){
 function escapeHtml(s){
   return String(s==null?"":s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
+// Гарантирует, что ссылка (Instagram/Reels и т.п.) имеет протокол — иначе браузер
+// трактует "instagram.com/xxx" как относительный путь на ТЕКУЩЕМ сайте, а не как
+// переход на внешний домен. Используется и при сохранении (чтобы в состоянии
+// всегда лежала полная ссылка), и на всякий случай ещё раз при рендере <a href>.
+function normalizeLinkUrl(s){
+  const v = String(s==null?"":s).trim();
+  if(!v) return "";
+  if(/^https?:\/\//i.test(v)) return v;
+  if(/^\/\//.test(v)) return "https:" + v; // "//instagram.com/..."
+  return "https://" + v.replace(/^\/+/, "");
+}
+// Для полей "Instagram (ссылка/логин)": принимает и голый логин ("ayimsm", "@ayimsm"),
+// и ссылку без протокола ("instagram.com/ayimsm"), и полную ссылку — всегда возвращает
+// рабочую полную ссылку на instagram.com, а не относительный путь на нашем же сайте.
+function normalizeInstagramUrl(s){
+  const v = String(s==null?"":s).trim();
+  if(!v) return "";
+  if(/^https?:\/\//i.test(v)) return v;
+  if(/instagram\.com/i.test(v)) return normalizeLinkUrl(v);
+  const handle = v.replace(/^@/, "").replace(/^\/+/, "").trim();
+  if(!handle) return "";
+  return "https://instagram.com/" + handle;
+}
 function toast(msg, isError){
   const t = document.getElementById("toast");
   t.textContent = msg;
@@ -4130,7 +4153,7 @@ function tplInfluencerDeals(){
             const d = r.deal;
             return `<tr>
               <td>${i+1}</td>
-              <td class="sticky-col"><b>${escapeHtml(d.blogerLogin)}</b>${d.instagramLink?` <a href="${escapeHtml(d.instagramLink)}" target="_blank" rel="noopener" title="Ссылка на Instagram">IG</a>`:''}${d.lastUpdatedFrom==="telegram"?' <span class="badge badge-progress" title="Обновлено через Telegram-бота">TG</span>':''}</td>
+              <td class="sticky-col"><b>${escapeHtml(d.blogerLogin)}</b>${d.instagramLink?` <a href="${escapeHtml(normalizeInstagramUrl(d.instagramLink))}" target="_blank" rel="noopener" title="Ссылка на Instagram">IG</a>`:''}${d.lastUpdatedFrom==="telegram"?' <span class="badge badge-progress" title="Обновлено через Telegram-бота">TG</span>':''}</td>
               <td>${d.responsible ? escapeHtml(d.responsible) : `<span style="color:var(--ink-mute)">—</span>`}</td>
               <td>${inlineEditSpan(d.bloggerCategory ? escapeHtml(d.bloggerCategory) : `<span style="color:var(--ink-mute)">—</span>`, d.id, 'bloggerCategory', d.bloggerCategory||'', 'select', LARGE_BLOGGER_CATEGORIES)}</td>
               <td>${escapeHtml(d.platform)}</td>
@@ -4160,7 +4183,7 @@ function tplInfluencerDeals(){
             })()}</td><td>${r.romi==null ? "—" : `<b style="color:${r.romi>=1?'var(--ok)':'var(--warn)'}">${r.romi.toFixed(2)}</b>`}</td><td>${r.romi==null ? "—" : `×${r.romi.toFixed(2)}`}</td>
               <td>${UI.collapsedColGroups.has("infl-auto") ? `<span style="color:var(--ink-mute);cursor:default" title="Свёрнуто — нажмите «+ Авто (Kaspi)» над таблицей, чтобы показать">⋯</span>` : autoContributionCell(d)}</td>
               <td>${d.reelsLink
-                ? `<a href="${escapeHtml(d.reelsLink)}" target="_blank" rel="noopener">${escapeHtml(d.reelsLink)}</a> ${inlineEditSpan("✎", d.id, 'reelsLink', d.reelsLink, 'text')}`
+                ? `<a href="${escapeHtml(normalizeLinkUrl(d.reelsLink))}" target="_blank" rel="noopener">${escapeHtml(d.reelsLink)}</a> ${inlineEditSpan("✎", d.id, 'reelsLink', d.reelsLink, 'text')}`
                 : inlineEditSpan("—", d.id, 'reelsLink', '', 'text')}</td>
               <td><select class="deal-status-select" data-id="${d.id}">${DEAL_STATUSES.map(st=>`<option ${st===d.status?'selected':''}>${st}</option>`).join("")}</select></td>
               <td>
@@ -4397,7 +4420,7 @@ function tplMicroInfluencers(){
               <td class="sticky-col">${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
               <td>${inlineEditSpan(escapeHtml(d.bloggerCategory||"—"), d.id, 'bloggerCategory', d.bloggerCategory||'', 'select', MICRO_BLOGGER_CATEGORIES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.responsible||"—"), d.id, 'responsible', d.responsible||'', 'text')}</td>
-              <td>${d.instagramAccount?`<a href="${escapeHtml(d.instagramAccount)}" target="_blank" rel="noopener">IG</a> `:""}${inlineEditSpan(fmtNum(d.followers||0), d.id, 'followers', d.followers||0, 'number')}</td>
+              <td>${d.instagramAccount?`<a href="${escapeHtml(normalizeInstagramUrl(d.instagramAccount))}" target="_blank" rel="noopener">IG</a> `:""}${inlineEditSpan(fmtNum(d.followers||0), d.id, 'followers', d.followers||0, 'number')}</td>
               <td>${d.tiktokAccount?`<a href="${escapeHtml(d.tiktokAccount)}" target="_blank" rel="noopener">TT</a> `:""}${inlineEditSpan(fmtNum(d.followersTT||0), d.id, 'followersTT', d.followersTT||0, 'number')}</td>
               <td>${inlineEditSpan(escapeHtml(d.product||"—"), d.id, 'product', d.product||'', 'text')}<br><span style="color:var(--ink-mute);font-size:11px">ШК ${inlineEditSpan(escapeHtml(d.barcode||"—"), d.id, 'barcode', d.barcode||'', 'text')}</span></td>
               <td>${inlineEditSpan(escapeHtml(d.city||"—"), d.id, 'city', d.city||'', 'text')}</td>
@@ -4430,7 +4453,7 @@ function tplMicroInfluencers(){
               <td>${inlineEditSpan(escapeHtml(d.plannedDate||"—"), d.id, 'plannedDate', d.plannedDate||'', 'date')}</td>
               <td>${inlineEditSpan(escapeHtml(d.publishDate||"—"), d.id, 'publishDate', d.publishDate||'', 'date')}</td>
               <td>${d.reelsLink
-                ? `<a href="${escapeHtml(d.reelsLink)}" target="_blank" rel="noopener">${escapeHtml(d.reelsLink)}</a> ${inlineEditSpan("✎", d.id, 'reelsLink', d.reelsLink, 'text')}`
+                ? `<a href="${escapeHtml(normalizeLinkUrl(d.reelsLink))}" target="_blank" rel="noopener">${escapeHtml(d.reelsLink)}</a> ${inlineEditSpan("✎", d.id, 'reelsLink', d.reelsLink, 'text')}`
                 : inlineEditSpan("—", d.id, 'reelsLink', '', 'text')}</td>
               <td>
                 <button class="btn btn-ghost btn-sm edit-micro-btn" data-id="${d.id}">✎</button>
@@ -5254,8 +5277,8 @@ function modalDeal(existing){
       plannedCost: parseInt(document.getElementById("m-planned-cost").value,10)||0,
       plannedContribution: parseInt(document.getElementById("m-planned-contribution").value,10)||0,
       cost: parseInt(document.getElementById("m-cost").value,10)||0,
-      instagramLink: document.getElementById("m-instagram-link").value.trim(),
-      reelsLink: document.getElementById("m-reels-link").value.trim(),
+      instagramLink: normalizeInstagramUrl(document.getElementById("m-instagram-link").value),
+      reelsLink: normalizeLinkUrl(document.getElementById("m-reels-link").value),
       notes: document.getElementById("m-notes").value.trim(),
     };
     try{
@@ -5514,7 +5537,7 @@ function modalMicroDeal(existing, prefill){
       phone: document.getElementById("mm-phone").value.trim(),
       city: document.getElementById("mm-city").value.trim(),
       address: document.getElementById("mm-address").value.trim(),
-      instagramAccount: document.getElementById("mm-ig").value.trim(),
+      instagramAccount: normalizeInstagramUrl(document.getElementById("mm-ig").value),
       followers: parseInt(document.getElementById("mm-followers").value,10)||0,
       er: parseFloat(document.getElementById("mm-er").value)||0,
       avgReach: parseInt(document.getElementById("mm-avg-reach").value,10)||0,
