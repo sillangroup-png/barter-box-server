@@ -30,6 +30,10 @@ fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const PLATFORMS = ["Instagram Reels","Instagram Stories","TikTok","YouTube Shorts","Отзыв / пост"];
 const BLOGGER_TIERS = ["Малый (эффект 1–7 дней)","Крупный (эффект 2–3 недели)"];
+// Тип блогера по нише/формату контента — свободно расширяемый список (см. также
+// одноимённый BLOGGER_TYPES на клиенте, public/index.html). Не путать с BLOGGER_TIERS выше
+// (это про размер эффекта интеграции), тип — это про нишу самого блогера.
+const BLOGGER_TYPES = ["Лайфстайл","Бьюти","Певица","Актриса","Тик-токер"];
 const CAMPAIGN_STAGES = [
   "Запланирован","Концепция","Товары выбраны","Упаковка заказана","Упаковка оплачена",
   "Упаковка на складе","Товары в офисе","Скомплектовано","В доставке","Учёт закрыт","Проект закрыт"
@@ -61,6 +65,7 @@ const AUTH = {
 // отдельными переменными окружения (та же логика, что и у основных ролей — реальные
 // логин/пароль не должны попадать в публичный репозиторий).
 const MARKETER_VIEWERS = [
+  {name:"Анельжан", login: process.env.ANELJAN_LOGIN || null, password: process.env.ANELJAN_PASSWORD || null},
   {name:"Анна", login: process.env.ANNA_LOGIN || null, password: process.env.ANNA_PASSWORD || null},
   // Служебная учётка для автоматической ежедневной синхронизации со вторым проектом
   // (аналитика маркетплейса Kaspi/MIXIT, marketplace-server) — читает /api/state по расписанию,
@@ -958,6 +963,10 @@ app.post("/api/influencer-deals", requireAuth, (req,res)=>{
     // Ответственный менеджер — как у микро/средних интеграций. Нужен, чтобы в "Планере блогеров"
     // каждый менеджер мог открыть календарь только по своим блогерам.
     responsible: b.responsible || "",
+    // Тип блогера (ниша) — см. BLOGGER_TYPES выше. Свободный текст на случай значения не из списка.
+    bloggerType: b.bloggerType || "",
+    // Ссылка на саму интеграцию (пост/reels/сторис), чтобы не искать её вручную в переписке.
+    integrationLink: b.integrationLink || "",
     // План по вкладу в продажи на эту интеграцию: сколько выручки она должна принести.
     // Факт считается моделью из продаж 1С и не редактируется — сравниваем план с ним.
     plannedContribution: parseInt(b.plannedContribution,10) || 0,
@@ -1003,6 +1012,8 @@ app.post("/api/influencer-deals/import", requireAuth, (req,res)=>{
       cost: parseInt(r["расход"] || r["cost"] || 0, 10) || 0,
       barcode: (r["шк"] || r["штрихкод"] || r["barcode"] || "").toString().trim(),
       responsible: r["ответственный"] || r["responsible"] || "",
+      bloggerType: r["тип_блогера"] || r["blogger_type"] || "",
+      integrationLink: r["ссылка"] || r["ссылка_на_интеграцию"] || r["integration_link"] || "",
       plannedContribution: parseInt(r["план_вклад"] || r["planned_contribution"] || 0, 10) || 0,
       status: r["статус"] || r["status"] || DEAL_STATUSES[0],
       notes: r["комментарий"] || r["notes"] || "",
