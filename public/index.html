@@ -330,7 +330,7 @@ const MICRO_VIDEO_STATUSES = ["не опубликовано","опублико�
 const MICRO_BLOGGER_CATEGORIES = ["Лайфстайл","Визажист","Бьюти","Дерматолог","Стилист","Нутрициолог","Фитнес","Мама-блогер","Врач","Другое"];
 // То же самое, но для крупных блогеров (вкладка "Инфлюенс интеграции крупные") — свой список,
 // т.к. крупные блогеры чаще медийные личности, а не узкие ниши, как у микро/средних.
-const LARGE_BLOGGER_CATEGORIES = ["Певица","Телеведущая","Актриса","Тик-токер","Лайфстайл","Бьюти"];
+const LARGE_BLOGGER_CATEGORIES = ["Певица","Телеведущая","Актриса","Тик-токер","Лайфстайл","Бьюти","Визажист","Спортсмен"];
 // Акцентный цвет только для стилизованного дашборда "Платный инфлюенс" (не трогает остальной интерфейс).
 const INFL_BRAND = "#d6336c";
 const INFL_BRAND_LIGHT = "#f9d7e6";
@@ -1228,20 +1228,22 @@ function computeInfluencerRomi(){
 // "Вклад в продажи" слева — статусы см. в комментариях к колонкам в 01_migration.sql.
 const AUTO_CONTRIB_STATUS_LABEL = {
   ok: "ок",
-  zero: "прирост не обнаружен",
+  zero: "прирост не обнаружен (окно закрыто, данные полные)",
   excluded_reach: "охват ниже порога (10 000)",
-  no_sku_code: "ШК не указан",
-  no_sku_data: "нет продаж по ШК в Kaspi за 14 дн.",
+  no_sku_code: "товар не сопоставлен — ШК/SKU не указан",
+  no_sku_data: "товар не сопоставлен — код не найден в Kaspi",
   name_mismatch: "название не совпадает с карточкой Kaspi",
   unconfident_price: "цена нестабильна в этот период",
-  needs_reach_data: "делили с блогером без охвата — не досчитано",
-  baseline_uncertain: "реклама по товару идёт почти без пауз — база ненадёжна",
+  needs_reach_data: "нет охвата у кого-то из делящих день — не досчитано",
+  baseline_uncertain: "недостаточно данных для уверенной оценки",
   no_published_date: "не заполнена дата публикации",
+  window_open: "окно ещё открыто (D0–D2 не завершились)",
+  kaspi_data_pending: "нет данных Kaspi за часть периода",
 };
 function autoContributionCell(d){
   const status = d.autoContributionStatus;
   if(!status){
-    return `<span style="color:var(--ink-mute);font-size:11.5px" title="Ещё не считалось: авто-расчёт заводится для размещений, опубликованных от 2 дней назад, и обновляется раз в сутки">— ещё не считалось</span>`;
+    return `<span style="color:var(--ink-mute);font-size:11.5px" title="Ещё не считалось: авто-расчёт заводится для размещений, опубликованных от 2 дней назад, и обновляется раз в сутки. Это расчётная атрибуция по заказам Kaspi, а не подтверждённая сумма покупок конкретного блогера — персональных промокодов нет.">— ещё не считалось</span>`;
   }
   const label = AUTO_CONTRIB_STATUS_LABEL[status] || status;
   const note = d.autoContributionNote ? escapeHtml(d.autoContributionNote) : "";
@@ -1264,6 +1266,11 @@ function autoContributionCell(d){
     const units = d.autoContributionUnits!=null ? Number(d.autoContributionUnits).toLocaleString("ru-RU",{maximumFractionDigits:2}) : "—";
     const kzt = fmtNum(Math.round(d.autoContributionKzt||0));
     return `<span style="color:var(--warn);font-size:11.5px" title="${title}">⚠️ ${units} шт / ${kzt} ₸ (не уверены)</span>`;
+  }
+  if(status === "window_open" || status === "kaspi_data_pending"){
+    const units = d.autoContributionUnits!=null ? Number(d.autoContributionUnits).toLocaleString("ru-RU",{maximumFractionDigits:2}) : "—";
+    const kzt = fmtNum(Math.round(d.autoContributionKzt||0));
+    return `<span style="color:var(--ink-mute);font-size:11.5px" title="${title}">⏳ ${units} шт / ${kzt} ₸ (предварительно)</span>`;
   }
   return `<span style="color:var(--ink-mute);font-size:11.5px" title="${title}">⚠️ ${escapeHtml(label)}</span>`;
 }
@@ -1451,7 +1458,11 @@ function influencerFunnelCounts(allRows){
 }
 function influencerBrandStats(monthRows){
   const withBaseline = monthRows.filter(r=>r.hasBaseline);
-  const totalCost = monthRows.reduce((s,r)=>s+((r.deal.status==='Опубликована'&&r.deal.cost)?r.deal.cost:0),0);
+  // Раньше здесь стоял фильтр по статусу 'Опубликована' — интеграции со статусом 'Закрыта' (а
+  // реально оплаченные деньги за них потрачены) выпадали из "Расходы (факт)", занижая расход,
+  // ROMI/ROAS и CPV дашборда. Оплата не привязана к тому, стоит ли сейчас статус "Опубликована":
+  // считаем факт.расход везде одинаково — по наличию d.cost, без фильтра по статусу.
+  const totalCost = monthRows.reduce((s,r)=>s+(r.deal.cost||0),0);
   const plannedCost = monthRows.reduce((s,r)=>s+(r.deal.plannedCost||0),0);
   // "Всего за месяц": берём факт.расход, а если он ещё не проставлен — плановый бюджет по этой же
   // интеграции. Раньше рядом стояли две несопоставимые цифры: "Расходы" (только там, где заполнен
@@ -1530,7 +1541,7 @@ function tplInfluencerBrandDashboard(allRows){
   // Сумма авто-расчёта по Kaspi (отдельная колонка "Авто (Kaspi)") за тот же период/фильтр,
   // что и остальные плашки — суммируем везде, где есть реальное число (включая частично
   // посчитанные needs_reach_data и неуверенные baseline_uncertain, они не 0, просто с оговоркой).
-  const kaspiAutoStatuses = new Set(["ok","zero","needs_reach_data","baseline_uncertain"]);
+  const kaspiAutoStatuses = new Set(["ok","zero","needs_reach_data","baseline_uncertain","window_open","kaspi_data_pending"]);
   const kaspiAutoTotal = monthRows.reduce((sum,r)=> sum + (kaspiAutoStatuses.has(r.deal.autoContributionStatus) ? (Number(r.deal.autoContributionKzt)||0) : 0), 0);
   const kaspiAutoCounted = monthRows.filter(r=>kaspiAutoStatuses.has(r.deal.autoContributionStatus)).length;
   // ДРР — по просьбе Нины считаем от факт.выручки Kaspi (auto_contribution_kzt), а не от старого
@@ -1844,7 +1855,7 @@ function tplMicroInfluencerBrandDashboard(allRows){
   // Сумма авто-расчёта по Kaspi (отдельная колонка "Авто (Kaspi)") — та же логика, что и в
   // дашборде крупных: считаем везде, где есть реальное число, включая частично посчитанные
   // needs_reach_data и неуверенные baseline_uncertain (это не 0, просто с оговоркой).
-  const kaspiAutoStatuses = new Set(["ok","zero","needs_reach_data","baseline_uncertain"]);
+  const kaspiAutoStatuses = new Set(["ok","zero","needs_reach_data","baseline_uncertain","window_open","kaspi_data_pending"]);
   const kaspiAutoTotal = monthRows.reduce((sum,r)=> sum + (kaspiAutoStatuses.has(r.deal.autoContributionStatus) ? (Number(r.deal.autoContributionKzt)||0) : 0), 0);
   const kaspiAutoCounted = monthRows.filter(r=>kaspiAutoStatuses.has(r.deal.autoContributionStatus)).length;
   // ДРР — по просьбе Нины считаем от факт.выручки Kaspi (auto_contribution_kzt), а не от старого
@@ -4028,8 +4039,8 @@ function tplInfluencerDeals(){
           <option value="clicks_asc" ${fi.sort==='clicks_asc'?'selected':''}>Клики: сначала меньше</option>
           <option value="cost_desc" ${fi.sort==='cost_desc'?'selected':''}>Расход: сначала больше</option>
           <option value="cost_asc" ${fi.sort==='cost_asc'?'selected':''}>Расход: сначала меньше</option>
-          <option value="romi_desc" ${fi.sort==='romi_desc'?'selected':''}>ROMI: сначала больше</option>
-          <option value="romi_asc" ${fi.sort==='romi_asc'?'selected':''}>ROMI: сначала меньше</option>
+          <option value="romi_desc" ${fi.sort==='romi_desc'?'selected':''}>ROAS, ×: сначала больше</option>
+          <option value="romi_asc" ${fi.sort==='romi_asc'?'selected':''}>ROAS, ×: сначала меньше</option>
           <option value="kaspi_desc" ${fi.sort==='kaspi_desc'?'selected':''}>Авто (Kaspi): сначала больше</option>
           <option value="kaspi_asc" ${fi.sort==='kaspi_asc'?'selected':''}>Авто (Kaspi): сначала меньше</option>
         </select>
@@ -4064,7 +4075,7 @@ function tplInfluencerDeals(){
           <th>#</th><th class="sticky-col">Блогер</th><th>Ответственный</th><th>Категория</th><th>Платформа</th><th>Продукт</th>
           ${UI.collapsedColGroups.has("infl-dates") ? `<th title="Дата план / Дата факт свёрнуты">Даты</th>` : `<th>Дата план</th><th>Дата факт</th>`}
           ${UI.collapsedColGroups.has("infl-reach") ? `<th title="План охват/клики / Факт охват/клики свёрнуты">Охваты</th>` : `<th>План охват/клики</th><th>Факт охват/клики</th>`}
-          <th>План/факт расход</th><th>Вклад в продажи<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-mute)">план / факт</span></th><th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th><th>ROMI</th><th title="ROAS = вклад в продажи ÷ расход (сумма + стоимость товара). Тот же расчёт, что и ROMI.">ROAS</th>${UI.collapsedColGroups.has("infl-auto") ? `<th title="Отдельный авто-расчёт вклада по продажам Kaspi — свёрнуто, нажмите «+ Авто (Kaspi)» выше">Авто</th>` : `<th title="Отдельный авто-расчёт вклада по продажам Kaspi (обновляется раз в сутки). Не заменяет колонку «Вклад в продажи» слева — показан для сверки.">Авто (Kaspi)</th>`}<th>Статус</th><th></th>
+          <th>План/факт расход</th><th>Вклад в продажи<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-mute)">план / факт</span></th><th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th><th>ROAS, ×</th><th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (оплата блогеру). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th>${UI.collapsedColGroups.has("infl-auto") ? `<th title="Отдельный авто-расчёт вклада по продажам Kaspi — предварительная расчётная оценка, соответствие регламенту attr-01 не подтверждено — свёрнуто, нажмите «+ Авто (Kaspi)» выше">Авто</th>` : `<th title="Отдельный авто-расчёт вклада по продажам Kaspi (окно D0–D2 после публикации, веса по дням 0,60/0,30/0,10, обновляется раз в сутки) — предварительная расчётная оценка; соответствие действующему регламенту attr-01 не подтверждено, первоисточник методики ещё разыскивается. Расчётная атрибуция, а не подтверждённая сумма покупок конкретного блогера — персональных промокодов нет. Не заменяет колонку «Вклад в продажи» слева — показан для сверки.">Авто (Kaspi)</th>`}<th>Статус</th><th></th>
         </tr></thead>
         <tbody>
           ${rows.map((r,i)=>{
@@ -4315,8 +4326,8 @@ function tplMicroInfluencers(){
           <option value="cpv_asc" ${mf.sort==='cpv_asc'?'selected':''}>CPV: сначала меньше</option>
           <option value="sales_desc" ${mf.sort==='sales_desc'?'selected':''}>Вклад в продажи: сначала больше</option>
           <option value="sales_asc" ${mf.sort==='sales_asc'?'selected':''}>Вклад в продажи: сначала меньше</option>
-          <option value="romi_desc" ${mf.sort==='romi_desc'?'selected':''}>ROMI: сначала больше</option>
-          <option value="romi_asc" ${mf.sort==='romi_asc'?'selected':''}>ROMI: сначала меньше</option>
+          <option value="romi_desc" ${mf.sort==='romi_desc'?'selected':''}>ROAS, ×: сначала больше</option>
+          <option value="romi_asc" ${mf.sort==='romi_asc'?'selected':''}>ROAS, ×: сначала меньше</option>
           <option value="kaspi_desc" ${mf.sort==='kaspi_desc'?'selected':''}>Авто (Kaspi): сначала больше</option>
           <option value="kaspi_asc" ${mf.sort==='kaspi_asc'?'selected':''}>Авто (Kaspi): сначала меньше</option>
         </select>
@@ -4345,8 +4356,8 @@ function tplMicroInfluencers(){
           <th>#</th>
           <th class="sticky-col">Блогер</th><th>Категория блогера</th><th>Ответственный</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
           ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
-          ${sortableTh("Вклад в продажи (план/факт)","sales",mf.sort)}<th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th>${sortableTh("ROMI","romi",mf.sort)}
-        <th title="ROAS = вклад в продажи ÷ расход (сумма + стоимость товара). Тот же расчёт, что и ROMI.">ROAS</th><th title="Отдельный авто-расчёт вклада по продажам Kaspi (обновляется раз в сутки). Не заменяет колонку «Вклад в продажи» слева — показан для сверки. Тот же переключатель, что и в таблице крупных интеграций.">${UI.collapsedColGroups.has("infl-auto") ? `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">+ Авто</span>` : `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">− Авто (Kaspi)</span>`}</th>
+          ${sortableTh("Вклад в продажи (план/факт)","sales",mf.sort)}<th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th>${sortableTh("ROAS, ×","romi",mf.sort)}
+        <th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (сумма оплаты + стоимость переданного товара). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th><th title="Отдельный авто-расчёт вклада по продажам Kaspi (окно D0–D2 после публикации, веса по дням 0,60/0,30/0,10, обновляется раз в сутки) — предварительная расчётная оценка; соответствие действующему регламенту attr-01 не подтверждено, первоисточник методики ещё разыскивается. Расчётная атрибуция, а не подтверждённая сумма покупок конкретного блогера. Не заменяет колонку «Вклад в продажи» слева — показан для сверки. Тот же переключатель, что и в таблице крупных интеграций.">${UI.collapsedColGroups.has("infl-auto") ? `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">+ Авто</span>` : `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">− Авто (Kaspi)</span>`}</th>
           <th>Статус товара</th><th>Статус видео</th><th>Плановая дата</th><th>Дата выкладки</th><th>Ссылка на Reels</th><th></th>
         </tr></thead>
         <tbody>
@@ -6911,8 +6922,8 @@ async function runSelfTests(){
     const savedMicro = DataManager.state.microInfluencerDeals;
     const savedSales = DataManager.state.salesByDay;
     DataManager.state.influencerDeals = [
-      {id:9001, blogerLogin:"@test_a", platform:"Instagram Reels", product:"ТестТовар", plannedDate:"2026-01-01", publishedDate:"2026-01-01", plannedReach:0, plannedClicks:0, reach:0, clicks:0, cost:1000, status:"Опубликована", notes:""},
-      {id:9002, blogerLogin:"@test_b", platform:"Instagram Reels", product:"ТестТовар", plannedDate:"2026-01-02", publishedDate:"2026-01-02", plannedReach:0, plannedClicks:0, reach:0, clicks:0, cost:1000, status:"Опубликована", notes:""},
+      {id:9001, blogerLogin:"@test_a", platform:"Instagram Reels", product:"ТестТовар", plannedDate:"2026-01-01", publishedDate:"2026-01-01", plannedReach:0, plannedClicks:0, reach:10000, clicks:0, cost:1000, status:"Опубликована", notes:""},
+      {id:9002, blogerLogin:"@test_b", platform:"Instagram Reels", product:"ТестТовар", plannedDate:"2026-01-02", publishedDate:"2026-01-02", plannedReach:0, plannedClicks:0, reach:10000, clicks:0, cost:1000, status:"Опубликована", notes:""},
     ];
     DataManager.state.microInfluencerDeals = []; // изолируем тест от unified-расчёта с микро/средними (см. computeUnifiedInfluencerRomi)
     DataManager.state.salesByDay = [
@@ -6942,10 +6953,10 @@ async function runSelfTests(){
     try{
       // Один и тот же товар: крупный блогер и микро блогер выходят в один день (значит вклад дня надо делить пополам, не считать дважды).
       DataManager.state.influencerDeals = [
-        {id:9005, blogerLogin:"@large", platform:"Instagram Reels", product:"ОбщийТовар", publishedDate:"2026-02-01", cost:1000, status:"Опубликована"},
+        {id:9005, blogerLogin:"@large", platform:"Instagram Reels", product:"ОбщийТовар", publishedDate:"2026-02-01", cost:1000, status:"Опубликована", reach:10000},
       ];
       DataManager.state.microInfluencerDeals = [
-        {id:9006, blogerName:"@small", product:"ОбщийТовар", barcode:"", publishDate:"2026-02-01", cost:1000},
+        {id:9006, blogerName:"@small", product:"ОбщийТовар", barcode:"", publishDate:"2026-02-01", cost:1000, factReachReels:10000},
       ];
       DataManager.state.salesByDay = [
         {id:9201, date:"2026-01-29", product:"ОбщийТовар", revenue:100}, // чистый день (ни один блогер не активен)
@@ -6974,7 +6985,7 @@ async function runSelfTests(){
     const savedSales = DataManager.state.salesByDay;
     try{
       DataManager.state.influencerDeals = [
-        {id:9105, blogerLogin:"@hair", platform:"Instagram Reels", product:"ХвостТовар", publishedDate:"2026-03-10", cost:1000, status:"Опубликована"},
+        {id:9105, blogerLogin:"@hair", platform:"Instagram Reels", product:"ХвостТовар", publishedDate:"2026-03-10", cost:1000, status:"Опубликована", reach:10000},
       ];
       DataManager.state.microInfluencerDeals = [];
       DataManager.state.salesByDay = [
@@ -7057,7 +7068,7 @@ async function runSelfTests(){
     try{
       DataManager.state.influencerDeals = [];
       DataManager.state.microInfluencerDeals = [
-        {id:9902, blogerName:"@после_цены", product:"ЦенаТовар", barcode:"", publishDate:"2026-03-11", cost:1000},
+        {id:9902, blogerName:"@после_цены", product:"ЦенаТовар", barcode:"", publishDate:"2026-03-11", cost:1000, factReachReels:10000},
       ];
       const sales=[]; let id=9950;
       const push=(d,v)=>sales.push({id:id++, date:d, product:"ЦенаТовар", revenue:v});
@@ -7090,10 +7101,10 @@ async function runSelfTests(){
       // Со старой (фиксированной) базой 100 ему достался бы весь объём 900+900+900.
       // Со скользящей базой сравниваем с недавними 1000 — и вклад около нуля, что и правильно.
       DataManager.state.influencerDeals = [
-        {id:9701, blogerLogin:"@big", platform:"Instagram Reels", product:"РазогнанныйТовар", publishedDate:"2026-05-05", cost:1000, status:"Опубликована"},
+        {id:9701, blogerLogin:"@big", platform:"Instagram Reels", product:"РазогнанныйТовар", publishedDate:"2026-05-05", cost:1000, status:"Опубликована", reach:10000},
       ];
       DataManager.state.microInfluencerDeals = [
-        {id:9702, blogerName:"@small", product:"РазогнанныйТовар", barcode:"", publishDate:"2026-06-20", cost:100},
+        {id:9702, blogerName:"@small", product:"РазогнанныйТовар", barcode:"", publishDate:"2026-06-20", cost:100, factReachReels:10000},
       ];
       const sales = [];
       let id = 9800;
@@ -7445,7 +7456,7 @@ async function runSelfTests(){
       UI.microFilter = {search:"", sort:"default", paymentStatus:""};
       const html = tplMicroInfluencers();
       if(!html.includes("Вклад в продажи")) throw new Error("должен быть заголовок колонки 'Вклад в продажи'");
-      if(!html.includes(">ROMI<")) throw new Error("должен быть заголовок колонки ROMI");
+      if(!html.includes(">ROAS, ×<")) throw new Error("должен быть заголовок колонки ROAS, ×");
       if(!html.includes("нет ШК")) throw new Error("для интеграции без ШК должна быть пометка 'нет ШК'");
     } finally {
       DataManager.state.microInfluencerDeals = savedDeals;
@@ -8992,8 +9003,8 @@ async function runSelfTests(){
     const savedSales = DataManager.state.salesByDay;
     try{
       DataManager.state.microInfluencerDeals = [
-        {id:9070, blogerName:"@micro_a", product:"МикроТовар", barcode:"", cost:1000, publishDate:"2026-01-01"},
-        {id:9071, blogerName:"@micro_b", product:"МикроТовар", barcode:"", cost:1000, publishDate:"2026-01-02"},
+        {id:9070, blogerName:"@micro_a", product:"МикроТовар", barcode:"", cost:1000, publishDate:"2026-01-01", factReachReels:10000},
+        {id:9071, blogerName:"@micro_b", product:"МикроТовар", barcode:"", cost:1000, publishDate:"2026-01-02", factReachReels:10000},
       ];
       DataManager.state.influencerDeals = []; // изолируем тест от unified-расчёта с крупными (см. computeUnifiedInfluencerRomi)
       DataManager.state.salesByDay = [
