@@ -967,6 +967,10 @@ app.post("/api/influencer-deals", requireAuth, (req,res)=>{
     plannedContribution: parseInt(b.plannedContribution,10) || 0,
     likes: b.likes || 0, comments: b.comments || 0, saves: b.saves || 0,
     lastUpdatedFrom: "", lastUpdatedAt: "",
+    // Ссылка на профиль Instagram и на конкретный Reels — те же поля, что у микро/средних
+    // (instagramAccount/reelsLink), просто под своими именами здесь: blogerLogin у крупных уже
+    // занят под @логин, а не под ссылку.
+    instagramLink: b.instagramLink || "", reelsLink: b.reelsLink || "",
     status: b.status || DEAL_STATUSES[0], notes: b.notes || "",
   };
   state.influencerDeals.push(deal);
@@ -1009,6 +1013,8 @@ app.post("/api/influencer-deals/import", requireAuth, (req,res)=>{
       responsible: r["ответственный"] || r["responsible"] || "",
       bloggerCategory: r["категория"] || r["категория блогера"] || r["blogger_category"] || "",
       plannedContribution: parseInt(r["план_вклад"] || r["planned_contribution"] || 0, 10) || 0,
+      instagramLink: r["instagram"] || r["ссылка на instagram"] || r["instagram_link"] || "",
+      reelsLink: r["ссылка на reels"] || r["ссылка_на_reels"] || r["reels_link"] || "",
       status: r["статус"] || r["status"] || DEAL_STATUSES[0],
       notes: r["комментарий"] || r["notes"] || "",
     };
@@ -1187,6 +1193,51 @@ app.post("/api/sales/import", requireAuth, (req,res)=>{
   });
   persist();
   res.json({added, updated});
+});
+// Эти три ручки (/api/sales, /api/sales/:id, /api/sales/import) с 30.09.2026 больше не вызываются
+// из фронтенда — панель "Продажи по дням (1С)" убрана (тормозила интерфейс на больших объёмах,
+// а Kaspi и так синхронизируется в Supabase отдельным авто-расчётом). Сами ручки оставлены на
+// сервере нетронутыми — не удаляем на случай, если 1С-импорт понадобится вернуть.
+
+// Разовая миграция "убрать 1С, заморозив уже посчитанные ROMI/ROAS как есть" (30.09.2026, см.
+// maybeFreezeManualRomi() во фронтенде). Расчёт (сама формула ROMI/базовой линии/потолков
+// правдоподобия) НЕ дублируется здесь — он делается там же, где и раньше всегда считался
+// (браузер, computeInfluencerRomi/computeMicroInfluencerRomi), пока история 1С ещё жива. Сюда
+// присылаются уже готовые числа — сервер только записывает их на нужные сделки и один раз
+// чистит salesByDay. Идемпотентно: если уже сделано (salesByDayFrozen), просто отвечает
+// {alreadyDone:true} и ничего не трогает — так что повторные заходы менеджера/маркетолога на
+// сайт безопасны.
+app.post("/api/influencer-romi-freeze", requireAuth, (req,res)=>{
+  if(state.salesByDayFrozen){
+    return res.json({ok:true, alreadyDone:true, large:0, micro:0});
+  }
+  const {large, micro} = req.body || {};
+  const frozenAt = new Date().toISOString().slice(0,10);
+  let largeCount = 0, microCount = 0;
+  (Array.isArray(large) ? large : []).forEach(f=>{
+    const d = state.influencerDeals.find(x=>x.id===+f.id);
+    if(!d) return;
+    d.frozenNetContribution = (f.netContribution===undefined || f.netContribution===null) ? null : Number(f.netContribution);
+    d.frozenRomi = (f.romi===undefined || f.romi===null) ? null : Number(f.romi);
+    d.frozenHasBaseline = !!f.hasBaseline;
+    d.frozenCapped = !!f.capped;
+    d.frozenAt = frozenAt;
+    largeCount++;
+  });
+  (Array.isArray(micro) ? micro : []).forEach(f=>{
+    const d = state.microInfluencerDeals.find(x=>x.id===+f.id);
+    if(!d) return;
+    d.frozenNetContribution = (f.netContribution===undefined || f.netContribution===null) ? null : Number(f.netContribution);
+    d.frozenRomi = (f.romi===undefined || f.romi===null) ? null : Number(f.romi);
+    d.frozenHasBaseline = !!f.hasBaseline;
+    d.frozenCapped = !!f.capped;
+    d.frozenAt = frozenAt;
+    microCount++;
+  });
+  state.salesByDay = [];
+  state.salesByDayFrozen = true;
+  persist();
+  res.json({ok:true, large: largeCount, micro: microCount});
 });
 
 /* ---------- Планы (план/факт) ----------
