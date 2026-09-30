@@ -33,13 +33,19 @@
 //     за D0. Фон ненадёжен → «недостаточно данных», числа НЕТ (kzt = NULL).
 //     Всё A единственному блогеру не отдаётся никогда: без надёжного фона — «—».
 //  6. P делится между ВСЕМИ интеграциями этого SKU с этой D0 — крупными и
-//     микро/средними вместе — пропорционально охвату. Охват задаёт долю, но не
-//     создаёт продаж: сумма долей ≤ P ≤ A (проверяется в коде, доли округляются
+//     микро/средними вместе — по условному правилу (v5.1): вес = √охвата ×
+//     коэффициент формата (Stories ×2, Reels/видео ×1, неизвестно ×1), доля =
+//     вес / сумма весов. Охват и формат задают долю, но не
+//     создают продаж: сумма долей ≤ P ≤ A (проверяется в коде, доли округляются
 //     вниз до тенге). Если у кого-то из участников нет охвата — обосновать
 //     деление нечем → «недостаточно данных» для всех участников дня. Если на
 //     охват всех участников приходится больше 1 покупки на 100 просмотров —
 //     прирост дня эти публикации не объясняют (хвост вчерашней крупной рекламы,
 //     акция) → тоже «недостаточно данных» (число не урезается, а не выдаётся).
+//  6а. Ручной вклад менеджера (manualContribution, в т.ч. 0) живёт только в barter-box и
+//     применяется во фронтенде как оценка менеджера. Сервер про него не знает и всегда
+//     считает доли по всем участникам дня — поэтому расчётная доля такого блогера остаётся
+//     нераспределённой и другим не достаётся. Отметка «нет всплеска» на расчёт не влияет.
 //  7. Одна и та же интеграция, вписанная и в крупные, и в микро (тот же блогер,
 //     та же D0, те же коды), участвует ОДИН раз; число пишется в одну строку
 //     (приоритет — крупные), вторая получает статус duplicate без суммы — иначе
@@ -61,7 +67,7 @@
 //    смены цены — нет.
 // ============================================================================
 
-const PARAMS_VERSION = "attrib-v5-D0-2026-09-30";
+const PARAMS_VERSION = "attrib-v5.1-D0-sqrt-format-2026-09-30";
 
 const BASELINE_SEARCH_RADIUS_DAYS = 14; // ищем чистые дни в пределах ±14 дней от D0
 const BASELINE_MAX_DAYS = 7;            // берём до 7 ближайших чистых дней
@@ -72,6 +78,22 @@ const PRICE_DRIFT_TOLERANCE = 0.015;    // analytics_rules analysis-01
 // публикациями не объяснить (обычно это хвост вчерашней крупной рекламы или акция) —
 // такой день получает «недостаточно данных», а не урезанную сумму.
 const MAX_PURCHASES_PER_VIEW = 0.01;
+
+// Условное распределение между блогерами одного товара в один день (решение Нины, 30.09.2026):
+//   вес = √охвата × коэффициент формата; доля = вес / сумма весов всех публикаций дня.
+// √ уменьшает преимущество огромного накопленного охвата. Коэффициент относится к ФОРМАТУ
+// (поле «платформа»), а не к тому, крупный блогер или микро. Stories ×2 — рабочее допущение,
+// а не доказанная удвоенная конверсия. Формат неизвестен / не видео и не Stories — ×1
+// (повышающий коэффициент автоматически не назначается). Это правило, а не установленное
+// число покупок конкретного блогера.
+const FORMAT_COEF_STORIES = 2;
+const FORMAT_COEF_DEFAULT = 1;
+function formatOf(platform) {
+  const p = String(platform || "").toLowerCase();
+  if (/stories|сторис/.test(p)) return { coef: FORMAT_COEF_STORIES, label: "Stories ×2" };
+  if (/reels|рилс|tiktok|тикток|shorts|видео|video|youtube/.test(p)) return { coef: FORMAT_COEF_DEFAULT, label: "видео ×1" };
+  return { coef: FORMAT_COEF_DEFAULT, label: p ? `«${platform}» ×1` : "формат не указан ×1" };
+}
 const EXCLUDED_ORDER_STATUSES = ["CANCELLED", "CANCELLING"];
 
 // Коды из каталога поставщика (mixit_goods.xlsx: SKU_Поставщика ↔ Штрихкод), под которыми
@@ -197,7 +219,7 @@ function planAttribution({ placements, resolution, daily, listedSince, feedStart
     }
     const codes = [...new Set(raw.map((c) => resolution.get(c)))].sort();
     const replaced = raw.filter((c) => resolution.get(c) !== c).map((c) => `${c}→${resolution.get(c)}`);
-    eligible.push({ ...p, id: String(p.id), d0, codes, replaced, handle: normalizeHandle(p.blogger_handle) });
+    eligible.push({ ...p, id: String(p.id), d0, codes, replaced, handle: normalizeHandle(p.blogger_handle), format: formatOf(p.platform) });
   }
 
   // --- 2. Дубли одной интеграции в двух таблицах (п.7 шапки) ---
@@ -294,9 +316,13 @@ function planAttribution({ placements, resolution, daily, listedSince, feedStart
       pool.reason = `прирост дня ${fmt(P)} ₸ (≈${Math.round(impliedUnits)} шт) несоразмерен охвату публикаций этого дня (${fmt(totalReach)} просмотров — больше 1 покупки на 100 просмотров): рост объясняется не ими (хвост другой рекламы, акция) — делить нечего обоснованно`;
       continue;
     }
+    // Вес = √охвата × коэффициент формата (см. formatOf). Один участник — доля 100%.
+    for (const m of members) m.weightRaw = Math.sqrt(m.reachUsed || 0) * m.format.coef;
+    const totalWeight = members.reduce((a, m) => a + m.weightRaw, 0);
+    pool.totalWeight = totalWeight;
     let sum = 0;
     for (const m of members) {
-      const w = members.length === 1 ? 1 : m.reachUsed / totalReach;
+      const w = members.length === 1 ? 1 : m.weightRaw / totalWeight;
       const kzt = Math.floor(P * w);                // вниз — сумма долей не превысит P
       const units = pool.unitPrice ? Math.floor((kzt / pool.unitPrice) * 100) / 100 : 0;
       pool.shares.set(m.id, { kzt, units, weight: w });
@@ -337,7 +363,9 @@ function planAttribution({ placements, resolution, daily, listedSince, feedStart
           : `SKU ${x.code}: заказы за D0 — ${A.netLines} уник. строк / ${fmt(A.kzt)} ₸ (исключено: отмены ${A.cancelled}, возвраты ${A.returned}); ` +
             `фон ${fmt(x.baselineKzt)} ₸ (медиана ${x.baselineDays.length} чистых дн.: ${x.baselineDays.join(", ")}); ` +
             `к распределению ${fmt(x.distributable)} ₸; ` +
-            (others.length ? `делили по охвату (${fmt(p.reachUsed)} из ${fmt(x.members.reduce((a, m) => a + (m.reachUsed || 0), 0))}) с: ${others.slice(0, 4).map((m) => m.handle || m.blogger_handle).join(", ")}${others.length > 4 ? ` и ещё ${others.length - 4}` : ""}; доля ${(sh.weight * 100).toFixed(1)}%` : "единственная интеграция этого SKU в этот день") +
+            (others.length
+              ? `условное распределение по охвату и формату: вес = √${fmt(p.reachUsed)} × ${p.format.coef} (${p.format.label}) = ${fmt(p.weightRaw)} из ${fmt(x.totalWeight)}; делили с: ${others.slice(0, 4).map((m) => `${m.handle || m.blogger_handle} (√${fmt(m.reachUsed)}×${m.format.coef})`).join(", ")}${others.length > 4 ? ` и ещё ${others.length - 4}` : ""}; доля ${(sh.weight * 100).toFixed(2)}%`
+              : "единственная интеграция этого SKU в этот день — доля 100%") +
             ` → ${fmt(sh.kzt)} ₸`
       );
     }
@@ -346,7 +374,7 @@ function planAttribution({ placements, resolution, daily, listedSince, feedStart
       status: kzt > 0 ? "ok" : "zero",
       units: Math.round(units * 100) / 100,
       kzt,
-      note: `День в день, D0 ${p.d0}. ${parts.join(" | ")}.${replNote}${dupNote} Расчётная атрибуция, не доказанные покупки конкретного блогера.${V}`,
+      note: `День в день, D0 ${p.d0}. ${parts.join(" | ")}.${replNote}${dupNote} Это результат принятого правила (условное распределение по охвату и формату), а не установленное число покупок блогера.${V}`,
     });
   }
 
@@ -375,7 +403,7 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
   const feedStart = fs[0] ? fs[0].d : null;
 
   const { rows: placements } = await pgPool.query(
-    `SELECT id::text AS id, source, blogger_handle, reach, kaspi_code, sku_name,
+    `SELECT id::text AS id, source, blogger_handle, reach, platform, kaspi_code, sku_name,
             published_date::date::text AS published_date
      FROM public.influencer_placements
      WHERE status = 'published'`
