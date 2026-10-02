@@ -137,7 +137,7 @@ function windowOf(source, d0) {
 //   profile    — массив 24 долей выручки магазина по часам суток (сумма 1)
 //   listedSince, feedStart, dataLoadedThrough, nowHour ('YYYY-MM-DDTHH')
 // ---------------------------------------------------------------------------
-function planAttribution({ placements, resolution, hourly, undated, profile, listedSince, feedStart, dataLoadedThrough, nowHour }) {
+function planAttribution({ placements, resolution, hourly, undated, profile, listedSince, feedStart, dataLoadedThrough, nowHour, syncFresh }) {
   const results = new Map();
   const V = ` [${PARAMS_VERSION}]`;
   const setNo = (id, status, note) => results.set(String(id), { status, units: null, kzt: null, note: note + V });
@@ -147,8 +147,12 @@ function planAttribution({ placements, resolution, hourly, undated, profile, lis
 
   // Последний час, за который данные точно полные: не позже текущего часа и не позже конца
   // дня, предшествующего последней загруженной дате (её саму считаем ещё догружаемой).
+  // Если синк Kaspi живой (последний успешный проход меньше 90 минут назад) и дошёл до
+  // сегодняшней даты — заказы загружены до текущего часа. Иначе надёжными считаем только дни
+  // до последней загруженной даты.
   const lastCompleteExcl = (() => {
     const a = nowHour;
+    if (syncFresh && dataLoadedThrough && dataLoadedThrough >= dateOf(nowHour)) return a;
     const b = dataLoadedThrough ? hourKey(dataLoadedThrough, 0) : null;
     return b && b < a ? b : a;
   })();
@@ -395,8 +399,9 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
      WHERE status IS DISTINCT FROM 'published'
        AND (auto_contribution_status IS NOT NULL OR auto_contribution_kzt IS NOT NULL OR auto_contribution_units IS NOT NULL)`
   );
-  const { rows: health } = await pgPool.query(`SELECT last_order_date::text AS d FROM analytics.kaspi_sync_health LIMIT 1`);
+  const { rows: health } = await pgPool.query(`SELECT last_order_date::text AS d, minutes_since_ok::float8 AS m FROM analytics.kaspi_sync_health LIMIT 1`);
   const dataLoadedThrough = health[0] ? health[0].d : null;
+  const syncFresh = !!(health[0] && health[0].m != null && Number(health[0].m) <= 90);
   const { rows: fsr } = await pgPool.query(`SELECT min(order_date)::text AS d FROM analytics.kaspi_live_order_entries`);
   const feedStart = fsr[0] ? fsr[0].d : null;
 
@@ -405,7 +410,7 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
             published_date::date::text AS published_date
      FROM public.influencer_placements WHERE status = 'published'`
   );
-  log(`[attribution ${PARAMS_VERSION}] ${nowHour}: опубликованных ${placements.length}, история Kaspi ${feedStart}…${dataLoadedThrough}, обнулено неопубликованных: ${reset.rowCount}`);
+  log(`[attribution ${PARAMS_VERSION}] ${nowHour}: опубликованных ${placements.length}, история Kaspi ${feedStart}…${dataLoadedThrough} (синк ${syncFresh ? "живой" : "давно не обновлялся"}), обнулено неопубликованных: ${reset.rowCount}`);
   if (!placements.length) return { processed: 0 };
 
   // 1. Живые коды + замены.
@@ -501,7 +506,7 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
   }
 
   // 4. Расчёт и запись.
-  const plan = planAttribution({ placements, resolution, hourly, undated, profile, listedSince, feedStart, dataLoadedThrough, nowHour });
+  const plan = planAttribution({ placements, resolution, hourly, undated, profile, listedSince, feedStart, dataLoadedThrough, nowHour, syncFresh });
   const ids = [], units = [], kzts = [], statuses = [], notes = [];
   for (const p of placements) {
     const r = plan.results.get(String(p.id)) || { status: "compute_error", units: null, kzt: null, note: `Строка не попала в расчёт. [${PARAMS_VERSION}]` };
