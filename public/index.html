@@ -535,6 +535,20 @@ function normalizeInstagramUrl(s){
 // Папка Google Drive с видео крупной интеграции: ручная ссылка главнее, иначе — что нашёл
 // сервер (drive-folders.js, раз в час) по логину блогера и дате.
 // Кнопка «Пересчитать вклад сейчас» + когда был последний пересчёт (state.attributionRun с сервера).
+// Подпись к «Выручка (Kaspi)» на дашбордах: сколько интеграций посчитано и почему у остальных «—».
+// Ожидающие (окно 24 ч ещё идёт / заказы догружаются) показываем отдельно — это не «0», а «ещё рано».
+function kaspiCoverageNote(monthRows, coveredCount){
+  const st = r => r.deal.autoContributionStatus;
+  const pending = monthRows.filter(r=> r.hasBaseline!==true && (st(r)==="window_open" || st(r)==="kaspi_data_pending")).length;
+  const notYet = monthRows.filter(r=> r.hasBaseline!==true && !st(r)).length;
+  const other = monthRows.length - coveredCount - pending - notYet;
+  const parts = [`посчитано по ${coveredCount} из ${monthRows.length}`];
+  if(pending) parts.push(`${pending} — окно 24 ч ещё идёт или заказы догружаются, посчитаются сами`);
+  if(notYet) parts.push(`${notYet} — ещё не считались`);
+  if(other>0) parts.push(`${other} — «—» (нет фона, охвата, ШК или данных)`);
+  return "заказы Kaspi за 24 ч после выхода — " + parts.join("; ");
+}
+function kaspiRevenueValue(s){ return s.coveredCount ? fmtNum(Math.round(s.totalContribution))+" ₸" : "—"; }
 function tplAttributionRecalcBar(){
   const st = DataManager.state.attributionRun;
   const when = st && st.lastRunAt && !isNaN(Date.parse(st.lastRunAt)) ? new Date(Date.parse(st.lastRunAt)+5*3600*1000).toISOString().slice(0,16).replace("T"," ") : null;
@@ -1654,7 +1668,7 @@ function influencerBrandStats(monthRows){
   const roasPct = coveredCost>0 ? totalContribution/coveredCost*100 : null;
   const drrPct = totalContribution>0 ? coveredCost/totalContribution*100 : null;
   const cpv = totalReach>0 ? totalCost/totalReach : null;
-  const upliftPerView = totalReach>0 ? totalContribution/totalReach : null;
+  const upliftPerView = (totalReach>0 && withBaseline.length) ? totalContribution/totalReach : null; // нет ни одной посчитанной — «—», а не 0
   const upliftPerDeal = withBaseline.length
     ? withBaseline.reduce((s,r)=>s+(r.netContribution-(r.deal.cost||0)),0)/withBaseline.length
     : null;
@@ -1733,7 +1747,7 @@ function tplInfluencerBrandDashboard(allRows){
     <div class="grid-kpi">
       ${kpi("Расходы (факт)", fmtNum(s.totalCost)+" ₸", "сумма колонки «факт расход» — сколько уже реально потратили")}
       ${kpi("План", fmtNum(s.plannedCost + (allPeriod ? (DataManager.state.plans||[]).filter(p=>p.scope==="cohort"&&p.key==="mid"&&p.metric==="budget").reduce((a,p)=>a+(p.value||0),0) : planValue(month,"cohort","mid","budget")))+" ₸", "сумма «план расход» (крупные) + план бюджета когорты «Средний инфлюенс» за месяц")}
-      ${kpi("Выручка (Kaspi)", fmtNum(Math.round(s.totalContribution))+" ₸", `заказы Kaspi за 24 ч после выхода — посчитано по ${s.coveredCount} из ${monthRows.length} интеграций, у остальных «—» (нет обоснованного фона/охвата)`)}
+      ${kpi("Выручка (Kaspi)", kaspiRevenueValue(s), kaspiCoverageNote(monthRows, s.coveredCount))}
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2), `по ${s.coveredCount} из ${monthRows.length} интеграций, где вклад посчитан`)}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%", `по ${s.coveredCount} из ${monthRows.length} интеграций, где вклад посчитан`)}
       ${kpi("ДРР", s.drrPct==null?"—":s.drrPct.toFixed(1)+"%", `расходы ÷ выручка Kaspi × 100% — по тем же ${s.coveredCount} интеграциям`)}
@@ -1845,7 +1859,7 @@ function microInfluencerBrandStats(monthRows){
   const roasPct = coveredCost>0 ? totalContribution/coveredCost*100 : null;
   const drrPct = totalContribution>0 ? coveredCost/totalContribution*100 : null;
   const cpv = totalReach>0 ? totalCost/totalReach : null;
-  const upliftPerView = totalReach>0 ? totalContribution/totalReach : null;
+  const upliftPerView = (totalReach>0 && withBaseline.length) ? totalContribution/totalReach : null; // нет ни одной посчитанной — «—», а не 0
   const upliftPerDeal = withBaseline.length
     ? withBaseline.reduce((s,r)=>s+(r.netContribution-microDealTotalCost(r.deal)),0)/withBaseline.length
     : null;
@@ -1980,7 +1994,7 @@ function tplMicroInfluencerBrandDashboard(allRows){
 
     <div class="grid-kpi">
       ${kpi("Расходы", fmtNum(s.totalCost)+" ₸", "сумма расходов по всем интеграциям месяца")}
-      ${kpi("Выручка (Kaspi)", fmtNum(Math.round(s.totalContribution))+" ₸", `заказы Kaspi за 24 ч после выхода — посчитано по ${s.coveredCount} из ${monthRows.length} интеграций, у остальных «—» (нет обоснованного фона/охвата)`, microContributionExplain(monthRows, month))}
+      ${kpi("Выручка (Kaspi)", kaspiRevenueValue(s), kaspiCoverageNote(monthRows, s.coveredCount), microContributionExplain(monthRows, month))}
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2), `вклад ÷ расходы — по ${s.coveredCount} из ${monthRows.length} интеграций, где вклад посчитан`)}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%", `вклад ÷ расходы × 100% — по ${s.coveredCount} из ${monthRows.length}`)}
       ${kpi("ДРР", s.drrPct==null?"—":s.drrPct.toFixed(1)+"%", `расходы ÷ выручка Kaspi × 100% — по тем же ${s.coveredCount} интеграциям`)}
@@ -7298,6 +7312,21 @@ async function runSelfTests(){
       if(tplAttributionRecalcBar().includes("attr-recalc-btn")) throw new Error("в режиме просмотра кнопки нет");
       if(String(Api.recalcAttribution).indexOf("/api/attribution/recalc")<0) throw new Error("эндпоинт");
     } finally { UI.readOnly = savedRO; DataManager.state.attributionRun = savedRun; }
+  });
+  TestSuite.test("Дашборды: если в месяце нет ни одной посчитанной интеграции — «Выручка (Kaspi)» «—», а не 0 ₸; в подписи — сколько ещё ждут окна 24 ч", ()=>{
+    const savedMicro = DataManager.state.microInfluencerDeals, savedMM = UI.microMonth;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:77001, blogerName:"a", publishDate:"2026-10-01", cost:10000, videoStatus:"опубликовано", autoContributionStatus:"kaspi_data_pending"},
+        {id:77002, blogerName:"b", publishDate:"2026-10-02", cost:10000, videoStatus:"опубликовано", autoContributionStatus:"window_open"},
+        {id:77003, blogerName:"c", publishDate:"2026-10-02", cost:10000, videoStatus:"опубликовано", autoContributionStatus:"no_sku_code"},
+      ];
+      UI.microMonth = "2026-10";
+      const html = tplMicroInfluencerBrandDashboard(computeMicroInfluencerRomi());
+      if(/>0 ₸<\/div><div class="lbl">Выручка \(Kaspi\)/.test(html)) throw new Error("не должно быть 0 ₸, когда ничего не посчитано");
+      if(!html.includes("2 — окно 24 ч ещё идёт")) throw new Error("подпись про ожидающие окна");
+      if(!html.includes("1 — «—»")) throw new Error("подпись про остальные «—»");
+    } finally { DataManager.state.microInfluencerDeals = savedMicro; UI.microMonth = savedMM; }
   });
   TestSuite.test("D0: autoContributionCell показывает сумму только для ok/zero, у остальных статусов «—» без числа", ()=>{
     const okHtml = autoContributionCell({autoContributionStatus:"ok", autoContributionKzt:30000, autoContributionUnits:5});
