@@ -22,7 +22,11 @@
 //     не входят ни в одно окно публикаций этого SKU (ни крупных, ни микро) — ближайшим к дате,
 //     в пределах ±14 дней, после начала истории Kaspi. Уровень × доля этого часа в суточном
 //     профиле магазина = фон часа. Фон надёжен, если чистых часов набирается хотя бы на 5
-//     «эквивалентных суток» и цена в окне отличается от цены чистых часов ≤ 1,5%.
+//     «эквивалентных суток». v6.1 (03.10.2026): если товар рекламируют почти без перерыва
+//     и рядом чистых часов нет — запасная ступень: ближайшие чистые часы за всю историю
+//     (нужно ≥ 3 сут.), с пометкой «фон приблизительный». Уровень считается в штуках и
+//     переводится в тенге по цене дня. «—» из-за цены — только если в окне цена НИЖЕ обычной
+//     за неделю до выхода больше чем на 1,5% (скидка); рост цены продажи не объясняет.
 //  3. Прирост часа e = заказы часа − фон часа (со знаком). Каждый час делится между всеми
 //     публикациями SKU, чьё окно накрывает этот час (крупные и микро вместе), по весам:
 //     вес = √охвата × формат (Stories ×2, Reels/видео ×1, не указан ×1). Вклад интеграции =
@@ -44,7 +48,7 @@
 //  8. Каждый прогон пересчитывает все опубликованные строки; неопубликованные обнуляются.
 // ============================================================================
 
-const PARAMS_VERSION = "attrib-v6-24h-12h16h-2026-10-02";
+const PARAMS_VERSION = "attrib-v6.1-24h-fallback-base-2026-10-03";
 
 // Условное время выхода (час по Алматы) и длина окна.
 const ASSUMED_POST_HOUR = { barter_box_deals: 12, barter_box_micro: 16 };
@@ -53,6 +57,8 @@ const WINDOW_HOURS = 24;
 const BASELINE_SEARCH_RADIUS_DAYS = 14;
 const BASELINE_TARGET_DAYS = 7;   // набираем чистых часов на ~7 суток
 const BASELINE_MIN_DAYS = 5;      // меньше 5 «эквивалентных суток» — фон не обоснован
+const BASELINE_FALLBACK_RADIUS_DAYS = 60;   // запасная ступень: ищем чистые часы по всей истории
+const BASELINE_FALLBACK_MIN_DAYS = 3;
 const PRICE_DRIFT_TOLERANCE = 0.015;
 const MAX_PURCHASES_PER_VIEW = 0.01;
 
@@ -228,8 +234,27 @@ function planAttribution({ placements, resolution, hourly, undated, profile, lis
     }
   }
 
-  // --- 3. Фон: уровень продаж SKU (₸/сутки) на дату — по ближайшим чистым часам ---
+  // --- 3. Фон: уровень продаж SKU в ШТУКАХ/сутки на дату — по ближайшим чистым часам ---
+  // Уровень считаем в штуках, а в тенге переводим по фактической цене того же дня: если цену
+  // подняли, фон в тенге поднимается вместе с ней и рост цены не выдаётся за рекламу.
+  // Ступень 1: чистые часы в пределах ±14 дней (нужно ≥ 5 «эквивалентных суток»).
+  // Ступень 2 (запасная, v6.1): товар рекламируют почти без перерыва и рядом чистых часов нет —
+  // берём ближайшие чистые часы за всю историю Kaspi (нужно ≥ 3 сут.), с пометкой в подсказке.
   const levelCache = new Map();
+  function collectClean(code, date, radiusHours, busy, lo) {
+    const center = hourKey(date, 12);
+    let cov = 0, kzt = 0, qty = 0;
+    const days = new Set();
+    for (let k = 1; k <= radiusHours && cov < BASELINE_TARGET_DAYS; k++) {
+      for (const hk of [addHours(center, -k), addHours(center, k)]) {
+        if (hk < lo || hk >= lastCompleteExcl || busy.has(hk)) continue;
+        const r = hourRec(code, hk);
+        cov += prof[hourOfDay(hk)];
+        kzt += r.kzt; qty += r.qty; days.add(dateOf(hk));
+      }
+    }
+    return { cov, kzt, qty, days: [...days].sort() };
+  }
   function levelFor(code, date) {
     const key = code + "|" + date;
     if (levelCache.has(key)) return levelCache.get(key);
@@ -237,24 +262,39 @@ function planAttribution({ placements, resolution, hourly, undated, profile, lis
     const listed = (listedSince && listedSince.get(code)) || feedStart || date;
     const loDate = feedStart && feedStart > listed ? feedStart : listed;
     const lo = hourKey(loDate, 0);
-    const center = hourKey(date, 12);
-    let cov = 0, kzt = 0, qty = 0, hoursUsed = 0;
-    const days = new Set();
-    for (let k = 1; k <= BASELINE_SEARCH_RADIUS_DAYS * 24 && cov < BASELINE_TARGET_DAYS; k++) {
-      for (const hk of [addHours(center, -k), addHours(center, k)]) {
-        if (hk < lo || hk >= lastCompleteExcl || busy.has(hk)) continue;
-        const r = hourRec(code, hk);
-        cov += prof[hourOfDay(hk)];
-        kzt += r.kzt; qty += r.qty; hoursUsed++; days.add(dateOf(hk));
-      }
+    let c = collectClean(code, date, BASELINE_SEARCH_RADIUS_DAYS * 24, busy, lo);
+    let tier = 1;
+    if (c.cov < BASELINE_MIN_DAYS) {
+      const wide = collectClean(code, date, BASELINE_FALLBACK_RADIUS_DAYS * 24, busy, lo);
+      if (wide.cov >= BASELINE_FALLBACK_MIN_DAYS) { c = wide; tier = 2; }
     }
-    const res = { level: cov > 0 ? kzt / cov : null, coverageDays: cov, price: qty > 0 ? kzt / qty : null, hoursUsed, days: [...days].sort() };
+    const res = {
+      levelUnits: c.cov > 0 ? c.qty / c.cov : null,
+      coverageDays: c.cov,
+      price: c.qty > 0 ? c.kzt / c.qty : null,
+      days: c.days,
+      tier,
+      ok: tier === 2 ? c.cov >= BASELINE_FALLBACK_MIN_DAYS : c.cov >= BASELINE_MIN_DAYS,
+    };
     levelCache.set(key, res);
     return res;
   }
+  // Фактическая цена дня (₸ за штуку) — для перевода фона из штук в тенге.
+  const dayPriceCache = new Map();
+  function dayPrice(code, date) {
+    const key = code + "|" + date;
+    if (dayPriceCache.has(key)) return dayPriceCache.get(key);
+    let kzt = 0, qty = 0;
+    for (let h = 0; h < 24; h++) { const r = hourRec(code, hourKey(date, h)); kzt += r.kzt; qty += r.qty; }
+    const L = levelFor(code, date);
+    const v = qty > 0 ? kzt / qty : L.price;
+    dayPriceCache.set(key, v);
+    return v;
+  }
   const baseOfHour = (code, hk) => {
     const L = levelFor(code, dateOf(hk));
-    return L.level == null ? 0 : L.level * prof[hourOfDay(hk)];
+    const pr = dayPrice(code, dateOf(hk));
+    return L.levelUnits == null || !pr ? 0 : L.levelUnits * prof[hourOfDay(hk)] * pr;
   };
 
   // --- 4. Распределение по часам ---
@@ -284,15 +324,28 @@ function planAttribution({ placements, resolution, hourly, undated, profile, lis
       }
       const winPrice = Aq > 0 ? A / Aq : null;
       let bad = null;
-      const weak = levels.find((L) => L.coverageDays < BASELINE_MIN_DAYS);
-      if (weak) bad = `фон не обоснован: чистых часов без рекламы этого SKU рядом — на ${weak.coverageDays.toFixed(1)} сут. из ${BASELINE_MIN_DAYS} нужных (история Kaspi с ${feedStart})`;
-      const basePrice = levels.map((L) => L.price).filter((x) => x);
-      if (!bad && winPrice && basePrice.length) {
-        const bp = basePrice.reduce((a, b) => a + b, 0) / basePrice.length;
-        const drift = (winPrice - bp) / bp;
-        if (Math.abs(drift) > PRICE_DRIFT_TOLERANCE) bad = `фон не обоснован: цена в окне ${fmt(winPrice)} ₸ против ${fmt(bp)} ₸ в чистые часы (${(drift * 100).toFixed(1)}%, порог ${PRICE_DRIFT_TOLERANCE * 100}%) — рост может быть от цены`;
+      const weak = levels.find((L) => !L.ok);
+      if (weak) bad = `фон не обоснован: часов без рекламы этого SKU почти нет — набралось на ${weak.coverageDays.toFixed(1)} сут. даже за всю историю Kaspi (с ${feedStart})`;
+      // Цена-ориентир — обычная цена за 7 дней ДО выхода (все часы): скидка именно в окно видна
+      // как падение относительно неё. Если до выхода заказов нет — цена часов без рекламы.
+      let refKzt = 0, refQty = 0;
+      for (let k = 1; k <= 7; k++) for (let h = 0; h < 24; h++) {
+        const r = hourRec(code, hourKey(addDaysStr(m.d0, -k), h));
+        refKzt += r.kzt; refQty += r.qty;
       }
-      info.set(m.id, { A, Aq, B, lines, canc, ret, winPrice, bad });
+      const basePrice = levels.map((L) => L.price).filter((x) => x);
+      const bp = refQty > 0 ? refKzt / refQty : (basePrice.length ? basePrice.reduce((a, b) => a + b, 0) / basePrice.length : null);
+      if (!bad && winPrice && bp) {
+        const drift = (winPrice - bp) / bp;
+        // Только СНИЖЕНИЕ цены может само поднять продажи. Рост цены рост продаж не объясняет,
+        // а в тенге фон уже пересчитан по цене дня — такое окно считаем.
+        if (drift < -PRICE_DRIFT_TOLERANCE) bad = `фон не обоснован: цена в окне ${fmt(winPrice)} ₸ ниже обычной за неделю до выхода (${fmt(bp)} ₸, ${(drift * 100).toFixed(1)}%) — рост может быть от скидки`;
+      }
+      const fallback = levels.filter((L) => L.tier === 2);
+      const baseNote = fallback.length
+        ? `фон по ближайшим часам без рекламы за пределами ±${BASELINE_SEARCH_RADIUS_DAYS} дн. (${fallback[0].days[0]}…${fallback[0].days[fallback[0].days.length - 1]}) — этот товар рекламируют почти без перерыва, фон приблизительный`
+        : null;
+      info.set(m.id, { A, Aq, B, lines, canc, ret, winPrice, bad, baseNote });
     }
     // Связные группы пересекающихся окон.
     const parent = new Map(members.map((m) => [m.id, m.id]));
@@ -367,7 +420,7 @@ function planAttribution({ placements, resolution, hourly, undated, profile, lis
     const txt = parts.map((x) => {
       kzt += x.credit; units += x.units;
       const i = x.inf;
-      return `SKU ${x.code}: заказы в окне ${Math.round(i.lines)} строк / ${fmt(i.A)} ₸ (исключено: отмены ${Math.round(i.canc)}, возвраты ${Math.round(i.ret)}); фон окна ${fmt(i.B)} ₸; ` +
+      return `SKU ${x.code}: заказы в окне ${Math.round(i.lines)} строк / ${fmt(i.A)} ₸ (исключено: отмены ${Math.round(i.canc)}, возвраты ${Math.round(i.ret)}); фон окна ${fmt(i.B)} ₸${i.baseNote ? ` (${i.baseNote})` : ""}; ` +
         (x.others.length
           ? `часы делились по правилу √охвата × формат (у этой интеграции √${fmt(p.reachUsed)} × ${p.format.coef}, ${p.format.label}) с: ${x.others.slice(0, 4).join(", ")}${x.others.length > 4 ? ` и ещё ${x.others.length - 4}` : ""}`
           : "в окне других публикаций этого SKU не было") +
