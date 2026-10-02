@@ -2075,7 +2075,7 @@ const MICRO_PLAN_PER_RESPONSIBLE = 50;
 // интеграций в месяц). Новый менеджер, которого нет в списке, получает 40. Поменять цифры —
 // здесь; разовую правку на конкретный месяц можно поставить кликом по ячейке «План».
 const MICRO_PLAN_V2_FROM_MONTH = "2026-10";
-const MICRO_PLAN_BY_MANAGER = {"Сая":20, "Нина":15, "Анастасия":20, "Камила":40, "Зарина":40, "Марина":40, "Мадина":40, "Сабрина":40, "Надира":40};
+const MICRO_PLAN_BY_MANAGER = {"Сая":20, "Нина":15, "Анастасия":20, "Камила":40, "Зарина":40, "Марина":40, "Мадина":40, "Сабрина":40, "Надира":40, "Анель":40, "Менеджер 1":40, "Менеджер 2":40};
 const MICRO_PLAN_NEW_MANAGER = 40;
 const MICRO_TEAM_PLAN_BLOGGERS = 426;
 const MICRO_TEAM_PLAN_INTEGRATIONS = 790;
@@ -2191,8 +2191,8 @@ function microResponsibleTotalUniqueBloggers(month){
 // ушедшие в прошлых месяцах) остаются отдельными строками, как раньше.
 const MICRO_RESPONSIBLE_GROUPS = [
   {lead:"Нина",      members:["Мадина","Марина","Зарина","Камила"]},
-  {lead:"Сая",       members:["Надира"]},
-  {lead:"Анастасия", members:["Сабрина"]},
+  {lead:"Сая",       members:["Надира","Анель"]},
+  {lead:"Анастасия", members:["Сабрина","Менеджер 1","Менеджер 2"]},
 ];
 // Общий подсчёт по группе: уникальные блогеры считаются по всей группе (один блогер у двух
 // менеджеров группы — один раз), план — сумма личных планов участниц, остальное — суммы.
@@ -7170,8 +7170,8 @@ async function runSelfTests(){
       if(g["Нина"].uniqueBloggerCount!==2) throw new Error("у группы Нины 2 уникальных блогера (b1 считается один раз): "+g["Нина"].uniqueBloggerCount);
       if(g["Нина"].plan!==15+40*4) throw new Error("план группы Нины = 15 + 4×40 = 175: "+g["Нина"].plan);
       if(g["Нина"].dealsCount!==3) throw new Error("интеграций у группы Нины 3");
-      if(g["Сая"].plan!==60 || g["Сая"].published!==1) throw new Error("группа Саи: план 20+40, 1 опубликовано");
-      if(g["Анастасия"].plan!==60) throw new Error("группа Анастасии: план 20+40");
+      if(g["Сая"].plan!==100 || g["Сая"].published!==1) throw new Error("группа Саи: план 20+40+40 (Надира, Анель), 1 опубликовано");
+      if(g["Анастасия"].plan!==140) throw new Error("группа Анастасии: план 20+40×3 (Сабрина, Менеджер 1, Менеджер 2)");
       if(ungrouped.map(r=>r.responsible).join(",")!=="Новенькая") throw new Error("менеджер не из групп — отдельной строкой: "+ungrouped.map(r=>r.responsible));
       UI.microResponsibleMonth = "2026-10";
       UI.expandedResponsibleGroups = new Set();
