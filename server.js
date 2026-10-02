@@ -343,19 +343,30 @@ const ATTRIBUTION_EVERY_MS = 60*60*1000;
 let lastAttributionRunAt = 0;
 let attributionRunning = false; // защита от наложения двух прогонов
 
-async function maybeRunDailyAttribution(){
-  if(attributionRunning) return;
-  if(Date.now() - lastAttributionRunAt < ATTRIBUTION_EVERY_MS) return;
+let attributionPromise = null;
+// force=true — «Пересчитать сейчас» из интерфейса: не ждём часового интервала. Если прогон уже
+// идёт, второй не запускаем, а дожидаемся текущего. Итог прогона пишем в state.attributionRun,
+// чтобы на странице было видно, когда и чем закончился последний пересчёт.
+async function maybeRunDailyAttribution(force){
+  if(attributionRunning) return attributionPromise;
+  if(!force && Date.now() - lastAttributionRunAt < ATTRIBUTION_EVERY_MS) return;
   attributionRunning = true;
-  try{
-    await runDailyAttribution(pgPool);
-    lastAttributionRunAt = Date.now();
-  }catch(e){
-    console.error("Attribution error:", e.message);
-    // lastAttributionRunAt не трогаем — попробует снова на следующем тике
-  }finally{
-    attributionRunning = false;
-  }
+  const t0 = Date.now();
+  attributionPromise = (async ()=>{
+    try{
+      const res = await runDailyAttribution(pgPool);
+      lastAttributionRunAt = Date.now();
+      state.attributionRun = {lastRunAt:new Date().toISOString(), durationMs:Date.now()-t0, error:null, processed:res && res.processed, byStatus:(res && res.byStatus)||null};
+    }catch(e){
+      console.error("Attribution error:", e.message);
+      state.attributionRun = Object.assign({}, state.attributionRun||{}, {lastErrorAt:new Date().toISOString(), error:e.message});
+      // lastAttributionRunAt не трогаем — попробует снова на следующем тике
+    }finally{
+      attributionRunning = false;
+      persist();
+    }
+  })();
+  return attributionPromise;
 }
 
 // Забрать готовый результат на фронтенд — ОТДЕЛЬНО от расчёта выше и не дожидаясь
@@ -400,6 +411,10 @@ function normalizeLinkUrl(v){
   if(/^https?:\/\//i.test(s)) return s;
   if(/^\/\//.test(s)) return "https:" + s;
   return "https://" + s.replace(/^\/+/, "");
+}
+function rowIdForDrive(r){
+  const id = parseInt(r["id"] || r["ID"], 10);
+  return id ? (state.influencerDeals||[]).find(d=>d.id===id) : null;
 }
 function normalizeInstagramUrl(v){
   const s = String(v||"").trim();
@@ -992,6 +1007,7 @@ app.post("/api/influencer-deals", requireAuth, (req,res)=>{
     // (instagramAccount/reelsLink), просто под своими именами здесь: blogerLogin у крупных уже
     // занят под @логин, а не под ссылку.
     instagramLink: normalizeInstagramUrl(b.instagramLink || ""), reelsLink: normalizeLinkUrl(b.reelsLink || ""),
+    driveFolderLink: normalizeLinkUrl(b.driveFolderLink || ""),
     status: b.status || DEAL_STATUSES[0], notes: b.notes || "",
   };
   state.influencerDeals.push(deal);
@@ -1003,6 +1019,8 @@ app.patch("/api/influencer-deals/:id", requireAuth, (req,res)=>{
   if(!d) return res.status(404).json({error:"not found"});
   const body = Object.assign({}, req.body || {});
   if("instagramLink" in body) body.instagramLink = normalizeInstagramUrl(body.instagramLink);
+  if("driveFolderLink" in body) body.driveFolderLink = normalizeLinkUrl(body.driveFolderLink);
+  delete body.driveFolderAuto; // автоподбор ведёт только сервер
   if("reelsLink" in body) body.reelsLink = normalizeLinkUrl(body.reelsLink);
   Object.assign(d, body);
   persist();
@@ -1042,6 +1060,15 @@ app.post("/api/influencer-deals/import", requireAuth, (req,res)=>{
       status: r["статус"] || r["status"] || DEAL_STATUSES[0],
       notes: r["комментарий"] || r["notes"] || "",
     };
+    // Папка с видео: трогаем, только если колонка есть в файле (старые CSV без неё не должны
+    // стирать ссылки). Если в ячейке ссылка, которую нашёл автоподбор, — ручной её не делаем.
+    const driveCol = ["папка_видео","папка с видео","drive_folder"].find(k=>Object.prototype.hasOwnProperty.call(r,k));
+    if(driveCol){
+      const v = normalizeLinkUrl(r[driveCol] || "");
+      const ex = rowIdForDrive(r);
+      const autoUrl = ex && ex.driveFolderAuto && ex.driveFolderAuto.url;
+      fields.driveFolderLink = (v && v===autoUrl) ? "" : v;
+    }
     // Строка со своим id (как в "Экспорт CSV" этой же таблицы — см. ниже) обновляет
     // существующую интеграцию вместо создания дубля. Раньше id в экспорт не попадал,
     // и цикл "выгрузить → поправить в Excel → загрузить обратно" молча плодил вторые
@@ -1388,6 +1415,24 @@ app.delete("/api/app-version", requireAuth, requireStaffWrite, (req,res)=>{
 });
 
 // 404 для неизвестных API-путей (чтобы не отдавать index.html вместо ошибки)
+// Папки Google Drive — «Проверить сейчас» (сама функция ниже, у placementsTick).
+// «Пересчитать вклад сейчас»: отправить свежие интеграции в Supabase → пересчитать → забрать
+// результат. Обычно занимает до минуты; если дольше — отвечаем «идёт», расчёт доводится в фоне,
+// а цифры появятся при следующем обновлении страницы.
+app.post("/api/attribution/recalc", requireAuth, async (req,res)=>{
+  const job = (async ()=>{
+    await syncPlacementsToSupabase().catch(e=> console.error("Supabase sync (пересчёт):", e.message));
+    await maybeRunDailyAttribution(true);
+    await pullAttributionFact();
+  })();
+  const timeout = new Promise(r=> setTimeout(()=> r("timeout"), 80*1000));
+  const out = await Promise.race([job.then(()=> "done"), timeout]);
+  res.json(Object.assign({done: out==="done"}, state.attributionRun || {}));
+});
+app.post("/api/drive-folders/sync", requireAuth, async (req,res)=>{
+  try{ await maybeSyncDriveFolders(true); res.json(state.driveSync || {}); }
+  catch(e){ res.status(500).json({error:e.message}); }
+});
 app.use("/api", (req,res)=> res.status(404).json({error:"not found"}));
 
 // SPA fallback — всё остальное отдаём как index.html
@@ -1407,6 +1452,24 @@ app.get(/^(?!\/api).*/, (req,res)=>{
   });
 });
 
+/* ---------- Папки Google Drive с видео для крупных интеграций (drive-folders.js) ----------
+   Раз в час (и по кнопке «Проверить сейчас») находит папку блогера/интеграции на общем диске
+   и кладёт ссылку + число файлов в deal.driveFolderAuto. Ручная ссылка deal.driveFolderLink
+   главнее и автоподбором не трогается. Без GOOGLE_SERVICE_ACCOUNT_JSON просто ничего не делает. */
+const { syncDriveFolders } = require("./drive-folders.js");
+const DRIVE_EVERY_MS = 60*60*1000;
+let lastDriveRunAt = 0, driveRunning = false;
+async function maybeSyncDriveFolders(force){
+  if(driveRunning) return;
+  if(!force && Date.now() - lastDriveRunAt < DRIVE_EVERY_MS) return;
+  driveRunning = true;
+  try{
+    const changed = await syncDriveFolders(state);
+    lastDriveRunAt = Date.now();
+    if(changed) persist();
+  }finally{ driveRunning = false; }
+}
+
 // Последовательно: сначала отправить свежие интеграции (ШК/дата/охват), потом считать,
 // потом забрать результат — иначе расчёт шёл бы по устаревшим строкам, а фронтенд
 // получал бы результат прошлого прогона.
@@ -1414,6 +1477,7 @@ async function placementsTick(label){
   await syncPlacementsToSupabase().catch(e=> console.error(`Supabase sync (${label}):`, e.message));
   await maybeRunDailyAttribution().catch(e=> console.error(`Attribution (${label}):`, e.message));
   await pullAttributionFact().catch(e=> console.error(`Pull-fact (${label}):`, e.message));
+  await maybeSyncDriveFolders().catch(e=> console.error(`Drive (${label}):`, e.message));
 }
 placementsTick("старт");
 setInterval(()=> placementsTick("интервал"), 3*60*1000);
