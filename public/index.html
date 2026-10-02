@@ -442,6 +442,8 @@ const Api = {
 
   // Разовая миграция "убрать 1С, сохранив уже посчитанные ROMI/ROAS как есть" (30.09.2026) —
   // см. maybeFreezeManualRomi() и /api/influencer-romi-freeze на сервере.
+  recalcAttribution: ()=> apiFetch("/api/attribution/recalc", {method:"POST", headers:jsonHeaders, body:"{}"}),
+  syncDriveFolders: ()=> apiFetch("/api/drive-folders/sync", {method:"POST", headers:jsonHeaders, body:"{}"}),
   freezeManualRomi: (large, micro)=> apiFetch("/api/influencer-romi-freeze", {method:"POST", headers:jsonHeaders, body:JSON.stringify({large, micro})}),
 };
 
@@ -529,6 +531,58 @@ function normalizeInstagramUrl(s){
   const handle = v.replace(/^@/, "").replace(/^\/+/, "").trim();
   if(!handle) return "";
   return "https://instagram.com/" + handle;
+}
+// Папка Google Drive с видео крупной интеграции: ручная ссылка главнее, иначе — что нашёл
+// сервер (drive-folders.js, раз в час) по логину блогера и дате.
+// Кнопка «Пересчитать вклад сейчас» + когда был последний пересчёт (state.attributionRun с сервера).
+function tplAttributionRecalcBar(){
+  const st = DataManager.state.attributionRun;
+  const when = st && st.lastRunAt && !isNaN(Date.parse(st.lastRunAt)) ? new Date(Date.parse(st.lastRunAt)+5*3600*1000).toISOString().slice(0,16).replace("T"," ") : null;
+  const info = st && st.error
+    ? `<b style="color:var(--bad)">последний пересчёт с ошибкой</b>: ${escapeHtml(st.error)}`
+    : (when ? `последний пересчёт: ${escapeHtml(when)} (Алматы), обновляется сам раз в час` : `пересчитывается сам раз в час`);
+  return `<div class="login-hint" style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span>Вклад (Kaspi): ${info}.</span>
+    ${UI.readOnly ? "" : `<button class="btn btn-ghost btn-sm attr-recalc-btn">Пересчитать вклад сейчас</button>`}
+  </div>`;
+}
+function wireAttributionRecalc(){
+  document.querySelectorAll(".attr-recalc-btn").forEach(btn=>{
+    btn.onclick = async ()=>{
+      document.querySelectorAll(".attr-recalc-btn").forEach(b=>{ b.disabled = true; b.textContent = "Пересчитываю… (до минуты)"; });
+      try{
+        const r = await Api.recalcAttribution();
+        if(r && r.error) toast("Пересчёт с ошибкой: "+r.error, true);
+        else if(r && r.done) toast("Вклад пересчитан");
+        else toast("Пересчёт ещё идёт — обновите страницу через пару минут");
+      }catch(e){ toast(e.message, true); }
+      await DataManager.refresh(); renderDeskTab();
+    };
+  });
+}
+function tplDriveSyncHint(){
+  const st = DataManager.state.driveSync;
+  const when = st && st.lastRunAt ? String(st.lastRunAt).slice(0,16).replace("T"," ") : "";
+  let text;
+  if(!st || !st.configured) text = `📁 Папки с видео (Google Drive): <b>не подключено</b> — ссылку на папку можно вставлять вручную в карточке интеграции.`;
+  else if(st.error) text = `📁 Папки с видео (Google Drive): <b style="color:var(--bad)">ошибка</b> — ${escapeHtml(st.error)}${when?` (${escapeHtml(when)})`:""}`;
+  else text = `📁 Папки с видео (Google Drive): подключено к «${escapeHtml(st.rootName||"")}» — папок блогеров ${st.bloggerFolders||0}, интеграций с папкой ${st.matched||0}, без папки ${st.unmatched||0}${when?`, проверено ${escapeHtml(when)}`:""}. Папка блогера = логин, внутри — «ГГГГ-ММ-ДД товар».`;
+  return `<div class="login-hint" style="margin-bottom:12px">${text} ${st && st.configured ? `<button class="btn btn-ghost btn-sm" id="drive-sync-btn" style="margin-left:6px">Проверить сейчас</button>` : ""}</div>`;
+}
+function dealDriveFolder(d){
+  const manual = (d && d.driveFolderLink || "").trim();
+  if(manual) return {url: normalizeLinkUrl(manual), source:"manual", count:null};
+  const a = d && d.driveFolderAuto;
+  if(a && a.id && a.url) return {url:a.url, source:"auto", count: (a.count==null?null:a.count), name:a.name||""};
+  return {url:null, source:null, reason: a && a.reason || ""};
+}
+function driveFolderIcon(d){
+  const f = dealDriveFolder(d);
+  if(!f.url){
+    return f.reason ? ` <span style="color:var(--ink-mute);opacity:.55;cursor:help" title="Папка с видео не найдена: ${escapeHtml(f.reason)}. Можно вставить ссылку вручную в карточке интеграции.">📁</span>` : "";
+  }
+  const title = f.source==="manual" ? "Папка с видео (ссылка вставлена вручную)" : `Папка с видео «${f.name}» — найдена автоматически${f.count!=null?`, файлов: ${f.count}`:""}`;
+  return ` <a href="${escapeHtml(f.url)}" target="_blank" rel="noopener" title="${escapeHtml(title)}" style="text-decoration:none">📁${f.count!=null?`<span style="font-size:11px">${f.count}</span>`:""}</a>`;
 }
 function toast(msg, isError){
   const t = document.getElementById("toast");
@@ -1355,7 +1409,7 @@ const AUTO_CONTRIB_STATUS_LABEL = {
   needs_reach_data: "недостаточно данных: не заполнен охват",
   baseline_uncertain: "недостаточно данных: фон или рост дня не обоснован",
   no_published_date: "не заполнена дата публикации",
-  window_open: "день публикации ещё не закончился",
+  window_open: "окно 24 ч ещё не закончилось",
   kaspi_data_pending: "заказы Kaspi за этот день ещё не загружены",
   duplicate: "учтено в другой строке (та же интеграция)",
   compute_error: "ошибка расчёта — разберите вручную",
@@ -1366,7 +1420,7 @@ function autoContributionHasNumber(d){
 function autoContributionCell(d){
   const status = d.autoContributionStatus;
   if(!status){
-    return `<span style="color:var(--ink-mute);font-size:11.5px" title="Ещё не считалось: расчёт по заказам Kaspi (день в день, D0) обновляется раз в час на сервере.">—</span>`;
+    return `<span style="color:var(--ink-mute);font-size:11.5px" title="Ещё не считалось: расчёт по заказам Kaspi (24 ч после выхода) обновляется раз в час на сервере.">—</span>`;
   }
   const label = AUTO_CONTRIB_STATUS_LABEL[status] || status;
   const note = d.autoContributionNote ? escapeHtml(d.autoContributionNote) : "";
@@ -1679,7 +1733,7 @@ function tplInfluencerBrandDashboard(allRows){
     <div class="grid-kpi">
       ${kpi("Расходы (факт)", fmtNum(s.totalCost)+" ₸", "сумма колонки «факт расход» — сколько уже реально потратили")}
       ${kpi("План", fmtNum(s.plannedCost + (allPeriod ? (DataManager.state.plans||[]).filter(p=>p.scope==="cohort"&&p.key==="mid"&&p.metric==="budget").reduce((a,p)=>a+(p.value||0),0) : planValue(month,"cohort","mid","budget")))+" ₸", "сумма «план расход» (крупные) + план бюджета когорты «Средний инфлюенс» за месяц")}
-      ${kpi("Выручка (Kaspi)", fmtNum(Math.round(s.totalContribution))+" ₸", `заказы Kaspi день в день — посчитано по ${s.coveredCount} из ${monthRows.length} интеграций, у остальных «—» (нет обоснованного фона/охвата)`)}
+      ${kpi("Выручка (Kaspi)", fmtNum(Math.round(s.totalContribution))+" ₸", `заказы Kaspi за 24 ч после выхода — посчитано по ${s.coveredCount} из ${monthRows.length} интеграций, у остальных «—» (нет обоснованного фона/охвата)`)}
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2), `по ${s.coveredCount} из ${monthRows.length} интеграций, где вклад посчитан`)}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%", `по ${s.coveredCount} из ${monthRows.length} интеграций, где вклад посчитан`)}
       ${kpi("ДРР", s.drrPct==null?"—":s.drrPct.toFixed(1)+"%", `расходы ÷ выручка Kaspi × 100% — по тем же ${s.coveredCount} интеграциям`)}
@@ -1822,7 +1876,11 @@ function microContributionExplain(monthRows, month){
   withBaseline.forEach(r=>{
     const codes = (r.deal.barcode||"").split(/[,+;\s]+/).filter(Boolean);
     const overlaps = influencerDeals.some(ld=>{
-      if(!ld.publishedDate || !r.deal.publishDate || ld.publishedDate!==r.deal.publishDate) return false;
+      // Окна пересекаются: крупный (12:00 D … 12:00 D+1) с микро (16:00 D … 16:00 D+1), если крупный
+      // вышел в тот же день или на следующий.
+      if(!ld.publishedDate || !r.deal.publishDate) return false;
+      const dd = daysBetween(ld.publishedDate, r.deal.publishDate);
+      if(dd!==0 && dd!==1) return false;
       const lcodes = (ld.barcode||"").split(/[,+;\s]+/).filter(Boolean);
       return lcodes.some(c=>codes.includes(c));
     });
@@ -1832,10 +1890,10 @@ function microContributionExplain(monthRows, month){
   const lines = [
     `Показатель за: ${monthLabel(month)}.`,
     `Интеграций с ШК за месяц: ${withShk.length}; из них с посчитанным вкладом: ${withBaseline.length} (у остальных «—»: нет обоснованного фона, нет охвата для деления или нет данных Kaspi).`,
-    `Правило: день в день — заказы Kaspi рекламируемого SKU за дату публикации минус фон (медиана соседних дней без рекламы этого SKU), не больше заказов дня. Заказы следующих дней не учитываются.`,
+    `Правило: заказы Kaspi рекламируемого SKU за 24 часа после условного выхода (микро — с 16:00, крупные — с 12:00) минус фон (уровень продаж в часы без рекламы этого SKU), не больше реальных заказов.`,
     overlapCount>0
-      ? `У ${overlapCount} из них в тот же день тот же SKU был и у крупных блогеров — доступная сумма дня поделена между всеми по охвату, а не задвоена.`
-      : `Пересечений в тот же день с крупными блогерами по тем же SKU в этом месяце нет.`,
+      ? `У ${overlapCount} из них окно пересекалось с окнами крупных блогеров по тому же SKU — общие часы поделены между всеми по √охвата × формат, а не задвоены.`
+      : `Пересечений с окнами крупных блогеров по тем же SKU в этом месяце нет.`,
     `Итоговая сумма: ${fmtNum(total)} ₸.`
   ];
   return lines.join("\n");
@@ -1922,7 +1980,7 @@ function tplMicroInfluencerBrandDashboard(allRows){
 
     <div class="grid-kpi">
       ${kpi("Расходы", fmtNum(s.totalCost)+" ₸", "сумма расходов по всем интеграциям месяца")}
-      ${kpi("Выручка (Kaspi)", fmtNum(Math.round(s.totalContribution))+" ₸", `заказы Kaspi день в день — посчитано по ${s.coveredCount} из ${monthRows.length} интеграций, у остальных «—» (нет обоснованного фона/охвата)`, microContributionExplain(monthRows, month))}
+      ${kpi("Выручка (Kaspi)", fmtNum(Math.round(s.totalContribution))+" ₸", `заказы Kaspi за 24 ч после выхода — посчитано по ${s.coveredCount} из ${monthRows.length} интеграций, у остальных «—» (нет обоснованного фона/охвата)`, microContributionExplain(monthRows, month))}
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2), `вклад ÷ расходы — по ${s.coveredCount} из ${monthRows.length} интеграций, где вклад посчитан`)}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%", `вклад ÷ расходы × 100% — по ${s.coveredCount} из ${monthRows.length}`)}
       ${kpi("ДРР", s.drrPct==null?"—":s.drrPct.toFixed(1)+"%", `расходы ÷ выручка Kaspi × 100% — по тем же ${s.coveredCount} интеграциям`)}
@@ -4142,12 +4200,15 @@ function tplInfluencerDeals(){
         </div>
       </div>
       <div class="login-hint" style="margin-bottom:12px">
-        Вклад в продажи с 01.09.2026 считается одним правилом — <b>день в день</b> по заказам Kaspi
-        (колонка «Авто (Kaspi)»): заказы рекламируемого SKU за дату публикации минус обоснованный фон,
-        поделённые по охвату между всеми блогерами этого SKU в тот же день. Заказы следующих дней не
-        учитываются. Где фон или деление обосновать нельзя — «—», а не число. Интеграции до сентября
-        показывают прежние ROMI/ROAS по 1С, как было.
+        Вклад в продажи с 01.09.2026 считается по заказам Kaspi за <b>24 часа после выхода</b>
+        (колонка «Авто (Kaspi)»). Точного времени публикаций нет, поэтому принято допущение: крупные
+        выходят в 12:00, окно — до 12:00 следующего дня. Из заказов вычитается обоснованный фон, а прирост
+        каждого часа делится между всеми блогерами этого SKU, чьё окно его накрывает (√охвата × формат).
+        Где фон или деление обосновать нельзя — «—», а не число. Интеграции до сентября показывают
+        прежние ROMI/ROAS по 1С, как было.
       </div>
+      ${tplAttributionRecalcBar()}
+      ${tplDriveSyncHint()}
       <div class="toolbar" style="margin-bottom:12px">
         <input type="search" class="fill" id="infl-search" placeholder="Поиск по логину блогера" value="${escapeHtml(fi.search)}">
         <input type="date" id="infl-date-from" value="${fi.dateFrom||''}" style="max-width:150px" title="Дата с">
@@ -4204,14 +4265,14 @@ function tplInfluencerDeals(){
           <th>#</th><th class="sticky-col">Блогер</th><th>Ответственный</th><th>Категория</th><th>Платформа</th><th>Продукт</th>
           ${UI.collapsedColGroups.has("infl-dates") ? `<th title="Дата план / Дата факт свёрнуты">Даты</th>` : `<th>Дата план</th><th>Дата факт</th>`}
           ${UI.collapsedColGroups.has("infl-reach") ? `<th title="План охват/клики / Факт охват/клики свёрнуты">Охваты</th>` : `<th>План охват/клики</th><th>Факт охват/клики</th>`}
-          <th>План/факт расход</th><th>Вклад в продажи<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-mute)">план / факт</span></th><th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th><th>ROAS, ×</th><th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (оплата блогеру). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th>${UI.collapsedColGroups.has("infl-auto") ? `<th title="Вклад по заказам Kaspi (день в день, D0) — свёрнуто, нажмите «+ Авто (Kaspi)» выше">Авто</th>` : `<th title="Вклад по заказам Kaspi — день в день: заказы рекламируемого SKU за календарную дату публикации (D0) минус обоснованный фон. Эта сумма делится между всеми блогерами этого SKU в этот день (крупные и микро вместе) по условному правилу: вес = √охвата × формат (Stories ×2, Reels/видео ×1, формат не указан ×1). Это принятое правило, а не установленное число покупок. Сумма долей не больше заказов дня. Нет надёжного фона или данных — «—». Обновляется раз в час. Это же число — «Вклад в продажи» и ROAS слева (с 01.09.2026); ручной вклад главнее.">Авто (Kaspi)</th>`}<th>Ссылка на Reels</th><th>Статус</th><th></th>
+          <th>План/факт расход</th><th>Вклад в продажи<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-mute)">план / факт</span></th><th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th><th>ROAS, ×</th><th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (оплата блогеру). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th>${UI.collapsedColGroups.has("infl-auto") ? `<th title="Вклад по заказам Kaspi (24 ч после выхода) — свёрнуто, нажмите «+ Авто (Kaspi)» выше">Авто</th>` : `<th title="Вклад по заказам Kaspi за 24 часа после условного выхода: крупные — с 12:00 дня публикации до 12:00 следующего дня, микро/средние — с 16:00 до 16:00 (точного времени нет, это рабочее допущение). Заказы по часам минус обоснованный фон; каждый час делится между всеми блогерами этого SKU, чьё окно его накрывает (крупные и микро вместе), по правилу: вес = √охвата × формат (Stories ×2, Reels/видео ×1, формат не указан ×1). Это принятое правило, а не установленное число покупок. Сумма вкладов не больше прироста и реальных заказов. Нет надёжного фона или данных — «—». Обновляется раз в час. Это же число — «Вклад в продажи» и ROAS слева (с 01.09.2026); ручной вклад главнее.">Авто (Kaspi)</th>`}<th>Ссылка на Reels</th><th>Статус</th><th></th>
         </tr></thead>
         <tbody>
           ${rows.map((r,i)=>{
             const d = r.deal;
             return `<tr>
               <td>${i+1}</td>
-              <td class="sticky-col"><b>${escapeHtml(d.blogerLogin)}</b>${d.instagramLink?` <a href="${escapeHtml(normalizeInstagramUrl(d.instagramLink))}" target="_blank" rel="noopener" title="Ссылка на Instagram">IG</a>`:''}${d.lastUpdatedFrom==="telegram"?' <span class="badge badge-progress" title="Обновлено через Telegram-бота">TG</span>':''}</td>
+              <td class="sticky-col"><b>${escapeHtml(d.blogerLogin)}</b>${d.instagramLink?` <a href="${escapeHtml(normalizeInstagramUrl(d.instagramLink))}" target="_blank" rel="noopener" title="Ссылка на Instagram">IG</a>`:''}${driveFolderIcon(d)}${d.lastUpdatedFrom==="telegram"?' <span class="badge badge-progress" title="Обновлено через Telegram-бота">TG</span>':''}</td>
               <td>${d.responsible ? escapeHtml(d.responsible) : `<span style="color:var(--ink-mute)">—</span>`}</td>
               <td>${inlineEditSpan(d.bloggerCategory ? escapeHtml(d.bloggerCategory) : `<span style="color:var(--ink-mute)">—</span>`, d.id, 'bloggerCategory', d.bloggerCategory||'', 'select', LARGE_BLOGGER_CATEGORIES)}</td>
               <td>${escapeHtml(d.platform)}</td>
@@ -4399,11 +4460,13 @@ function tplMicroInfluencers(){
         </div>
       </div>
       <div class="login-hint" style="margin-bottom:12px">
-        «Вклад в продажи» и ROMI — день в день: заказы Kaspi по ШК/SKU интеграции за дату выкладки,
-        минус обоснованный фон, поделённые по охвату между всеми блогерами (крупными и микро) с этим
-        SKU в тот же день. Заказы следующих дней не учитываются; где фон или деление обосновать нельзя —
-        «—». Без ШК — только CPV = сумма / факт.охват (Reels + TikTok кросспостинг).
+        «Вклад в продажи» и ROMI — заказы Kaspi по ШК/SKU интеграции за 24 часа после выхода. Точного
+        времени нет, принято допущение: микро/средние выходят в 16:00, окно — до 16:00 следующего дня
+        (у крупных — с 12:00 до 12:00). Из заказов вычитается обоснованный фон, прирост каждого часа делится
+        между всеми блогерами (крупными и микро) с этим SKU, чьё окно его накрывает. Где фон или деление
+        обосновать нельзя — «—». Без ШК — только CPV = сумма / факт.охват (Reels + TikTok кросспостинг).
       </div>
+      ${tplAttributionRecalcBar()}
       <div class="toolbar" style="margin-bottom:12px">
         <input type="search" class="fill" id="micro-search" placeholder="Поиск по блогеру / товару / логину IG или TikTok" value="${escapeHtml(mf.search)}">
         <input type="date" id="micro-date-from" value="${mf.dateFrom||''}" style="max-width:150px" title="Дата с">
@@ -4463,7 +4526,7 @@ function tplMicroInfluencers(){
           <th class="sticky-col">Блогер</th><th>Категория блогера</th><th>Ответственный</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
           ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
           ${sortableTh("Вклад в продажи (план/факт)","sales",mf.sort)}<th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th>${sortableTh("ROAS, ×","romi",mf.sort)}
-        <th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (сумма оплаты + стоимость переданного товара). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th><th title="Вклад по заказам Kaspi — день в день: заказы рекламируемого SKU за календарную дату публикации (D0) минус обоснованный фон. Эта сумма делится между всеми блогерами этого SKU в этот день (крупные и микро вместе) по условному правилу: вес = √охвата × формат (Stories ×2, Reels/видео ×1, формат не указан ×1). Это принятое правило, а не установленное число покупок. Сумма долей не больше заказов дня. Нет надёжного фона или данных — «—». Обновляется раз в час. Это же число — «Вклад в продажи» и ROAS слева (с 01.09.2026); ручной вклад главнее.">${UI.collapsedColGroups.has("infl-auto") ? `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">+ Авто</span>` : `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">− Авто (Kaspi)</span>`}</th>
+        <th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (сумма оплаты + стоимость переданного товара). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th><th title="Вклад по заказам Kaspi за 24 часа после условного выхода: крупные — с 12:00 дня публикации до 12:00 следующего дня, микро/средние — с 16:00 до 16:00 (точного времени нет, это рабочее допущение). Заказы по часам минус обоснованный фон; каждый час делится между всеми блогерами этого SKU, чьё окно его накрывает (крупные и микро вместе), по правилу: вес = √охвата × формат (Stories ×2, Reels/видео ×1, формат не указан ×1). Это принятое правило, а не установленное число покупок. Сумма вкладов не больше прироста и реальных заказов. Нет надёжного фона или данных — «—». Обновляется раз в час. Это же число — «Вклад в продажи» и ROAS слева (с 01.09.2026); ручной вклад главнее.">${UI.collapsedColGroups.has("infl-auto") ? `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">+ Авто</span>` : `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">− Авто (Kaspi)</span>`}</th>
           <th>Статус товара</th><th>Статус видео</th><th>Плановая дата</th><th>Дата выкладки</th><th>Ссылка на Reels</th><th></th>
         </tr></thead>
         <tbody>
@@ -4496,7 +4559,7 @@ function tplMicroInfluencers(){
                   return inlineEditSpan(label, d.id, "plannedContribution", editVal, "number");
                 })()}
                 <span style="color:var(--ink-mute)"> / </span>
-                <span title="Из заказов Kaspi, день в день (D0) — то же число, что в «Авто (Kaspi)». Вручную не редактируется (для ручного значения — «задать вручную» ниже)">${!d.barcode ? '<span style="color:var(--ink-mute)">нет ШК</span>' : (hasBaseline ? fmtNum(r.netContribution)+" ₸"+(r.capped?' <span title="Вклад ограничен потолком правдоподобия по охвату — реальный прирост продаж в эти дни объясняется другим фактором, не этой интеграцией" style="cursor:help">⚠️</span>':"") : '<span style="color:var(--ink-mute)">—</span>')}</span>
+                <span title="Из заказов Kaspi за 24 ч после выхода — то же число, что в «Авто (Kaspi)». Вручную не редактируется (для ручного значения — «задать вручную» ниже)">${!d.barcode ? '<span style="color:var(--ink-mute)">нет ШК</span>' : (hasBaseline ? fmtNum(r.netContribution)+" ₸"+(r.capped?' <span title="Вклад ограничен потолком правдоподобия по охвату — реальный прирост продаж в эти дни объясняется другим фактором, не этой интеграцией" style="cursor:help">⚠️</span>':"") : '<span style="color:var(--ink-mute)">—</span>')}</span>
                 <br>${inlineEditSpan(d.noImpact==='Да' ? '<span style="color:var(--bad);font-size:10.5px" title="Отмечено вручную: реального всплеска продаж не было — эта интеграция исключена из расчёта вклада">🚫 нет всплеска</span>' : '<span style="color:var(--ink-mute);font-size:10.5px;text-decoration:underline dotted;cursor:pointer" title="Отметить вручную, если по факту мониторинга всплеска продаж не было">отметить: нет всплеска</span>', d.id, 'noImpact', d.noImpact||'Нет', 'select', ['Нет','Да'])}
         <br>${inlineEditSpan(manualContributionValue(d)!=null ? `<span style="color:var(--ok);font-size:10.5px" title="Вклад задан вручную менеджером (оценка менеджера, не расчёт по Kaspi) — заменяет авторасчёт. Расчётная доля по Kaspi при этом остаётся нераспределённой. Кликните, чтобы изменить или очистить (пусто = вернуться к расчёту по Kaspi, 0 = вклада не было)">✏️ вручную (оценка менеджера): ${fmtNum(manualContributionValue(d))}</span>` : '<span style="color:var(--ink-mute);font-size:10.5px;text-decoration:underline dotted;cursor:pointer" title="Задать вклад в продажи вручную — если система считает неверно или не видит предзаказ вне 1С">➕ вклад вручную</span>', d.id, 'manualContribution', manualContributionValue(d)!=null ? String(manualContributionValue(d)) : '', 'text')}
               </td>
@@ -5275,7 +5338,7 @@ function knownProductNames(){
 }
 function modalDeal(existing){
   const isEdit = !!existing;
-  const d = existing || {blogerLogin:"", platform:PLATFORMS[0], product:"", barcode:"", responsible:"", bloggerCategory:"", plannedDate:"", publishedDate:"", plannedReach:0, plannedClicks:0, reach:0, clicks:0, likes:0, comments:0, saves:0, cost:0, plannedCost:0, plannedContribution:0, instagramLink:"", reelsLink:"", notes:""};
+  const d = existing || {blogerLogin:"", platform:PLATFORMS[0], product:"", barcode:"", responsible:"", bloggerCategory:"", plannedDate:"", publishedDate:"", plannedReach:0, plannedClicks:0, reach:0, clicks:0, likes:0, comments:0, saves:0, cost:0, plannedCost:0, plannedContribution:0, instagramLink:"", reelsLink:"", driveFolderLink:"", notes:""};
   const botHint = d.lastUpdatedFrom==="telegram"
     ? `<div class="login-hint">Последнее обновление — из Telegram-бота (${escapeHtml((d.lastUpdatedAt||"").replace("T"," ").slice(0,16))}). Лайки/комментарии/сохранения ниже — из распознанного скриншота.</div>`
     : "";
@@ -5308,6 +5371,7 @@ function modalDeal(existing){
       <div class="field"><label>Ссылка на Instagram</label><input id="m-instagram-link" placeholder="https://instagram.com/..." value="${escapeHtml(d.instagramLink||'')}"></div>
       <div class="field"><label>Ссылка на Reels</label><input id="m-reels-link" placeholder="https://instagram.com/reel/..." value="${escapeHtml(d.reelsLink||'')}"></div>
     </div>
+    <div class="field"><label>Папка с видео (Google Drive) <span style="font-weight:400;color:var(--ink-mute)">${(()=>{ const a=d.driveFolderAuto; return a&&a.id ? `найдена автоматически: «${escapeHtml(a.name||"")}» — поле можно не заполнять` : "пусто — подберётся сама по логину и дате, если папка названа по правилу"; })()}</span></label><input id="m-drive-folder" placeholder="https://drive.google.com/drive/folders/..." value="${escapeHtml(d.driveFolderLink||'')}"></div>
     <div class="field"><label>Комментарий</label><textarea id="m-notes">${escapeHtml(d.notes||"")}</textarea></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="m-cancel">Отмена</button>
@@ -5337,6 +5401,7 @@ function modalDeal(existing){
       cost: parseInt(document.getElementById("m-cost").value,10)||0,
       instagramLink: normalizeInstagramUrl(document.getElementById("m-instagram-link").value),
       reelsLink: normalizeLinkUrl(document.getElementById("m-reels-link").value),
+      driveFolderLink: normalizeLinkUrl(document.getElementById("m-drive-folder").value),
       notes: document.getElementById("m-notes").value.trim(),
     };
     try{
@@ -6072,9 +6137,19 @@ function wireDeskTab(){
         catch(e){ toast(e.message, true); render(); }
       };
     });
+    wireAttributionRecalc();
+    const driveBtn = document.getElementById("drive-sync-btn");
+    if(driveBtn) driveBtn.onclick = async ()=>{
+      try{
+        driveBtn.disabled = true; driveBtn.textContent = "Проверяю…";
+        const st = await Api.syncDriveFolders();
+        toast(st && st.error ? "Google Drive: "+st.error : `Готово: интеграций с папкой ${st.matched||0}`, !!(st && st.error));
+      }catch(e){ toast(e.message, true); }
+      await DataManager.refresh(); render();
+    };
     document.getElementById("template-deal-csv-btn").onclick = ()=>{
-      const header = ["блогер","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","статус","категория","instagram","ссылка_на_reels","комментарий"];
-      const example = ["@big_blogger","Instagram Reels","Уход премиум","4650358455500","2026-07-20","2026-07-20","200000","4000","","","400000","400000","Запланирована","Бьюти","https://instagram.com/big_blogger","",""];
+      const header = ["блогер","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","статус","категория","instagram","ссылка_на_reels","папка_видео","комментарий"];
+      const example = ["@big_blogger","Instagram Reels","Уход премиум","4650358455500","2026-07-20","2026-07-20","200000","4000","","","400000","400000","Запланирована","Бьюти","https://instagram.com/big_blogger","","",""];
       const csv = [header, example].map(row=>row.map(csvEscape).join(",")).join("\n");
       downloadFile("barter-box-influencer-deals-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
       toast("Шаблон скачан");
@@ -6104,7 +6179,7 @@ function wireDeskTab(){
       const rows = filteredInfluencerDealRows();
       // "id" первой колонкой — чтобы "Импорт CSV" мог узнать в строке уже существующую
       // интеграцию и обновить её, а не завести дубль (см. /api/influencer-deals/import).
-      const header = ["id","блогер","ответственный","категория","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","план_вклад","вклад_в_продажи","romi","статус","instagram","ссылка_на_reels"];
+      const header = ["id","блогер","ответственный","категория","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","план_вклад","вклад_в_продажи","romi","статус","instagram","ссылка_на_reels","папка_видео"];
       const lines = [header.map(csvEscape).join(",")];
       rows.forEach(r=>{
         const d = r.deal;
@@ -6115,7 +6190,7 @@ function wireDeskTab(){
           d.plannedCost||0, d.cost||0, d.plannedContribution||0,
           r.hasBaseline ? r.netContribution : "нет данных",
           r.romi==null ? "" : r.romi.toFixed(2),
-          d.status, d.instagramLink||"", d.reelsLink||""
+          d.status, d.instagramLink||"", d.reelsLink||"", dealDriveFolder(d).url||""
         ].map(csvEscape).join(","));
       });
       downloadFile("barter-box-influencer-deals-export.csv", "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
@@ -6173,6 +6248,7 @@ function wireDeskTab(){
         renderDeskTab();
       };
     });
+    wireAttributionRecalc();
     document.querySelectorAll(".responsible-group-toggle-btn").forEach(btn=>{
       btn.onclick = ()=>{
         const lead = btn.dataset.lead;
@@ -7193,6 +7269,35 @@ async function runSelfTests(){
       UI.expandedResponsibleGroups = savedG; UI.tab = savedTab;
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
+  });
+  TestSuite.test("Папка Google Drive у крупных: ручная ссылка главнее авто, 📁 со счётчиком, подсказка при «не найдено», колонка в экспорте", ()=>{
+    const auto = {driveFolderAuto:{id:"F1", url:"https://drive.google.com/drive/folders/F1", name:"2026-09-08 флюид", count:3}};
+    if(dealDriveFolder(auto).url!=="https://drive.google.com/drive/folders/F1" || dealDriveFolder(auto).source!=="auto") throw new Error("авто-папка");
+    const man = Object.assign({driveFolderLink:"drive.google.com/drive/folders/M"}, auto);
+    if(dealDriveFolder(man).url!=="https://drive.google.com/drive/folders/M" || dealDriveFolder(man).source!=="manual") throw new Error("ручная ссылка главнее и с https://");
+    if(!driveFolderIcon(auto).includes(">3<")) throw new Error("счётчик файлов у значка");
+    const none = driveFolderIcon({driveFolderAuto:{id:null, reason:"нет папки «x»"}});
+    if(!none.includes("нет папки") || none.includes("<a ")) throw new Error("не найдено — серая иконка с причиной, без ссылки");
+    if(driveFolderIcon({})!=="") throw new Error("без данных — ничего");
+    const savedS = DataManager.state.driveSync;
+    DataManager.state.driveSync = {configured:true, rootName:"Видео", bloggerFolders:5, matched:7, unmatched:2, lastRunAt:"2026-10-02T10:00:00Z"};
+    if(!tplDriveSyncHint().includes("интеграций с папкой 7") || !tplDriveSyncHint().includes("drive-sync-btn")) throw new Error("статус подключения");
+    DataManager.state.driveSync = null;
+    if(!tplDriveSyncHint().includes("не подключено")) throw new Error("статус «не подключено»");
+    DataManager.state.driveSync = savedS;
+  });
+  TestSuite.test("Кнопка «Пересчитать вклад сейчас»: есть на крупных и микро, вызывает /api/attribution/recalc, скрыта в режиме просмотра", ()=>{
+    const savedRO = UI.readOnly, savedRun = DataManager.state.attributionRun;
+    try{
+      UI.readOnly = false;
+      DataManager.state.attributionRun = {lastRunAt:"2026-10-02T09:15:00Z"};
+      if(!tplAttributionRecalcBar().includes("attr-recalc-btn") || !tplAttributionRecalcBar().includes("2026-10-02 14:15")) throw new Error("кнопка и время пересчёта");
+      if(!tplInfluencerDeals().includes("attr-recalc-btn")) throw new Error("кнопка на вкладке крупных");
+      if(!tplMicroInfluencers().includes("attr-recalc-btn")) throw new Error("кнопка на вкладке микро");
+      UI.readOnly = true;
+      if(tplAttributionRecalcBar().includes("attr-recalc-btn")) throw new Error("в режиме просмотра кнопки нет");
+      if(String(Api.recalcAttribution).indexOf("/api/attribution/recalc")<0) throw new Error("эндпоинт");
+    } finally { UI.readOnly = savedRO; DataManager.state.attributionRun = savedRun; }
   });
   TestSuite.test("D0: autoContributionCell показывает сумму только для ok/zero, у остальных статусов «—» без числа", ()=>{
     const okHtml = autoContributionCell({autoContributionStatus:"ok", autoContributionKzt:30000, autoContributionUnits:5});
