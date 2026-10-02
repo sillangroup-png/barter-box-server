@@ -26,7 +26,8 @@
 //     и рядом чистых часов нет — запасная ступень: ближайшие чистые часы за всю историю
 //     (нужно ≥ 3 сут.), с пометкой «фон приблизительный». Уровень считается в штуках и
 //     переводится в тенге по цене дня. «—» из-за цены — только если в окне цена НИЖЕ обычной
-//     за неделю до выхода больше чем на 1,5% (скидка); рост цены продажи не объясняет.
+//     за неделю до выхода больше чем на 5% (скидка); рост цены продажи не объясняет. v6.2:
+//     ненадёжный фон соседней публикации больше не ставит «—» тем, у кого свой фон в порядке.
 //  3. Прирост часа e = заказы часа − фон часа (со знаком). Каждый час делится между всеми
 //     публикациями SKU, чьё окно накрывает этот час (крупные и микро вместе), по весам:
 //     вес = √охвата × формат (Stories ×2, Reels/видео ×1, не указан ×1). Вклад интеграции =
@@ -48,7 +49,7 @@
 //  8. Каждый прогон пересчитывает все опубликованные строки; неопубликованные обнуляются.
 // ============================================================================
 
-const PARAMS_VERSION = "attrib-v6.1-24h-fallback-base-2026-10-03";
+const PARAMS_VERSION = "attrib-v6.2-24h-2026-10-03";
 
 // Условное время выхода (час по Алматы) и длина окна.
 const ASSUMED_POST_HOUR = { barter_box_deals: 12, barter_box_micro: 16 };
@@ -59,7 +60,11 @@ const BASELINE_TARGET_DAYS = 7;   // набираем чистых часов н
 const BASELINE_MIN_DAYS = 5;      // меньше 5 «эквивалентных суток» — фон не обоснован
 const BASELINE_FALLBACK_RADIUS_DAYS = 60;   // запасная ступень: ищем чистые часы по всей истории
 const BASELINE_FALLBACK_MIN_DAYS = 3;
-const PRICE_DRIFT_TOLERANCE = 0.015;
+// Скидка, которая сама могла поднять продажи: цена в окне ниже обычной за неделю до выхода
+// больше чем на 5%. Мелкие колебания цены на Kaspi (1–3% между продавцами) расчёт не блокируют,
+// только упоминаются в подсказке.
+const PRICE_DRIFT_TOLERANCE = 0.05;
+const PRICE_NOTE_TOLERANCE = 0.015;
 const MAX_PURCHASES_PER_VIEW = 0.01;
 
 const FORMAT_COEF_STORIES = 2;
@@ -328,7 +333,7 @@ function planAttribution({ placements, resolution, hourly, undated, profile, lis
       if (weak) bad = `фон не обоснован: часов без рекламы этого SKU почти нет — набралось на ${weak.coverageDays.toFixed(1)} сут. даже за всю историю Kaspi (с ${feedStart})`;
       // Цена-ориентир — обычная цена за 7 дней ДО выхода (все часы): скидка именно в окно видна
       // как падение относительно неё. Если до выхода заказов нет — цена часов без рекламы.
-      let refKzt = 0, refQty = 0;
+      let refKzt = 0, refQty = 0, priceNote = null;
       for (let k = 1; k <= 7; k++) for (let h = 0; h < 24; h++) {
         const r = hourRec(code, hourKey(addDaysStr(m.d0, -k), h));
         refKzt += r.kzt; refQty += r.qty;
@@ -340,12 +345,13 @@ function planAttribution({ placements, resolution, hourly, undated, profile, lis
         // Только СНИЖЕНИЕ цены может само поднять продажи. Рост цены рост продаж не объясняет,
         // а в тенге фон уже пересчитан по цене дня — такое окно считаем.
         if (drift < -PRICE_DRIFT_TOLERANCE) bad = `фон не обоснован: цена в окне ${fmt(winPrice)} ₸ ниже обычной за неделю до выхода (${fmt(bp)} ₸, ${(drift * 100).toFixed(1)}%) — рост может быть от скидки`;
+        else if (drift < -PRICE_NOTE_TOLERANCE) priceNote = `цена в окне ниже обычной на ${(-drift * 100).toFixed(1)}% — небольшое колебание, расчёт не блокирует`;
       }
       const fallback = levels.filter((L) => L.tier === 2);
       const baseNote = fallback.length
         ? `фон по ближайшим часам без рекламы за пределами ±${BASELINE_SEARCH_RADIUS_DAYS} дн. (${fallback[0].days[0]}…${fallback[0].days[fallback[0].days.length - 1]}) — этот товар рекламируют почти без перерыва, фон приблизительный`
         : null;
-      info.set(m.id, { A, Aq, B, lines, canc, ret, winPrice, bad, baseNote });
+      info.set(m.id, { A, Aq, B, lines, canc, ret, winPrice, bad, baseNote: [baseNote, priceNote].filter(Boolean).join("; ") || null });
     }
     // Связные группы пересекающихся окон.
     const parent = new Map(members.map((m) => [m.id, m.id]));
@@ -392,12 +398,10 @@ function planAttribution({ placements, resolution, hourly, undated, profile, lis
         const c = Math.floor(credit.get(m.id));
         const units = inf.winPrice ? Math.floor((c / inf.winPrice) * 100) / 100 : 0;
         const partners = [...sharesWith.get(m.id)];
-        const badPartner = partners.find((o) => info.get(o.id).bad);
         const noReach = [m, ...partners].filter((x) => !(x.reachUsed > 0));
         let status = c > 0 ? "ok" : "zero", reason = null;
         if (invariantBroken) { status = "compute_error"; reason = `нарушен потолок: вклады ${fmt(floorTotal)} > прирост ${fmt(posSum)} или заказы ${fmt(actualSum)}`; }
         else if (inf.bad) { status = "baseline_uncertain"; reason = inf.bad; }
-        else if (badPartner) { status = "baseline_uncertain"; reason = `часы окна делятся с ${badPartner.handle || badPartner.blogger_handle}, у которого ${info.get(badPartner.id).bad}`; }
         else if (noReach.length && (c > 0 || partners.length)) { status = "needs_reach_data"; reason = `у ${noReach.map((x) => x.handle || x.blogger_handle).slice(0, 4).join(", ")} не заполнен охват — долю не обосновать (заполните охват)`; }
         else if (c > 0 && units > m.reachUsed * MAX_PURCHASES_PER_VIEW) { status = "baseline_uncertain"; reason = `прирост ≈${Math.round(units)} шт несоразмерен охвату ${fmt(m.reachUsed)} (больше 1 покупки на 100 просмотров) — рост окна этой публикацией не объяснить`; }
         push(m.id, { code, status, reason, credit: c, units, inf, others: [...others.get(m.id)], scaled });
