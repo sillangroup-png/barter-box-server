@@ -1428,6 +1428,26 @@ const AUTO_CONTRIB_STATUS_LABEL = {
   duplicate: "учтено в другой строке (та же интеграция)",
   compute_error: "ошибка расчёта — разберите вручную",
 };
+// Конкретная причина «—» прямо в ячейке (полный разбор — во всплывающей подсказке), чтобы не
+// гадать, почему у блогера нет суммы.
+function autoContributionShortReason(d){
+  const n = String(d.autoContributionNote||"");
+  const st = d.autoContributionStatus;
+  if(st==="baseline_uncertain"){
+    if(/ниже обычной/.test(n)) return "недостаточно данных: в окно была скидка, рост мог быть от цены";
+    if(/часов без рекламы этого SKU почти нет|чистых часов/.test(n)) return "недостаточно данных: товар рекламируют без перерыва, фон не из чего взять";
+    if(/несоразмерен охвату/.test(n)) return "недостаточно данных: рост продаж больше, чем мог дать охват";
+  }
+  if(st==="needs_reach_data"){
+    const m = n.match(/у (.+?) не заполнен охват/);
+    return m ? `недостаточно данных: не заполнен охват у ${m[1]}` : null;
+  }
+  if(st==="no_sku_data"){
+    const m = n.match(/Код (.+?) не найден/);
+    return m ? `код ${m[1]} не найден в заказах Kaspi` : null;
+  }
+  return null;
+}
 function autoContributionHasNumber(d){
   return KASPI_NUMBER_STATUSES.has(d.autoContributionStatus) && d.autoContributionKzt!=null && d.autoContributionKzt!=="" && !isNaN(Number(d.autoContributionKzt));
 }
@@ -1436,7 +1456,7 @@ function autoContributionCell(d){
   if(!status){
     return `<span style="color:var(--ink-mute);font-size:11.5px" title="Ещё не считалось: расчёт по заказам Kaspi (24 ч после выхода) обновляется раз в час на сервере.">—</span>`;
   }
-  const label = AUTO_CONTRIB_STATUS_LABEL[status] || status;
+  const label = autoContributionShortReason(d) || AUTO_CONTRIB_STATUS_LABEL[status] || status;
   const note = d.autoContributionNote ? escapeHtml(d.autoContributionNote) : "";
   const computedAt = d.autoContributionComputedAt ? escapeHtml(String(d.autoContributionComputedAt).slice(0,16).replace("T"," ")) : "";
   const title = [note, computedAt ? `посчитано: ${computedAt}` : ""].filter(Boolean).join(" · ");
@@ -7327,6 +7347,14 @@ async function runSelfTests(){
       if(!html.includes("2 — окно 24 ч ещё идёт")) throw new Error("подпись про ожидающие окна");
       if(!html.includes("1 — «—»")) throw new Error("подпись про остальные «—»");
     } finally { DataManager.state.microInfluencerDeals = savedMicro; UI.microMonth = savedMM; }
+  });
+  TestSuite.test("«—» в «Авто (Kaspi)» показывает конкретную причину, а не общий ярлык", ()=>{
+    const c1 = autoContributionCell({autoContributionStatus:"baseline_uncertain", autoContributionNote:"Окно 24 ч … фон не обоснован: цена в окне 6 500 ₸ ниже обычной за неделю до выхода (7 150 ₸, -9.1%) — рост может быть от скидки."});
+    if(!c1.includes("скидка")) throw new Error("причина: скидка — "+c1);
+    const c2 = autoContributionCell({autoContributionStatus:"needs_reach_data", autoContributionNote:"SKU X — у symbat_pernebekovaa не заполнен охват — долю не обосновать"});
+    if(!c2.includes("не заполнен охват у symbat_pernebekovaa")) throw new Error("причина: охват — "+c2);
+    const c3 = autoContributionCell({autoContributionStatus:"baseline_uncertain", autoContributionNote:"фон не обоснован: часов без рекламы этого SKU почти нет"});
+    if(!c3.includes("без перерыва")) throw new Error("причина: нет фона — "+c3);
   });
   TestSuite.test("D0: autoContributionCell показывает сумму только для ok/zero, у остальных статусов «—» без числа", ()=>{
     const okHtml = autoContributionCell({autoContributionStatus:"ok", autoContributionKzt:30000, autoContributionUnits:5});
