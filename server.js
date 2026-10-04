@@ -580,6 +580,37 @@ const upload = multer({
   limits: {fileSize: 8*1024*1024},
 });
 
+// ---------- Read-only API-ключ для внешних ассистентов ----------
+// Ключ задаётся переменной окружения READONLY_API_KEY (минимум 24 символа). Он НЕ даёт
+// сессию и не подходит к requireAuth: работает только на одном GET-маршруте ниже, который
+// отдаёт сделки и публикации по белому списку полей — без телефонов, ИИН, адресов и фото.
+const READONLY_API_KEY = process.env.READONLY_API_KEY || "";
+function requireReadonlyKey(req, res, next){
+  if(READONLY_API_KEY.length < 24) return res.status(503).json({error:"read-only ключ не настроен на сервере"});
+  const given = getToken(req) || String(req.headers["x-api-key"] || "");
+  const a = Buffer.from(given), b = Buffer.from(READONLY_API_KEY);
+  if(a.length !== b.length || !require("crypto").timingSafeEqual(a, b)) return res.status(401).json({error:"неверный ключ"});
+  next();
+}
+function pickFields(o, keys){ const r = {}; keys.forEach(k=>{ if(o[k] !== undefined) r[k] = o[k]; }); return r; }
+const RO_LARGE_FIELDS = ["id","blogerLogin","platform","product","barcode","responsible","bloggerCategory","status","plannedDate","publishedDate","plannedReach","reach","plannedClicks","clicks","plannedCost","cost","plannedContribution","autoContributionKzt","autoContributionStatus","likes","comments","saves"];
+const RO_MICRO_FIELDS = ["id","responsible","blogerName","instagramAccount","tiktokAccount","followers","product","productCategory","barcode","bloggerCategory","plannedDate","publishDate","videoStatus","paymentStatus","cost","productCost","reelsLink","tiktokVideoLink","factReachReels","factReachTT","autoContributionKzt","autoContributionStatus"];
+app.get("/api/readonly/deals", requireReadonlyKey, (req,res)=>{
+  const orderById = new Map(state.orders.map(o=>[o.id, o]));
+  const campById = new Map(state.campaigns.map(c=>[c.id, c]));
+  const publications = state.publications.map(p=>{
+    const o = orderById.get(p.orderId) || {};
+    const c = campById.get(o.campaignId) || {};
+    return Object.assign(pickFields(p, ["id","platform","link","publishedAt","tier","promoCode","paidAmount","measurements"]), {blogger: o.blogger || "", campaign: c.name || ""});
+  });
+  res.json({
+    generatedAt: new Date().toISOString(),
+    largeDeals: state.influencerDeals.map(d=>pickFields(d, RO_LARGE_FIELDS)),
+    microDeals: state.microInfluencerDeals.map(d=>pickFields(d, RO_MICRO_FIELDS)),
+    publications,
+  });
+});
+
 // ---------- state & health ----------
 // /api/state отдаёт ВСЮ базу (заказы, телефоны, адреса, выручку, ROMI) — без
 // requireAuth это было бы публично доступно кому угодно по прямой ссылке.
