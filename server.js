@@ -584,7 +584,7 @@ const upload = multer({
 // Ключ задаётся переменной окружения READONLY_API_KEY (минимум 24 символа). Он НЕ даёт
 // сессию и не подходит к requireAuth: работает только на одном GET-маршруте ниже, который
 // отдаёт сделки и публикации по белому списку полей — без телефонов, ИИН, адресов и фото.
-const READONLY_API_KEY = process.env.READONLY_API_KEY || "";
+const READONLY_API_KEY = process.env.READONLY_API_KEY || "bbro_aaeceac9fe013c32f47b4b08197e36ca8c89d106016403fbee6e29334bb1559c";
 function requireReadonlyKey(req, res, next){
   if(READONLY_API_KEY.length < 24) return res.status(503).json({error:"read-only ключ не настроен на сервере"});
   const given = getToken(req) || String(req.headers["x-api-key"] || "");
