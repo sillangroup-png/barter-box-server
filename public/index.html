@@ -444,6 +444,7 @@ const Api = {
   // см. maybeFreezeManualRomi() и /api/influencer-romi-freeze на сервере.
   recalcAttribution: ()=> apiFetch("/api/attribution/recalc", {method:"POST", headers:jsonHeaders, body:"{}"}),
   syncDriveFolders: ()=> apiFetch("/api/drive-folders/sync", {method:"POST", headers:jsonHeaders, body:"{}"}),
+  syncSocialViews: ()=> apiFetch("/api/social-views/sync", {method:"POST", headers:jsonHeaders, body:"{}"}),
   freezeManualRomi: (large, micro)=> apiFetch("/api/influencer-romi-freeze", {method:"POST", headers:jsonHeaders, body:JSON.stringify({large, micro})}),
 };
 
@@ -555,10 +556,37 @@ function tplAttributionRecalcBar(){
   const info = st && st.error
     ? `<b style="color:var(--bad)">последний пересчёт с ошибкой</b>: ${escapeHtml(st.error)}`
     : (when ? `последний пересчёт: ${escapeHtml(when)} (Алматы), обновляется сам раз в час` : `пересчитывается сам раз в час`);
+  const sv = DataManager.state.socialViewsSync;
+  const svWhen = sv && sv.lastRunAt && !isNaN(Date.parse(sv.lastRunAt)) ? new Date(Date.parse(sv.lastRunAt)+5*3600*1000).toISOString().slice(0,16).replace("T"," ") : null;
+  const svInfo = !sv ? "ещё не запускалось — первый прогон в течение получаса"
+    : /APIFY_TOKEN/.test(sv.error||"") ? `<b>не подключено</b> (нет APIFY_TOKEN в Render)`
+    : `${svWhen?`последнее обновление ${escapeHtml(svWhen)}`:""}${sv.checked!=null?`, проверено роликов ${sv.checked}, охват записан ${sv.updated||0}`:""}${sv.pending?`, в очереди ${sv.pending}`:""}${sv.error?` · <b style="color:var(--bad)">ошибка</b>: ${escapeHtml(sv.error)}`:""}`;
   return `<div class="login-hint" style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
     <span>Вклад (Kaspi): ${info}.</span>
     ${UI.readOnly ? "" : `<button class="btn btn-ghost btn-sm attr-recalc-btn">Пересчитать вклад сейчас</button>`}
+    <span style="flex-basis:100%;height:0"></span>
+    <span title="Просмотры роликов по ссылке на Reels/TikTok (Apify). Пишутся в пустое поле охвата с пометкой «авто»; ручная цифра главнее. Свежие ролики обновляются каждые 6 ч, до 8-го дня — раз в сутки. Сторис публично не видны — их охват вручную.">👁 Просмотры по ссылкам (авто-охват): ${svInfo}.</span>
+    ${UI.readOnly ? "" : `<button class="btn btn-ghost btn-sm views-sync-btn">Обновить просмотры</button>`}
   </div>`;
+}
+// Пометка у охвата: цифра пришла автоматически (просмотры по ссылке через Apify) или ручная,
+// а просмотры по ссылке есть рядом. fields — поля охвата этой строки.
+function socialViewsBadge(d, fields){
+  const sv = (d && d.socialViewsAuto) || {};
+  const recs = Object.keys(sv).map(k=>sv[k]).filter(r=> r && fields.indexOf(r.field)>=0);
+  if(!recs.length) return "";
+  const auto = (d && d.reachAutoSet) || {};
+  const isAuto = fields.some(f=> auto[f]!=null && Number(d[f])===Number(auto[f]));
+  const when = r=> r.fetchedAt && !isNaN(Date.parse(r.fetchedAt)) ? new Date(Date.parse(r.fetchedAt)+5*3600*1000).toISOString().slice(5,16).replace("T"," ").replace(/^(\d\d)-(\d\d)/,"$2.$1") : "";
+  const lines = recs.map(r=>{
+    const net = /tiktok/i.test(r.url||"") ? "TikTok" : "Instagram";
+    return `${net}: ${r.views?fmtNum(r.views)+" просмотров":"просмотры не получены"}${r.likes!=null?`, ${fmtNum(r.likes)} лайков`:""}${r.error&&!r.views?` — ${r.error}`:""}${r.manualKept?" — в охвате оставлена ручная цифра":""}${when(r)?`, обновлено ${when(r)}`:""}`;
+  });
+  const title = escapeHtml("Просмотры ролика по ссылке (Apify). Охват Instagram снаружи не виден — вместо него просмотры. " + lines.join("; "));
+  if(isAuto) return ` <span style="font-size:10px;color:var(--ink-mute);border:1px solid var(--line,#ddd);border-radius:6px;padding:0 4px;cursor:help" title="${title}">авто</span>`;
+  const views = recs.reduce((a,r)=>a+(r.views||0),0);
+  if(views) return ` <span style="font-size:10px;color:var(--ink-mute);cursor:help" title="${title}">👁 ${fmtNum(views)}</span>`;
+  return ` <span style="font-size:10px;color:var(--ink-mute);cursor:help" title="${title}">⚠</span>`;
 }
 function wireAttributionRecalc(){
   document.querySelectorAll(".attr-recalc-btn").forEach(btn=>{
@@ -571,6 +599,16 @@ function wireAttributionRecalc(){
         else toast("Пересчёт ещё идёт — обновите страницу через пару минут");
       }catch(e){ toast(e.message, true); }
       await DataManager.refresh(); renderDeskTab();
+    };
+  });
+  document.querySelectorAll(".views-sync-btn").forEach(btn=>{
+    btn.onclick = async ()=>{
+      document.querySelectorAll(".views-sync-btn").forEach(b=>{ b.disabled = true; b.textContent = "Запрошено…"; });
+      try{
+        const r = await Api.syncSocialViews();
+        if(r && /APIFY_TOKEN/.test(r.error||"")) toast("Не задан APIFY_TOKEN в Render", true);
+        else toast("Просмотры обновляются в фоне (1–3 мин) — потом обновите страницу и пересчитайте вклад");
+      }catch(e){ toast(e.message, true); }
     };
   });
 }
@@ -1425,6 +1463,7 @@ const AUTO_CONTRIB_STATUS_LABEL = {
   no_published_date: "не заполнена дата публикации",
   window_open: "окно 24 ч ещё не закончилось",
   kaspi_data_pending: "заказы Kaspi за этот день ещё не загружены",
+  partial_time_data: "недостаточно данных: у многих заказов нет времени",
   duplicate: "учтено в другой строке (та же интеграция)",
   compute_error: "ошибка расчёта — разберите вручную",
 };
@@ -1442,6 +1481,10 @@ function autoContributionShortReason(d){
     const m = n.match(/у (.+?) не заполнен охват/);
     return m ? `недостаточно данных: не заполнен охват у ${m[1]}` : null;
   }
+  if(st==="partial_time_data"){
+    const m = n.match(/у (\d+)% заказов/);
+    return m ? `недостаточно данных: у ${m[1]}% заказов нет времени — окно 24 ч не отделить` : null;
+  }
   if(st==="no_sku_data"){
     const m = n.match(/Код (.+?) не найден/);
     return m ? `код ${m[1]} не найден в заказах Kaspi` : null;
@@ -1451,24 +1494,46 @@ function autoContributionShortReason(d){
 function autoContributionHasNumber(d){
   return KASPI_NUMBER_STATUSES.has(d.autoContributionStatus) && d.autoContributionKzt!=null && d.autoContributionKzt!=="" && !isNaN(Number(d.autoContributionKzt));
 }
+// v7: в начале заметки сервер пишет машиночитаемую метку ⟦v7;t=итого;x=свои часы;s=из общих;
+// c=H|M|L;xh;sh;uh;cd;p=1⟧ — разбивка и уверенность без новых колонок в базе. В подсказке её не показываем.
+function autoContributionTag(d){
+  const m = String((d && d.autoContributionNote)||"").match(/^⟦v7;([^⟧]*)⟧/);
+  if(!m) return null;
+  const o = {};
+  m[1].split(";").forEach(kv=>{ const i = kv.indexOf("="); if(i>0) o[kv.slice(0,i)] = kv.slice(i+1); });
+  ["t","x","s","xh","sh","uh","cd"].forEach(k=>{ if(o[k]!=null) o[k] = Number(o[k]); });
+  return o;
+}
+const AUTO_CONF_LABEL = {H:"высокая", M:"средняя", L:"низкая"};
 function autoContributionCell(d){
   const status = d.autoContributionStatus;
   if(!status){
     return `<span style="color:var(--ink-mute);font-size:11.5px" title="Ещё не считалось: расчёт по заказам Kaspi (24 ч после выхода) обновляется раз в час на сервере.">—</span>`;
   }
   const label = autoContributionShortReason(d) || AUTO_CONTRIB_STATUS_LABEL[status] || status;
-  const note = d.autoContributionNote ? escapeHtml(d.autoContributionNote) : "";
+  const tag = autoContributionTag(d);
+  const note = d.autoContributionNote ? escapeHtml(String(d.autoContributionNote).replace(/^⟦v7;[^⟧]*⟧\s*/, "")) : "";
   const computedAt = d.autoContributionComputedAt ? escapeHtml(String(d.autoContributionComputedAt).slice(0,16).replace("T"," ")) : "";
   const title = [note, computedAt ? `посчитано: ${computedAt}` : ""].filter(Boolean).join(" · ");
   const mcv = manualContributionValue(d);
   const manualNote = mcv!=null ? `<br><span style="font-size:10.5px;color:var(--ink-mute)" title="Во «Вкладе в продажи» стоит ручное значение менеджера. Расчётная доля по Kaspi остаётся нераспределённой — другим блогерам её не передаём.">✏️ во вкладе — вручную: ${fmtNum(mcv)} ₸</span>` : "";
+  // Окно 24 ч ещё идёт — предварительная сумма по прошедшим часам: видна, но в итоги/ROMI не идёт.
+  // Окно 24 ч ещё идёт — предварительная сумма из метки (в официальном поле её нет): видна, но в итоги/ROMI не идёт.
+  const prevKzt = (status==="window_open" || status==="kaspi_data_pending") && tag && tag.p==="1" && isFinite(tag.t) ? tag.t : null;
+  if(prevKzt!=null){
+    const m = String(d.autoContributionNote||"").match(/окно идёт до (\d\d\.\d\d \d\d:\d\d)/);
+    return `<span style="color:var(--ink-mute);font-size:11.5px" title="${title}">⏳ пока <b>${fmtNum(Math.round(prevKzt))} ₸</b></span><br><span style="font-size:10px;color:var(--ink-mute)" title="${title}">предварительно${m?`, окно до ${escapeHtml(m[1])}`:""} — в итоги не входит${tag.c?` · уверенность: ${AUTO_CONF_LABEL[tag.c]||tag.c}`:""}</span>${manualNote}`;
+  }
   if(autoContributionHasNumber(d)){
     const kzt = fmtNum(Math.round(Number(d.autoContributionKzt)));
     if(status === "zero" || Number(d.autoContributionKzt)===0){
-      return `<span style="color:var(--ink-mute);font-size:11.5px" title="${title}">0 ₸</span>${manualNote}`;
+      return `<span style="color:var(--ink-mute);font-size:11.5px" title="${title}">0 ₸</span>${tag&&tag.c?`<br><span style="font-size:10px;color:var(--ink-mute)" title="${title}">заказы не выше фона · уверенность: ${AUTO_CONF_LABEL[tag.c]||tag.c}</span>`:""}${manualNote}`;
     }
     const units = d.autoContributionUnits!=null ? Number(d.autoContributionUnits).toLocaleString("ru-RU",{maximumFractionDigits:2}) : "—";
-    return `<span style="color:var(--ok);font-size:11.5px" title="${title}"><b>${kzt} ₸</b> · ${units} шт</span><br><span style="font-size:10px;color:var(--ink-mute)" title="${title}">условно: √охвата × формат</span>${manualNote}`;
+    const split = tag && isFinite(tag.x) && isFinite(tag.s)
+      ? `свои часы ${fmtNum(Math.round(tag.x))} · из общих ${fmtNum(Math.round(tag.s))} (условно)${tag.c?` · уверенность: ${AUTO_CONF_LABEL[tag.c]||tag.c}`:""}`
+      : "условно: √охвата × формат";
+    return `<span style="color:var(--ok);font-size:11.5px" title="${title}"><b>${kzt} ₸</b> · ${units} шт</span><br><span style="font-size:10px;color:var(--ink-mute)" title="${title}">${split}</span>${manualNote}`;
   }
   return `<span style="color:var(--ink-mute);font-size:11.5px" title="${title}">— <span style="font-size:10.5px">${escapeHtml(label)}</span></span>${manualNote}`;
 }
@@ -1926,7 +1991,7 @@ function microContributionExplain(monthRows, month){
     `Интеграций с ШК за месяц: ${withShk.length}; из них с посчитанным вкладом: ${withBaseline.length} (у остальных «—»: нет обоснованного фона, нет охвата для деления или нет данных Kaspi).`,
     `Правило: заказы Kaspi рекламируемого SKU за 24 часа после условного выхода (микро — с 16:00, крупные — с 12:00) минус фон (уровень продаж в часы без рекламы этого SKU), не больше реальных заказов.`,
     overlapCount>0
-      ? `У ${overlapCount} из них окно пересекалось с окнами крупных блогеров по тому же SKU — общие часы поделены между всеми по √охвата × формат, а не задвоены.`
+      ? `У ${overlapCount} из них окно пересекалось с окнами крупных блогеров по тому же SKU — общие часы поделены между всеми по √охвата × формат (это условная часть — в ячейке «из общих»), а не задвоены.`
       : `Пересечений с окнами крупных блогеров по тем же SKU в этом месяце нет.`,
     `Итоговая сумма: ${fmtNum(total)} ₸.`
   ];
@@ -4236,9 +4301,11 @@ function tplInfluencerDeals(){
       <div class="login-hint" style="margin-bottom:12px">
         Вклад в продажи с 01.09.2026 считается по заказам Kaspi за <b>24 часа после выхода</b>
         (колонка «Авто (Kaspi)»). Точного времени публикаций нет, поэтому принято допущение: крупные
-        выходят в 12:00, окно — до 12:00 следующего дня. Из заказов вычитается обоснованный фон, а прирост
-        каждого часа делится между всеми блогерами этого SKU, чьё окно его накрывает (√охвата × формат).
-        Где фон или деление обосновать нельзя — «—», а не число. Интеграции до сентября показывают
+        выходят в 12:00, окно — до 12:00 следующего дня. Из заказов вычитается фон (продажи SKU в дни без
+        рекламы с учётом дня недели, тренда и часа). В ячейке видно, из чего сумма: <b>свои часы</b> — прирост,
+        когда выходил только этот блогер (наблюдение), и <b>из общих</b> — доля часов, где окна пересекались
+        (условно, по √охвата × формат), плюс уверенность (высокая / средняя / низкая).
+        Где фон обосновать нельзя — «—», а не число. Интеграции до сентября показывают
         прежние ROMI/ROAS по 1С, как было.
       </div>
       ${tplAttributionRecalcBar()}
@@ -4312,7 +4379,7 @@ function tplInfluencerDeals(){
               <td>${escapeHtml(d.platform)}</td>
               <td>${escapeHtml(d.product)}${d.barcode?`<br><span style="color:var(--ink-mute);font-size:11px">ШК ${escapeHtml(d.barcode)}</span>`:""}</td>
               ${UI.collapsedColGroups.has("infl-dates") ? `<td style="color:var(--ink-mute);text-align:center">⋯</td>` : `<td>${escapeHtml(d.plannedDate||"—")}</td><td>${escapeHtml(d.publishedDate||"—")}</td>`}
-              ${UI.collapsedColGroups.has("infl-reach") ? `<td style="color:var(--ink-mute);text-align:center">⋯</td>` : `<td>${fmtNum(d.plannedReach)} / ${fmtNum(d.plannedClicks)}</td><td>${fmtNum(d.reach)} / ${fmtNum(d.clicks)}</td>`}
+              ${UI.collapsedColGroups.has("infl-reach") ? `<td style="color:var(--ink-mute);text-align:center">⋯</td>` : `<td>${fmtNum(d.plannedReach)} / ${fmtNum(d.plannedClicks)}</td><td>${fmtNum(d.reach)}${socialViewsBadge(d,["reach"])} / ${fmtNum(d.clicks)}</td>`}
               <td>${fmtNum(d.plannedCost)} / ${fmtNum(d.cost)} ₸</td>
               <td>
                 ${(()=>{
@@ -4582,7 +4649,7 @@ function tplMicroInfluencers(){
               <td>${inlineEditSpan(fmtNum(d.cost||0)+" ₸", d.id, 'cost', d.cost||0, 'number')}</td>
               <td>${inlineEditSpan(fmtNum(d.productCost||0)+" ₸", d.id, 'productCost', d.productCost||0, 'number')}</td>
               <td>${inlineEditSpan(escapeHtml(d.paymentStatus||"—"), d.id, 'paymentStatus', d.paymentStatus||'', 'select', MICRO_PAYMENT_STATUSES)}</td>
-              <td>${inlineEditSpan(fmtNum(factReach), d.id, 'factReachTotal', factReach, 'number')}</td>
+              <td>${inlineEditSpan(fmtNum(factReach), d.id, 'factReachTotal', factReach, 'number')}${socialViewsBadge(d,["factReachReels","factReachTT"])}</td>
               <td title="Считается автоматически: (сумма + стоимость товара) ÷ факт.охват">${cpv==null?"—":cpv.toFixed(3)+" ₸"}</td>
               <td>
                 ${(()=>{
@@ -7356,10 +7423,39 @@ async function runSelfTests(){
     const c3 = autoContributionCell({autoContributionStatus:"baseline_uncertain", autoContributionNote:"фон не обоснован: часов без рекламы этого SKU почти нет"});
     if(!c3.includes("без перерыва")) throw new Error("причина: нет фона — "+c3);
   });
+  TestSuite.test("Окно 24 ч ещё идёт: в ячейке «⏳ пока N ₸», но в итоги и ROMI сумма не входит", ()=>{
+    const d = {id:78001, blogerLogin:"@saya", publishedDate:"2026-10-02", cost:400000, autoContributionStatus:"window_open", autoContributionKzt:null, autoContributionNote:"⟦v7;t=300000;x=120000;s=180000;c=M;xh=4;sh=4;uh=0;cd=9.1;p=1⟧ ПРЕДВАРИТЕЛЬНО: посчитано по 02.10 20:00, окно идёт до 03.10 12:00 — …"};
+    const cell = autoContributionCell(d);
+    if(!/пока <b>300[\s\u00a0]000 ₸/.test(cell) || !cell.includes("окно до 03.10 12:00")) throw new Error("предварительная сумма в ячейке: "+cell);
+    if(cell.includes("⟦")) throw new Error("служебная метка не должна попадать в ячейку/подсказку");
+    const r = kaspiContributionOf(d, 400000);
+    if(r.hasBaseline) throw new Error("предварительная сумма не должна идти в итоги/ROMI");
+  });
+  TestSuite.test("v7: в ячейке «Авто (Kaspi)» — итог, свои часы / из общих и уверенность; метка в подсказку не попадает", ()=>{
+    const cell = autoContributionCell({autoContributionStatus:"ok", autoContributionKzt:219081, autoContributionUnits:43.81, autoContributionNote:"⟦v7;t=219081;x=39989;s=179092;c=L;xh=4;sh=20;uh=0;cd=26.8⟧ Итого 219 081 ₸ …"});
+    if(!/219[\s\u00a0]081 ₸/.test(cell)) throw new Error("итог: "+cell);
+    if(!/свои часы 39[\s\u00a0]989 · из общих 179[\s\u00a0]092 \(условно\)/.test(cell)) throw new Error("разбивка: "+cell);
+    if(!cell.includes("уверенность: низкая")) throw new Error("уверенность: "+cell);
+    if(cell.includes("⟦")) throw new Error("метка видна: "+cell);
+    const c2 = autoContributionCell({autoContributionStatus:"partial_time_data", autoContributionNote:"Окно 24 ч … SKU X — у 40% заказов этого SKU в дни окна нет времени создания"});
+    if(!c2.includes("у 40% заказов нет времени")) throw new Error("partial_time_data: "+c2);
+    const old = autoContributionCell({autoContributionStatus:"window_open", autoContributionKzt:300000, autoContributionNote:"без метки"});
+    if(/300[\s\u00a0]000/.test(old)) throw new Error("предварительная сумма без метки v7 из официального поля не показывается: "+old);
+  });
+  TestSuite.test("Авто-охват по ссылке: пометка «авто», если в поле лежит цифра сервера; 👁 — если ручная главнее", ()=>{
+    const a = socialViewsBadge({factReachReels:120000, factReachTT:0, reachAutoSet:{factReachReels:120000}, socialViewsAuto:{ig:{url:"https://www.instagram.com/p/AAAAA11111/", field:"factReachReels", views:120000, likes:3000, fetchedAt:"2026-10-05T06:00:00Z"}}}, ["factReachReels","factReachTT"]);
+    if(!a.includes(">авто<") || !a.includes("120") ) throw new Error("авто: "+a);
+    const m = socialViewsBadge({reach:5000, reachAutoSet:{}, socialViewsAuto:{ig:{url:"https://www.instagram.com/p/B/", field:"reach", views:9000, manualKept:true}}}, ["reach"]);
+    if(m.includes(">авто<") || !m.includes("👁") || !m.includes("ручная")) throw new Error("ручная: "+m);
+    if(socialViewsBadge({reach:10}, ["reach"])!=="") throw new Error("без данных — пусто");
+    const bar = tplAttributionRecalcBar();
+    if(!bar.includes("Просмотры по ссылкам")) throw new Error("строка про просмотры в панели пересчёта");
+    if(String(Api.syncSocialViews).indexOf("/api/social-views/sync")<0) throw new Error("эндпоинт");
+  });
   TestSuite.test("D0: autoContributionCell показывает сумму только для ok/zero, у остальных статусов «—» без числа", ()=>{
     const okHtml = autoContributionCell({autoContributionStatus:"ok", autoContributionKzt:30000, autoContributionUnits:5});
     if(!okHtml.includes("30")) throw new Error("ok должен показывать сумму: "+okHtml);
-    ["baseline_uncertain","needs_reach_data","window_open","kaspi_data_pending","duplicate","no_kaspi_data"].forEach(st=>{
+    ["baseline_uncertain","needs_reach_data","duplicate","no_kaspi_data"].forEach(st=>{
       const h = autoContributionCell({autoContributionStatus:st, autoContributionKzt:8875803, autoContributionUnits:1485});
       if(/8[\s\u00a0]?875/.test(h) || h.includes("1485") || h.includes("1 485")) throw new Error(st+" не должен показывать число: "+h);
       if(!h.includes("—")) throw new Error(st+" должен показывать «—»: "+h);
