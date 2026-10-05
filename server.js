@@ -508,7 +508,7 @@ function buildPlacementRows(){
       cost_kzt: safeInt(d.cost) || 0, product_cost_kzt: 0,
       planned_date: safeDate(d.plannedDate),
       published_at: safeDate(d.publishedDate), published_date: safeDate(d.publishedDate),
-      video_url: null, reach: safeInt(d.reach), status: largeDealStatus(d),
+      video_url: safeText(d.reelsLink), reach: safeInt(d.reach), status: largeDealStatus(d),
       notes: safeText(d.notes), created_at: now, updated_at: now,
     });
   });
@@ -1052,6 +1052,7 @@ app.patch("/api/influencer-deals/:id", requireAuth, (req,res)=>{
   if("instagramLink" in body) body.instagramLink = normalizeInstagramUrl(body.instagramLink);
   if("driveFolderLink" in body) body.driveFolderLink = normalizeLinkUrl(body.driveFolderLink);
   delete body.driveFolderAuto; // автоподбор ведёт только сервер
+  delete body.socialViewsAuto; delete body.reachAutoSet; // просмотры по ссылке (Apify) ведёт только сервер
   if("reelsLink" in body) body.reelsLink = normalizeLinkUrl(body.reelsLink);
   Object.assign(d, body);
   persist();
@@ -1154,6 +1155,7 @@ app.patch("/api/micro-influencer-deals/:id", requireAuth, (req,res)=>{
   if("instagramAccount" in body) body.instagramAccount = normalizeInstagramUrl(body.instagramAccount);
   if("reelsLink" in body) body.reelsLink = normalizeLinkUrl(body.reelsLink);
   if("tiktokVideoLink" in body) body.tiktokVideoLink = normalizeLinkUrl(body.tiktokVideoLink);
+  delete body.socialViewsAuto; delete body.reachAutoSet; // просмотры по ссылке (Apify) ведёт только сервер
   Object.assign(d, body);
   persist();
   res.json(d);
@@ -1460,6 +1462,12 @@ app.post("/api/attribution/recalc", requireAuth, async (req,res)=>{
   const out = await Promise.race([job.then(()=> "done"), timeout]);
   res.json(Object.assign({done: out==="done"}, state.attributionRun || {}));
 });
+// «Обновить просмотры сейчас» — Apify по ссылкам на ролики (social-views.js). Идёт в фоне до
+// нескольких минут; ответ сразу, результат — в state.socialViewsSync и в полях охвата.
+app.post("/api/social-views/sync", requireAuth, (req,res)=>{
+  maybeSyncSocialViews(true);
+  res.json(Object.assign({started:true}, state.socialViewsSync || {}));
+});
 app.post("/api/drive-folders/sync", requireAuth, async (req,res)=>{
   try{ await maybeSyncDriveFolders(true); res.json(state.driveSync || {}); }
   catch(e){ res.status(500).json({error:e.message}); }
@@ -1501,6 +1509,23 @@ async function maybeSyncDriveFolders(force){
   }finally{ driveRunning = false; }
 }
 
+/* ---------- Просмотры роликов Instagram/TikTok через Apify (social-views.js) ----------
+   Раз в 30 мин проверяет, каким роликам пора обновить просмотры (свежие — чаще), и пишет их в
+   пустые поля охвата (ручная цифра главнее). Работает в фоне, тик не ждёт. Без APIFY_TOKEN — ничего. */
+const { syncSocialViews } = require("./social-views.js");
+const SOCIAL_EVERY_MS = 30*60*1000;
+let lastSocialRunAt = 0, socialRunning = false;
+function maybeSyncSocialViews(force){
+  if(socialRunning) return;
+  if(!force && Date.now() - lastSocialRunAt < SOCIAL_EVERY_MS) return;
+  socialRunning = true;
+  lastSocialRunAt = Date.now();
+  syncSocialViews(state, {force: !!force})
+    .then(changed=>{ if(changed) persist(); })
+    .catch(e=> console.error("Просмотры (Apify):", e.message))
+    .finally(()=>{ socialRunning = false; });
+}
+
 // Последовательно: сначала отправить свежие интеграции (ШК/дата/охват), потом считать,
 // потом забрать результат — иначе расчёт шёл бы по устаревшим строкам, а фронтенд
 // получал бы результат прошлого прогона.
@@ -1509,6 +1534,7 @@ async function placementsTick(label){
   await maybeRunDailyAttribution().catch(e=> console.error(`Attribution (${label}):`, e.message));
   await pullAttributionFact().catch(e=> console.error(`Pull-fact (${label}):`, e.message));
   await maybeSyncDriveFolders().catch(e=> console.error(`Drive (${label}):`, e.message));
+  maybeSyncSocialViews();
 }
 placementsTick("старт");
 setInterval(()=> placementsTick("интервал"), 3*60*1000);
