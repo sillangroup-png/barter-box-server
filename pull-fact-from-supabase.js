@@ -47,9 +47,11 @@ async function pullOne(pgPool, dealsArray, source, { log }) {
       continue;
     }
 
-    // Суммы берём ТОЛЬКО у статусов с числом (ok / zero). У остальных — null,
-    // даже если в базе что-то осталось: во фронтенде это «—», а не число.
-    const hasNumber = r.auto_contribution_status === "ok" || r.auto_contribution_status === "zero";
+    // Суммы берём ТОЛЬКО у статусов ok / zero. У остальных — null, даже если в базе что-то
+    // осталось: во фронтенде это «—», а не число. v7: предварительная сумма открытого окна
+    // в официальное поле не попадает — она в метке ⟦v7;…;p=1⟧ в начале заметки, фронтенд
+    // показывает её как «⏳ пока N ₸» и в итоги/ROMI не берёт.
+    const hasNumber = ["ok","zero"].includes(r.auto_contribution_status);
     deal.autoContributionUnits = hasNumber && r.auto_contribution_units !== null ? Number(r.auto_contribution_units) : null;
     deal.autoContributionKzt = hasNumber && r.auto_contribution_kzt !== null ? Number(r.auto_contribution_kzt) : null;
     deal.autoContributionStatus = r.auto_contribution_status;
