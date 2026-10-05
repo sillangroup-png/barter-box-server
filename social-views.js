@@ -9,12 +9,13 @@
 // Куда пишем (поля те же, новых колонок нет):
 //   микро:   reelsLink (Instagram)  → factReachReels;  tiktokVideoLink → factReachTT
 //   крупные: reelsLink (Instagram или TikTok — по адресу) → reach
-// Ручное значение главнее: пишем, только если поле пустое/0 ИЛИ в нём лежит то, что мы сами
-// записали прошлый раз (deal.reachAutoSet[поле]). Если менеджер исправил цифру — больше не трогаем.
-// Детали последнего запроса — deal.socialViewsAuto = {ig:{...}, tt:{...}}.
+// v2 (05.10.2026, решение Нины): просмотры по ссылке ЗАМЕНЯЮТ охват сразу, в т.ч. ручной, и идут
+// в общий охват. Где ссылки на ролик нет или просмотры не получены (сторис, фото, закрытый аккаунт),
+// остаётся ручная цифра. deal.reachAutoSet[поле] — что записал сервер; детали последнего запроса —
+// deal.socialViewsAuto = {ig:{...}, tt:{...}}.
 //
 // Когда обновляем: ролики ≤ 2 дней — раз в 6 ч, ≤ 8 дней — раз в сутки, потом цифра
-// фиксируется. Старые выходы (с 01.09.2026) с пустым охватом — один раз (дозаполнение).
+// фиксируется. Старые выходы (с 01.09.2026) — один раз (дозаполнение/замена).
 // Нужен APIFY_TOKEN в Render → Environment. Без него модуль ничего не делает.
 // Стоимость (сентябрь 2026): Instagram Scraper ~$1.5, TikTok Scraper ~$1.7 за 1000 роликов.
 // ============================================================================
@@ -22,7 +23,7 @@
 const IG_ACTOR = process.env.APIFY_IG_ACTOR || "apify~instagram-scraper";
 const TT_ACTOR = process.env.APIFY_TT_ACTOR || "clockworks~tiktok-scraper";
 const BACKFILL_FROM = process.env.SOCIAL_VIEWS_BACKFILL_FROM || "2026-09-01";
-const MAX_PER_RUN = Number(process.env.SOCIAL_VIEWS_MAX_PER_RUN) || 80;
+const MAX_PER_RUN = Number(process.env.SOCIAL_VIEWS_MAX_PER_RUN) || 150;
 const H = 3600 * 1000;
 
 function almatyToday() { return new Date(Date.now() + 5 * H).toISOString().slice(0, 10); }
@@ -78,8 +79,8 @@ function isDue(deal, kind, t, nowMs, today) {
   const last = sameLink && prev.fetchedAt ? Date.parse(prev.fetchedAt) : 0;
   if (sameLink && prev.errors >= 3 && !prev.views) return false;                  // 3 раза не нашли — хватит
   if (!sameLink || !last) {
-    // Новая ссылка: свежие выходы — сразу; старые — только если охват пустой (дозаполнение).
-    return age <= 8 || (pd >= BACKFILL_FROM && isEmptyNum(deal[t.field]));
+    // Новая ссылка: свежие выходы — сразу; старые с 01.09 — один раз.
+    return age <= 8 || pd >= BACKFILL_FROM;
   }
   if (prev.error && nowMs - last < 24 * H) return false;
   if (age <= 2) return nowMs - last >= 6 * H;
@@ -159,21 +160,31 @@ function applyResult(deal, t, res, nowIso) {
     if (sameLink && prev.views) { rec.views = prev.views; rec.likes = prev.likes; rec.comments = prev.comments; }   // не теряем прошлую цифру
   } else rec.errors = 0;
   deal.socialViewsAuto[t.net] = rec;
-  let changed = true;
-  if (rec.views) {
-    deal.reachAutoSet = deal.reachAutoSet || {};
-    const cur = deal[t.field];
-    const ours = deal.reachAutoSet[t.field];
-    const manual = !isEmptyNum(cur) && !(ours != null && Number(cur) === Number(ours));
-    if (manual) {
-      if (ours != null) delete deal.reachAutoSet[t.field];                         // менеджер исправил — его цифра главнее
-      rec.manualKept = true;
-    } else if (Number(cur) !== rec.views) {
-      deal[t.field] = rec.views;
-      deal.reachAutoSet[t.field] = rec.views;
+  if (rec.views) writeViews(deal, t.field, rec.views);
+  return true;
+}
+// Просмотры заменяют охват в поле (ручная цифра тоже заменяется — так решено).
+function writeViews(deal, field, views) {
+  deal.reachAutoSet = deal.reachAutoSet || {};
+  if (Number(deal[field]) === views && deal.reachAutoSet[field] === views) return false;
+  deal[field] = views;
+  deal.reachAutoSet[field] = views;
+  return true;
+}
+// Уже полученные просмотры подставить в охват сразу, без нового запроса в Apify (если ссылка та же).
+function reconcileStored(state) {
+  let n = 0;
+  for (const [kind, list] of [["micro", state.microInfluencerDeals || []], ["large", state.influencerDeals || []]]) {
+    for (const d of list) {
+      const sv = d.socialViewsAuto;
+      if (!sv) continue;
+      for (const t of targetsOf(d, kind)) {
+        const r = sv[t.net];
+        if (r && r.url === t.url && r.views) { if (writeViews(d, t.field, r.views)) n++; delete r.manualKept; }
+      }
     }
   }
-  return changed;
+  return n;
 }
 
 let running = false;
@@ -187,10 +198,11 @@ async function syncSocialViews(state, { force = false, log = console.log } = {})
   const today = almatyToday();
   const summary = { lastRunAt: nowIso, checked: 0, updated: 0, notFound: 0, igRequested: 0, ttRequested: 0, error: null };
   try {
+    summary.replacedFromStored = reconcileStored(state);
     const jobs = [];
     for (const [kind, list] of [["micro", state.microInfluencerDeals || []], ["large", state.influencerDeals || []]]) {
       for (const d of list) for (const t of targetsOf(d, kind)) {
-        if (force ? !!pubDateOf(d, kind) && (daysBetween(pubDateOf(d, kind), today) <= 8 || isEmptyNum(d[t.field])) : isDue(d, kind, t, started, today)) jobs.push({ d, kind, t });
+        if (isDue(d, kind, t, started, today) || (force && !!pubDateOf(d, kind) && daysBetween(pubDateOf(d, kind), today) <= 8)) jobs.push({ d, kind, t });
       }
     }
     // Сначала самые свежие выходы.
@@ -220,9 +232,9 @@ async function syncSocialViews(state, { force = false, log = console.log } = {})
     summary.durationMs = Date.now() - started;
     summary.pending = Math.max(0, jobs.filter((j) => j.t.net === "ig").length - ig.length) + Math.max(0, jobs.filter((j) => j.t.net === "tt").length - tt.length);
     state.socialViewsSync = summary;
-    log(`[social-views] проверено ${summary.checked} (IG ${summary.igRequested}, TT ${summary.ttRequested}), охват обновлён ${summary.updated}, не найдено ${summary.notFound}, в очереди ${summary.pending}${summary.error ? ", ошибка: " + summary.error : ""}`);
+    log(`[social-views] подставлено из уже полученных ${summary.replacedFromStored}; проверено ${summary.checked} (IG ${summary.igRequested}, TT ${summary.ttRequested}), охват обновлён ${summary.updated}, не найдено ${summary.notFound}, в очереди ${summary.pending}${summary.error ? ", ошибка: " + summary.error : ""}`);
     return changed || true;
   } finally { running = false; }
 }
 
-module.exports = { syncSocialViews, igShortcode, ttVideoId, ttKey, platformOfLink, targetsOf, isDue, applyResult, parseIg, parseTt };
+module.exports = { syncSocialViews, reconcileStored, igShortcode, ttVideoId, ttKey, platformOfLink, targetsOf, isDue, applyResult, parseIg, parseTt };
