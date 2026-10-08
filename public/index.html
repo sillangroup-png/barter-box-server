@@ -444,7 +444,7 @@ const Api = {
   // см. maybeFreezeManualRomi() и /api/influencer-romi-freeze на сервере.
   recalcAttribution: ()=> apiFetch("/api/attribution/recalc", {method:"POST", headers:jsonHeaders, body:"{}"}),
   syncDriveFolders: ()=> apiFetch("/api/drive-folders/sync", {method:"POST", headers:jsonHeaders, body:"{}"}),
-  syncSocialViews: ()=> apiFetch("/api/social-views/sync", {method:"POST", headers:jsonHeaders, body:"{}"}),
+  syncSocialViews: (month, kind)=> apiFetch("/api/social-views/sync", {method:"POST", headers:jsonHeaders, body:JSON.stringify({month, kind})}),
   freezeManualRomi: (large, micro)=> apiFetch("/api/influencer-romi-freeze", {method:"POST", headers:jsonHeaders, body:JSON.stringify({large, micro})}),
 };
 
@@ -566,8 +566,15 @@ function tplAttributionRecalcBar(){
     ${UI.readOnly ? "" : `<button class="btn btn-ghost btn-sm attr-recalc-btn">Пересчитать вклад сейчас</button>`}
     <span style="flex-basis:100%;height:0"></span>
     <span title="Просмотры роликов по ссылке на Reels/TikTok (Apify). Заменяют охват в поле (и в общем охвате) с пометкой «авто», ручная цифра тоже заменяется; где ссылки на ролик нет или просмотры не получены — остаётся ручная. Свежие ролики обновляются каждые 6 ч, до 8-го дня — раз в сутки. Сторис публично не видны — их охват вручную.">👁 Просмотры по ссылкам (авто-охват): ${svInfo}.</span>
-    ${UI.readOnly ? "" : `<button class="btn btn-ghost btn-sm views-sync-btn">Обновить просмотры</button>`}
+    ${UI.readOnly ? "" : (()=>{ const vs = viewsSyncScope(); return vs.month
+      ? `<button class="btn btn-ghost btn-sm views-sync-btn" title="Запросить просмотры по ссылкам у всех роликов ${vs.kind==="micro"?"микро/средних":"крупных"} интеграций за ${escapeHtml(monthLabel(vs.month))} (кроме проверенных меньше часа назад). Другие месяцы и вкладки не трогаются.">Обновить охваты за ${escapeHtml(monthLabel(vs.month))}</button>`
+      : `<button class="btn btn-ghost btn-sm" disabled title="Выберите месяц — охваты обновляются только за открытый месяц">Обновить охваты — выберите месяц</button>`; })()}
   </div>`;
+}
+// Какой месяц и какая таблица сейчас открыты — кнопка «Обновить охваты» работает только по ним.
+function viewsSyncScope(){
+  const micro = UI.tab==="microInfluencers";
+  return {kind: micro ? "micro" : "large", month: (micro ? UI.microMonth : UI.inflMonth) || ""};
 }
 // Пометка у охвата: цифра пришла автоматически (просмотры по ссылке через Apify) или ручная,
 // а просмотры по ссылке есть рядом. fields — поля охвата этой строки.
@@ -605,9 +612,11 @@ function wireAttributionRecalc(){
     btn.onclick = async ()=>{
       document.querySelectorAll(".views-sync-btn").forEach(b=>{ b.disabled = true; b.textContent = "Запрошено…"; });
       try{
-        const r = await Api.syncSocialViews();
+        const vs = viewsSyncScope();
+        const r = await Api.syncSocialViews(vs.month, vs.kind);
         if(r && /APIFY_TOKEN/.test(r.error||"")) toast("Не задан APIFY_TOKEN в Render", true);
-        else toast("Просмотры обновляются в фоне (1–3 мин) — потом обновите страницу и пересчитайте вклад");
+        else if(r && r.busy) toast("Охваты уже обновляются — подождите пару минут и нажмите ещё раз", true);
+        else toast(`Охваты за ${monthLabel(vs.month)} обновляются в фоне (1–3 мин) — потом обновите страницу и пересчитайте вклад`);
       }catch(e){ toast(e.message, true); }
     };
   });
@@ -7451,6 +7460,16 @@ async function runSelfTests(){
     const bar = tplAttributionRecalcBar();
     if(!bar.includes("Просмотры по ссылкам")) throw new Error("строка про просмотры в панели пересчёта");
     if(String(Api.syncSocialViews).indexOf("/api/social-views/sync")<0) throw new Error("эндпоинт");
+    const sTab = UI.tab, sMM = UI.microMonth, sIM = UI.inflMonth;
+    try{
+      UI.tab = "microInfluencers"; UI.microMonth = "2026-10";
+      const b1 = tplAttributionRecalcBar();
+      if(!b1.includes("Обновить охваты за") || !/октябр/i.test(b1)) throw new Error("кнопка с открытым месяцем: "+b1);
+      const v = viewsSyncScope(); if(v.kind!=="micro" || v.month!=="2026-10") throw new Error("scope micro");
+      UI.tab = "influencerDeals"; UI.inflMonth = "";
+      if(!tplAttributionRecalcBar().includes("выберите месяц")) throw new Error("без месяца — кнопка неактивна");
+      if(viewsSyncScope().kind!=="large") throw new Error("scope large");
+    } finally { UI.tab = sTab; UI.microMonth = sMM; UI.inflMonth = sIM; }
   });
   TestSuite.test("D0: autoContributionCell показывает сумму только для ok/zero, у остальных статусов «—» без числа", ()=>{
     const okHtml = autoContributionCell({autoContributionStatus:"ok", autoContributionKzt:30000, autoContributionUnits:5});
