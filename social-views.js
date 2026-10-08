@@ -188,7 +188,9 @@ function reconcileStored(state) {
 }
 
 let running = false;
-async function syncSocialViews(state, { force = false, log = console.log } = {}) {
+// month ("YYYY-MM") + kind ("micro"|"large") — кнопка «Обновить охваты» на открытой вкладке:
+// обновляем ВСЕ ролики этой вкладки за этот месяц (кроме проверенных меньше часа назад), остальное не трогаем.
+async function syncSocialViews(state, { force = false, month = null, kind: onlyKind = null, log = console.log } = {}) {
   const token = process.env.APIFY_TOKEN;
   if (!token) { state.socialViewsSync = { lastRunAt: new Date().toISOString(), error: "APIFY_TOKEN не задан в Render", updated: 0 }; return false; }
   if (running) return false;
@@ -200,8 +202,19 @@ async function syncSocialViews(state, { force = false, log = console.log } = {})
   try {
     summary.replacedFromStored = reconcileStored(state);
     const jobs = [];
+    const monthOk = month && /^\d{4}-\d{2}$/.test(month);
+    summary.scope = monthOk ? { month, kind: onlyKind || "all" } : null;
     for (const [kind, list] of [["micro", state.microInfluencerDeals || []], ["large", state.influencerDeals || []]]) {
+      if (monthOk && onlyKind && onlyKind !== kind) continue;
       for (const d of list) for (const t of targetsOf(d, kind)) {
+        if (monthOk) {
+          const pd = pubDateOf(d, kind);
+          if (!pd || pd.slice(0, 7) !== month) continue;
+          const prev = d.socialViewsAuto && d.socialViewsAuto[t.net];
+          const fresh = prev && prev.url === t.url && prev.fetchedAt && started - Date.parse(prev.fetchedAt) < H;
+          if (!fresh) jobs.push({ d, kind, t });
+          continue;
+        }
         if (isDue(d, kind, t, started, today) || (force && !!pubDateOf(d, kind) && daysBetween(pubDateOf(d, kind), today) <= 8)) jobs.push({ d, kind, t });
       }
     }
