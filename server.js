@@ -67,6 +67,12 @@ const MARKETER_VIEWERS = [
   // ничего не пишет. Отдельная от Анны учётка, чтобы не путать человека и синхронизацию в логах.
   {name:"Kaspi-sync", login: process.env.KASPI_SYNC_LOGIN || null, password: process.env.KASPI_SYNC_PASSWORD || null},
 ];
+// Дополнительные логины маркетолога С ПРАВОМ РЕДАКТИРОВАНИЯ (обычные права маркетолога, не
+// «только просмотр»). Логин можно держать в коде, пароль — только в Render → Environment
+// (репозиторий публичный). Пока пароль не задан, вход по этому логину не работает.
+const MARKETER_USERS = [
+  {name:"Ольга", login: process.env.OLGA_LOGIN || "olga", password: process.env.OLGA_PASSWORD || null},
+];
 // ---------- сессии (самодостаточный подписанный токен, БЕЗ хранения на сервере) ----------
 // История вопроса: сначала токены жили в обычной `new Map()` в памяти процесса — любой перезапуск
 // (передеплой; на Render ещё и автоусыпление сервиса при простое с холодным стартом) стирал их все
@@ -631,6 +637,11 @@ app.post("/api/auth/login", (req,res)=>{
     if(viewer){
       const token = signSession({role, readOnly:true, name: viewer.name});
       return res.json({ok:true, token, readOnly:true});
+    }
+    const user = MARKETER_USERS.find(v=> v.login && v.password && v.login===login && v.password===password);
+    if(user){
+      const token = signSession({role, name: user.name});
+      return res.json({ok:true, token});
     }
   }
   if(!cfg.login || !cfg.password){
@@ -1464,8 +1475,14 @@ app.post("/api/attribution/recalc", requireAuth, async (req,res)=>{
 });
 // «Обновить просмотры сейчас» — Apify по ссылкам на ролики (social-views.js). Идёт в фоне до
 // нескольких минут; ответ сразу, результат — в state.socialViewsSync и в полях охвата.
+// body: {month:"YYYY-MM", kind:"micro"|"large"} — только ролики открытой вкладки за этот месяц.
 app.post("/api/social-views/sync", requireAuth, (req,res)=>{
-  maybeSyncSocialViews(true);
+  const b = req.body || {};
+  const month = /^\d{4}-\d{2}$/.test(String(b.month||"")) ? String(b.month) : null;
+  const kind = b.kind==="micro" || b.kind==="large" ? b.kind : null;
+  if(!month) return res.status(400).json({error:"выберите месяц — обновляются охваты только открытого месяца"});
+  if(socialRunning) return res.json(Object.assign({started:false, busy:true}, state.socialViewsSync || {}));
+  maybeSyncSocialViews(true, {month, kind});
   res.json(Object.assign({started:true}, state.socialViewsSync || {}));
 });
 app.post("/api/drive-folders/sync", requireAuth, async (req,res)=>{
@@ -1515,12 +1532,12 @@ async function maybeSyncDriveFolders(force){
 const { syncSocialViews } = require("./social-views.js");
 const SOCIAL_EVERY_MS = 30*60*1000;
 let lastSocialRunAt = 0, socialRunning = false;
-function maybeSyncSocialViews(force){
+function maybeSyncSocialViews(force, opts){
   if(socialRunning) return;
   if(!force && Date.now() - lastSocialRunAt < SOCIAL_EVERY_MS) return;
   socialRunning = true;
-  lastSocialRunAt = Date.now();
-  syncSocialViews(state, {force: !!force})
+  if(!opts) lastSocialRunAt = Date.now();
+  syncSocialViews(state, Object.assign({force: !!force}, opts || {}))
     .then(changed=>{ if(changed) persist(); })
     .catch(e=> console.error("Просмотры (Apify):", e.message))
     .finally(()=>{ socialRunning = false; });
