@@ -676,7 +676,8 @@ const LINES_CTE = `
 // Какие строки считаем вышедшими. Не только status='published': у микро после оплаты статус
 // становится «оплачено» (paid), а у части выходов отметку «опубликовано» не ставят, хотя есть дата
 // выхода и ссылка на ролик. Поэтому: опубликовано, ИЛИ есть дата выхода и (оплачено или есть ссылка).
-const PUBLISHED_SQL = `(status = 'published' OR (published_date IS NOT NULL AND (status = 'paid' OR NULLIF(btrim(video_url), '') IS NOT NULL)))`;
+// Отменённые (status = 'cancelled') не считаются никогда, даже если у них стоит дата или ссылка.
+const PUBLISHED_SQL = `(status IS DISTINCT FROM 'cancelled' AND (status = 'published' OR (published_date IS NOT NULL AND (status = 'paid' OR NULLIF(btrim(video_url), '') IS NOT NULL))))`;
 
 async function runDailyAttribution(pgPool, { log = console.log } = {}) {
   const nowHour = almatyNowHour();
