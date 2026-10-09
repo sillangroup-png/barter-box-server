@@ -72,6 +72,8 @@ const MARKETER_VIEWERS = [
 // (репозиторий публичный). Пока пароль не задан, вход по этому логину не работает.
 const MARKETER_USERS = [
   {name:"Ольга", login: process.env.OLGA_LOGIN || "olga", password: process.env.OLGA_PASSWORD || null},
+  {name:"Оксана", login: process.env.OXANA_LOGIN || "oxana", password: process.env.OXANA_PASSWORD || null},
+  {name:"Зара", login: process.env.ZARA_LOGIN || "zara", password: process.env.ZARA_PASSWORD || null},
 ];
 // ---------- сессии (самодостаточный подписанный токен, БЕЗ хранения на сервере) ----------
 // История вопроса: сначала токены жили в обычной `new Map()` в памяти процесса — любой перезапуск
