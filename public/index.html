@@ -319,7 +319,11 @@ const BOX_TYPES = ["Уход премиум","Бьюти-бокс","Гаджет
 const LOGISTICS_COST_DEFAULT = 1500;
 const PLATFORMS = ["Instagram Reels","Instagram Stories","TikTok","YouTube Shorts","Отзыв / пост"];
 const BLOGGER_TIERS = ["Малый (эффект 1–7 дней)","Крупный (эффект 2–3 недели)"];
-const DEAL_STATUSES = ["Запланирована","Опубликована","Оплачена","Закрыта"];
+const DEAL_STATUSES = ["Запланирована","Опубликована","Оплачена","Закрыта","Отменена"];
+// «Отменена» — интеграция не состоится: строка остаётся в таблице (её видно и можно вернуть
+// статус), но в суммы, планы/факты, дашборды, планер и расчёт вклада не идёт.
+function isDealCancelled(d){ return !!d && d.status==="Отменена"; }
+function activeInfluencerDeals(){ return (DataManager.state.influencerDeals||[]).filter(d=>!isDealCancelled(d)); }
 // Инфлюенс интеграции микро/средние (отв. Нина) — платные размещения у мелких/средних блогеров,
 // обычно Instagram Reels + TikTok кросспостингом за одну сумму. Без ROMI по продажам (см. server.js).
 const MICRO_PAYMENT_STATUSES = ["не оплачено","к оплате","оплачено"];
@@ -1222,7 +1226,7 @@ function median(arr){
 function computeUnifiedInfluencerRomi(){
   const {influencerDeals, microInfluencerDeals, salesByDay} = DataManager.state;
   const units = [
-    ...influencerDeals.map(d=>({key:'large:'+d.id, type:'large', matchKey:dealMatchKey(d), date:d.publishedDate, cost:d.cost||0, deal:d})),
+    ...influencerDeals.filter(d=>!isDealCancelled(d)).map(d=>({key:'large:'+d.id, type:'large', matchKey:dealMatchKey(d), date:d.publishedDate, cost:d.cost||0, deal:d})),
     // cost для микро/средних — оплата + себестоимость товара (microDealTotalCost), см. её комментарий:
     // бартерная выдача товара — тоже реальный расход, поэтому ROMI микро-интеграций считается по сумме.
     ...microInfluencerDeals.map(d=>({key:'micro:'+d.id, type:'micro', matchKey:microDealMatchKey(d), date:d.publishDate, cost:microDealTotalCost(d), deal:d})),
@@ -1446,10 +1450,15 @@ function frozenRomiRow(deal){
   return {deal, netContribution:deal.frozenNetContribution, romi:deal.frozenRomi, hasBaseline:!!deal.frozenHasBaseline, capped:!!deal.frozenCapped, source:"frozen1c"};
 }
 function computeInfluencerRomi(){
-  return (DataManager.state.influencerDeals||[]).map(d=>{
+  return activeInfluencerDeals().map(d=>{
     if(d.frozenAt && (d.publishedDate||"") < KASPI_D0_SINCE) return frozenRomiRow(d);
     return kaspiContributionOf(d, d.cost||0);
   });
+}
+// Для таблицы крупных — все строки, включая отменённые (их видно и можно отфильтровать).
+function computeInfluencerRomiAll(){
+  const live = new Map(computeInfluencerRomi().map(r=>[r.deal.id, r]));
+  return (DataManager.state.influencerDeals||[]).map(d=> live.get(d.id) || Object.assign(kaspiContributionOf(d, d.cost||0), {cancelled:true}));
 }
 // ---------- Авто-расчёт вклада из Supabase (Kaspi), отдельная колонка ----------
 // НЕ трогает и НЕ заменяет расчёт выше (computeUnifiedInfluencerRomi, база по salesByDay/1С).
@@ -2704,7 +2713,7 @@ const UI = {
   reportSort: "", // сортировка кликом по заголовку в "Сводном отчёте" (см. sortableTh) — платформа/дата публ./охват/ER/клики/продажи/выручка
   reportPeriod: {from:"", to:""}, // период (по дате публикации) для сводки "Сколько выложили" в верхней части "Сводного отчёта" — см. reportPeriodSummary()
   reportOnlyWaiting: false, // фильтр "Сводного отчёта": показывать только доставленные, но ещё не выложенные (чтобы обзванивать блогеров)
-  inflFilter: {search:"", sort:"default", month:"", dateFrom:"", dateTo:"", responsible:"", category:""},
+  inflFilter: {search:"", sort:"default", month:"", dateFrom:"", dateTo:"", responsible:"", category:"", status:""},
   microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:"", dateFrom:"", dateTo:""},
   // ЕДИНЫЙ месяц на всю вкладку. Раньше на каждой вкладке было 3-4 независимых фильтра месяца
   // (дашборд / сводка по блогерам / сводка по ответственным / таблица интеграций), и месяц
@@ -3674,9 +3683,8 @@ function tplInfluencerCompare(rows){
 // функцию, чтобы и рендер таблицы, и кнопка "Экспорт CSV" показывали/выгружали ОДНИ И ТЕ ЖЕ
 // строки (с учётом текущего поиска/месяца/сортировки), а не расходились логикой в двух местах.
 function filteredInfluencerDealRows(){
-  const s = influencerSummary();
   const fi = UI.inflFilter;
-  let rows = s.rows;
+  let rows = computeInfluencerRomiAll();
   if(fi.search){
     const q = fi.search.toLowerCase();
     rows = rows.filter(r=> (r.deal.blogerLogin||"").toLowerCase().includes(q));
@@ -3692,6 +3700,10 @@ function filteredInfluencerDealRows(){
   }
   if(fi.category){
     rows = rows.filter(r=> r.deal.bloggerCategory===fi.category);
+  }
+  // Статус интеграции (Запланирована / Опубликована / Оплачена / Закрыта).
+  if(fi.status){
+    rows = rows.filter(r=> (r.deal.status||DEAL_STATUSES[0])===fi.status);
   }
   const sorters = {
     sales_desc: (a,b)=> (b.netContribution||0)-(a.netContribution||0),
@@ -3756,7 +3768,7 @@ function planProgressCell(fact, plan){
   </div></td>`;
 }
 function largeFact(month){
-  const deals = DataManager.state.influencerDeals.filter(d=>(d.publishedDate||"").slice(0,7)===month);
+  const deals = activeInfluencerDeals().filter(d=>(d.publishedDate||"").slice(0,7)===month);
   return {
     bloggers: new Set(deals.map(d=>d.blogerLogin||"—")).size,
     integrations: deals.length,
@@ -3764,7 +3776,7 @@ function largeFact(month){
   };
 }
 function productFact(month, barcode){
-  const large = DataManager.state.influencerDeals.filter(d=>(d.barcode||"").trim()===barcode && (d.publishedDate||"").slice(0,7)===month);
+  const large = activeInfluencerDeals().filter(d=>(d.barcode||"").trim()===barcode && (d.publishedDate||"").slice(0,7)===month);
   const micro = DataManager.state.microInfluencerDeals.filter(d=>(d.barcode||"").trim()===barcode && (d.publishDate||"").slice(0,7)===month);
   return {
     integrations: large.length + micro.length,
@@ -3772,7 +3784,7 @@ function productFact(month, barcode){
   };
 }
 function productScheduled(month, barcode){
-  const deals = DataManager.state.influencerDeals.filter(d=>(d.barcode||"").trim()===barcode && (d.plannedDate||"").slice(0,7)===month);
+  const deals = activeInfluencerDeals().filter(d=>(d.barcode||"").trim()===barcode && (d.plannedDate||"").slice(0,7)===month);
   return {
     integrations: deals.length,
     budget: deals.reduce((a,d)=>a+(d.plannedCost||d.cost||0),0),
@@ -3805,8 +3817,8 @@ function microPlanProductRows(month){
 function planProductRows(month){
   const set = new Set();
   (DataManager.state.plans||[]).forEach(p=>{ if(p.month===month && p.scope==="product" && p.key) set.add(p.key); });
-  DataManager.state.influencerDeals.forEach(d=>{ const b=(d.barcode||"").trim(); if(b && (d.publishedDate||"").slice(0,7)===month) set.add(b); });
-  DataManager.state.influencerDeals.forEach(d=>{ const b=(d.barcode||"").trim(); if(b && (d.plannedDate||"").slice(0,7)===month) set.add(b); });
+  activeInfluencerDeals().forEach(d=>{ const b=(d.barcode||"").trim(); if(b && (d.publishedDate||"").slice(0,7)===month) set.add(b); });
+  activeInfluencerDeals().forEach(d=>{ const b=(d.barcode||"").trim(); if(b && (d.plannedDate||"").slice(0,7)===month) set.add(b); });
   DataManager.state.microInfluencerDeals.forEach(d=>{ const b=(d.barcode||"").trim(); if(b && (d.publishDate||"").slice(0,7)===month) set.add(b); });
   const nameByBarcode = {};
   DataManager.state.salesByDay.forEach(s=>{ const b=(s.barcode||"").trim(); if(b && !nameByBarcode[b]) nameByBarcode[b]=s.product; });
@@ -3974,10 +3986,10 @@ function cohortScheduledList(month, cohort){
   const mapLarge = d=>({blogerLogin:d.blogerLogin||"—", product:(d.product||"").trim()||"Без товара", barcode:d.barcode||"", cost:d.plannedCost||d.cost||0, contribution:d.plannedContribution||0, status:d.status||"—"});
   const mapMicro = d=>({blogerLogin:d.blogerLogin||"—", product:(d.product||"").trim()||"Без товара", barcode:d.barcode||"", cost:microDealTotalCost(d), contribution:d.plannedContribution||0, status:d.status||"—"});
   if(cohort==="top"){
-    return (DataManager.state.influencerDeals||[]).filter(d=>(d.plannedDate||"").slice(0,7)===month && !isAltynay(d)).map(mapLarge);
+    return activeInfluencerDeals().filter(d=>(d.plannedDate||"").slice(0,7)===month && !isAltynay(d)).map(mapLarge);
   }
   if(cohort==="mid"){
-    const fromLarge = (DataManager.state.influencerDeals||[]).filter(d=>(d.plannedDate||"").slice(0,7)===month && isAltynay(d)).map(mapLarge);
+    const fromLarge = activeInfluencerDeals().filter(d=>(d.plannedDate||"").slice(0,7)===month && isAltynay(d)).map(mapLarge);
     const fromMicro = (DataManager.state.microInfluencerDeals||[]).filter(d=>(d.plannedDate||"").slice(0,7)===month && microDealTotalCost(d) >= th).map(mapMicro);
     return fromLarge.concat(fromMicro);
   }
@@ -4328,6 +4340,7 @@ function tplInfluencerDeals(){
           ${months.map(m=>`<option value="${m}" ${fi.month===m?'selected':''}>${monthLabel(m)}</option>`).join("")}
         </select>
         <select id="infl-responsible-filter"><option value="">Все ответственные</option>${inflResponsibles.map(r=>`<option value="${escapeHtml(r)}" ${fi.responsible===r?'selected':''}>${escapeHtml(r)}</option>`).join("")}</select>
+        <select id="infl-status-filter"><option value="">Все статусы</option>${DEAL_STATUSES.map(st=>`<option value="${escapeHtml(st)}" ${fi.status===st?'selected':''}>${escapeHtml(st)}</option>`).join("")}</select>
         <select id="infl-category-filter"><option value="">Все категории</option>${LARGE_BLOGGER_CATEGORIES.map(c=>`<option value="${escapeHtml(c)}" ${fi.category===c?'selected':''}>${escapeHtml(c)}</option>`).join("")}</select>
         <select id="infl-sort">
           <option value="default" ${fi.sort==='default'?'selected':''}>Без сортировки</option>
@@ -4380,7 +4393,7 @@ function tplInfluencerDeals(){
         <tbody>
           ${rows.map((r,i)=>{
             const d = r.deal;
-            return `<tr>
+            return `<tr${isDealCancelled(d)?' style="opacity:.5" title="Отменена — в суммы, планы и вклад не входит"':''}>
               <td>${i+1}</td>
               <td class="sticky-col"><b>${escapeHtml(d.blogerLogin)}</b>${d.instagramLink?` <a href="${escapeHtml(normalizeInstagramUrl(d.instagramLink))}" target="_blank" rel="noopener" title="Ссылка на Instagram">IG</a>`:''}${driveFolderIcon(d)}${d.lastUpdatedFrom==="telegram"?' <span class="badge badge-progress" title="Обновлено через Telegram-бота">TG</span>':''}</td>
               <td>${d.responsible ? escapeHtml(d.responsible) : `<span style="color:var(--ink-mute)">—</span>`}</td>
@@ -5565,7 +5578,7 @@ function monthGridDates(ym){
 // name — что писать на карточке, date — в какой день её положить, link — куда ведёт клик по имени.
 function calendarDeals(source){
   if(source === "large"){
-    return DataManager.state.influencerDeals.map(d=>({
+    return activeInfluencerDeals().map(d=>({
       id: d.id, raw: d, source: "large",
       name: d.blogerLogin || "—",
       product: d.product || "",
@@ -6196,6 +6209,8 @@ function wireDeskTab(){
     wireSearchOnEnter(inflSearch, v=>{ UI.inflFilter.search = v; renderDeskTab(); });
     document.getElementById("infl-sort").onchange = e=>{ UI.inflFilter.sort = e.target.value; renderDeskTab(); }; document.getElementById("infl-responsible-filter").onchange = e=>{ UI.inflFilter.responsible = e.target.value; renderDeskTab(); };
     document.getElementById("infl-category-filter").onchange = e=>{ UI.inflFilter.category = e.target.value; renderDeskTab(); };
+    const inflStatusFilter = document.getElementById("infl-status-filter");
+    if(inflStatusFilter) inflStatusFilter.onchange = e=>{ UI.inflFilter.status = e.target.value; renderDeskTab(); };
     document.getElementById("infl-month").onchange = e=>{ UI.inflFilter.month = e.target.value; renderDeskTab(); };
     document.getElementById("infl-date-from").onchange = e=>{ UI.inflFilter.dateFrom = e.target.value; renderDeskTab(); };
     document.getElementById("infl-date-to").onchange = e=>{ UI.inflFilter.dateTo = e.target.value; renderDeskTab(); };
@@ -7470,6 +7485,40 @@ async function runSelfTests(){
       if(!tplAttributionRecalcBar().includes("выберите месяц")) throw new Error("без месяца — кнопка неактивна");
       if(viewsSyncScope().kind!=="large") throw new Error("scope large");
     } finally { UI.tab = sTab; UI.microMonth = sMM; UI.inflMonth = sIM; }
+  });
+  TestSuite.test("Крупные: фильтр по статусу (Опубликована / Запланирована)", ()=>{
+    const savedDeals = DataManager.state.influencerDeals, savedFilter = JSON.stringify(UI.inflFilter);
+    try{
+      DataManager.state.influencerDeals = [
+        {id:79001, blogerLogin:"@pub", plannedDate:"2026-10-05", publishedDate:"2026-10-05", status:"Опубликована", cost:1},
+        {id:79002, blogerLogin:"@plan", plannedDate:"2026-10-20", publishedDate:"", status:"Запланирована", cost:1},
+      ];
+      UI.inflFilter = {search:"", sort:"default", month:"", status:"Опубликована"};
+      let ids = filteredInfluencerDealRows().map(r=>r.deal.id);
+      if(ids.join()!=="79001") throw new Error("опубликованные: "+ids);
+      UI.inflFilter.status = "Запланирована";
+      ids = filteredInfluencerDealRows().map(r=>r.deal.id);
+      if(ids.join()!=="79002") throw new Error("запланированные: "+ids);
+      UI.inflFilter.status = "";
+      if(filteredInfluencerDealRows().length!==2) throw new Error("все статусы");
+    } finally { DataManager.state.influencerDeals = savedDeals; UI.inflFilter = JSON.parse(savedFilter); }
+  });
+  TestSuite.test("Крупные: статус «Отменена» — строка видна в таблице, но не в суммах и планах", ()=>{
+    const savedDeals = DataManager.state.influencerDeals, savedFilter = JSON.stringify(UI.inflFilter);
+    try{
+      DataManager.state.influencerDeals = [
+        {id:79101, blogerLogin:"@ok", plannedDate:"2026-11-05", publishedDate:"2026-11-05", status:"Опубликована", cost:100000, barcode:"X"},
+        {id:79102, blogerLogin:"@cancel", plannedDate:"2026-11-10", publishedDate:"", status:"Отменена", cost:500000, barcode:"X"},
+      ];
+      if(DEAL_STATUSES.indexOf("Отменена")<0) throw new Error("нет статуса");
+      UI.inflFilter = {search:"", sort:"default", month:"", status:""};
+      if(filteredInfluencerDealRows().length!==2) throw new Error("в таблице обе строки");
+      UI.inflFilter.status = "Отменена";
+      if(filteredInfluencerDealRows().map(r=>r.deal.id).join()!=="79102") throw new Error("фильтр «Отменена»");
+      const s = influencerSummary();
+      if(s.totalCost!==100000 || s.count!==1) throw new Error("суммы без отменённой: "+s.totalCost+"/"+s.count);
+      if(productScheduled("2026-11","X").integrations!==1) throw new Error("план по товару без отменённой");
+    } finally { DataManager.state.influencerDeals = savedDeals; UI.inflFilter = JSON.parse(savedFilter); }
   });
   TestSuite.test("D0: autoContributionCell показывает сумму только для ok/zero, у остальных статусов «—» без числа", ()=>{
     const okHtml = autoContributionCell({autoContributionStatus:"ok", autoContributionKzt:30000, autoContributionUnits:5});
