@@ -551,7 +551,7 @@ function kaspiCoverageNote(monthRows, coveredCount){
   if(pending) parts.push(`${pending} — окно 24 ч ещё идёт или заказы догружаются, посчитаются сами`);
   if(notYet) parts.push(`${notYet} — ещё не считались`);
   if(other>0) parts.push(`${other} — «—» (нет фона, охвата, ШК или данных)`);
-  return "заказы Kaspi за 24 ч после выхода — " + parts.join("; ");
+  return "заказы Kaspi, модель «продажи ↔ охват выходов» — " + parts.join("; ");
 }
 function kaspiRevenueValue(s){ return s.coveredCount ? fmtNum(Math.round(s.totalContribution))+" ₸" : "—"; }
 function tplAttributionRecalcBar(){
@@ -1515,11 +1515,11 @@ function autoContributionHasNumber(d){
 // v7: в начале заметки сервер пишет машиночитаемую метку ⟦v7;t=итого;x=свои часы;s=из общих;
 // c=H|M|L;xh;sh;uh;cd;p=1⟧ — разбивка и уверенность без новых колонок в базе. В подсказке её не показываем.
 function autoContributionTag(d){
-  const m = String((d && d.autoContributionNote)||"").match(/^⟦v7;([^⟧]*)⟧/);
+  const m = String((d && d.autoContributionNote)||"").match(/^⟦(v[78]);([^⟧]*)⟧/);
   if(!m) return null;
-  const o = {};
-  m[1].split(";").forEach(kv=>{ const i = kv.indexOf("="); if(i>0) o[kv.slice(0,i)] = kv.slice(i+1); });
-  ["t","x","s","xh","sh","uh","cd"].forEach(k=>{ if(o[k]!=null) o[k] = Number(o[k]); });
+  const o = {v: m[1]};
+  m[2].split(";").forEach(kv=>{ const i = kv.indexOf("="); if(i>0) o[kv.slice(0,i)] = kv.slice(i+1); });
+  ["t","x","s","xh","sh","uh","cd","d0","tl"].forEach(k=>{ if(o[k]!=null) o[k] = Number(o[k]); });
   return o;
 }
 const AUTO_CONF_LABEL = {H:"высокая", M:"средняя", L:"низкая"};
@@ -1530,7 +1530,7 @@ function autoContributionCell(d){
   }
   const label = autoContributionShortReason(d) || AUTO_CONTRIB_STATUS_LABEL[status] || status;
   const tag = autoContributionTag(d);
-  const note = d.autoContributionNote ? escapeHtml(String(d.autoContributionNote).replace(/^⟦v7;[^⟧]*⟧\s*/, "")) : "";
+  const note = d.autoContributionNote ? escapeHtml(String(d.autoContributionNote).replace(/^⟦v[78];[^⟧]*⟧\s*/, "")) : "";
   const computedAt = d.autoContributionComputedAt ? escapeHtml(String(d.autoContributionComputedAt).slice(0,16).replace("T"," ")) : "";
   const title = [note, computedAt ? `посчитано: ${computedAt}` : ""].filter(Boolean).join(" · ");
   const mcv = manualContributionValue(d);
@@ -1548,9 +1548,12 @@ function autoContributionCell(d){
       return `<span style="color:var(--ink-mute);font-size:11.5px" title="${title}">0 ₸</span>${tag&&tag.c?`<br><span style="font-size:10px;color:var(--ink-mute)" title="${title}">заказы не выше фона · уверенность: ${AUTO_CONF_LABEL[tag.c]||tag.c}</span>`:""}${manualNote}`;
     }
     const units = d.autoContributionUnits!=null ? Number(d.autoContributionUnits).toLocaleString("ru-RU",{maximumFractionDigits:2}) : "—";
-    const split = tag && isFinite(tag.x) && isFinite(tag.s)
-      ? `свои часы ${fmtNum(Math.round(tag.x))} · из общих ${fmtNum(Math.round(tag.s))} (условно)${tag.c?` · уверенность: ${AUTO_CONF_LABEL[tag.c]||tag.c}`:""}`
-      : "условно: √охвата × формат";
+    const conf = tag && tag.c ? ` · уверенность: ${AUTO_CONF_LABEL[tag.c]||tag.c}` : "";
+    const split = tag && tag.v==="v8" && isFinite(tag.d0) && isFinite(tag.tl)
+      ? `день выхода ${fmtNum(Math.round(tag.d0))} · следующие дни ${fmtNum(Math.round(tag.tl))}${tag.g==="1"?" (ещё копится)":""}${conf}`
+      : tag && isFinite(tag.x) && isFinite(tag.s)
+        ? `свои часы ${fmtNum(Math.round(tag.x))} · из общих ${fmtNum(Math.round(tag.s))} (условно)${conf}`
+        : "условно: √охвата × формат";
     return `<span style="color:var(--ok);font-size:11.5px" title="${title}"><b>${kzt} ₸</b> · ${units} шт</span><br><span style="font-size:10px;color:var(--ink-mute)" title="${title}">${split}</span>${manualNote}`;
   }
   return `<span style="color:var(--ink-mute);font-size:11.5px" title="${title}">— <span style="font-size:10.5px">${escapeHtml(label)}</span></span>${manualNote}`;
@@ -4320,12 +4323,11 @@ function tplInfluencerDeals(){
         </div>
       </div>
       <div class="login-hint" style="margin-bottom:12px">
-        Вклад в продажи с 01.09.2026 считается по заказам Kaspi за <b>24 часа после выхода</b>
-        (колонка «Авто (Kaspi)»). Точного времени публикаций нет, поэтому принято допущение: крупные
-        выходят в 12:00, окно — до 12:00 следующего дня. Из заказов вычитается фон (продажи SKU в дни без
-        рекламы с учётом дня недели, тренда и часа). В ячейке видно, из чего сумма: <b>свои часы</b> — прирост,
-        когда выходил только этот блогер (наблюдение), и <b>из общих</b> — доля часов, где окна пересекались
-        (условно, по √охвата × формат), плюс уверенность (высокая / средняя / низкая).
+        Вклад в продажи с 01.09.2026 считается по заказам Kaspi (колонка «Авто (Kaspi)») моделью по
+        каждому товару: продажи дня = фон + эффект выходов, где эффект выхода = √охвата × формат и
+        затухает вдвое за сутки (сторис — за 8 ч). Насколько продажи реально растут вместе с выходами,
+        модель берёт из истории товара; сумма всех блогеров за день не больше продаж сверх фона.
+        В ячейке: <b>день выхода</b> и <b>следующие дни</b> (до 7 дней), плюс уверенность (высокая / средняя / низкая).
         Где фон обосновать нельзя — «—», а не число. Интеграции до сентября показывают
         прежние ROMI/ROAS по 1С, как было.
       </div>
@@ -7519,6 +7521,11 @@ async function runSelfTests(){
       if(s.totalCost!==100000 || s.count!==1) throw new Error("суммы без отменённой: "+s.totalCost+"/"+s.count);
       if(productScheduled("2026-11","X").integrations!==1) throw new Error("план по товару без отменённой");
     } finally { DataManager.state.influencerDeals = savedDeals; UI.inflFilter = JSON.parse(savedFilter); }
+  });
+  TestSuite.test("v8: в ячейке «Авто (Kaspi)» — день выхода и следующие дни, метка не видна", ()=>{
+    const cell = autoContributionCell({autoContributionStatus:"ok", autoContributionKzt:52190, autoContributionUnits:10.4, autoContributionNote:"⟦v8;t=52190;d0=10944;tl=41246;c=H;bt=7.1;r2=0.47;g=1⟧ Итого 52 190 ₸ …"});
+    if(!/день выхода 10[\s\u00a0]944 · следующие дни 41[\s\u00a0]246 \(ещё копится\)/.test(cell)) throw new Error("разбивка v8: "+cell);
+    if(!cell.includes("уверенность: высокая") || cell.includes("⟦")) throw new Error("уверенность/метка: "+cell);
   });
   TestSuite.test("D0: autoContributionCell показывает сумму только для ok/zero, у остальных статусов «—» без числа", ()=>{
     const okHtml = autoContributionCell({autoContributionStatus:"ok", autoContributionKzt:30000, autoContributionUnits:5});
