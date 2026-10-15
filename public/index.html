@@ -338,7 +338,7 @@ const MICRO_PRODUCT_STATUSES = ["товар заказан","товар дост
 const MICRO_VIDEO_STATUSES = ["не опубликовано","опубликовано"];
 // Категория (специализация) блогера — не путать с productCategory (категорией товара):
 // нужна, чтобы подбирать блогеров под тип продукта/задачи (напр. визажиста под декор.косметику).
-const MICRO_BLOGGER_CATEGORIES = ["Лайфстайл","Визажист","Бьюти","Дерматолог","Стилист","Нутрициолог","Фитнес","Мама-блогер","Врач","Бартер","Другое"];
+const MICRO_BLOGGER_CATEGORIES = ["Лайфстайл","Визажист","Бьюти","Дерматолог","Стилист","Нутрициолог","Фитнес","Мама-блогер","Врач","За товар","Другое"];
 // То же самое, но для крупных блогеров (вкладка "Инфлюенс интеграции крупные") — свой список,
 // т.к. крупные блогеры чаще медийные личности, а не узкие ниши, как у микро/средних.
 const LARGE_BLOGGER_CATEGORIES = ["Певица","Телеведущая","Актриса","Тик-токер","Лайфстайл","Бьюти","Визажист","Спортсмен"];
@@ -2337,12 +2337,13 @@ function microResponsibleSummary(month){
   const map = {};
   deals.forEach(d=>{
     const name = d.responsible || "Не указан";
-    if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), dealsCount:0, inProgress:0, published:0, totalReach:0};
+    if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), forProduct:new Set(), dealsCount:0, inProgress:0, published:0, totalReach:0};
     const a = map[name];
+    if(isMicroForProduct(d)) a.forProduct.add(d.blogerName || "—");
     // Город/категория запоминаются по блогеру (не по интеграции), чтобы разбивка ниже (в
     // развёрнутой карточке) считала тех же "уникальных блогеров", что и колонка "Блогеров" —
     // если блогер продавал пакетом несколько интеграций, берём город/категорию с последней.
-    a.bloggers.set(d.blogerName || "—", {city: d.city || "Не указан", category: d.bloggerCategory || "Не указана"});
+    a.bloggers.set(d.blogerName || "—", {city: d.city || "Не указан", category: d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "Не указана"});
     a.dealsCount++;
     if(d.videoStatus === "опубликовано") a.published++; else a.inProgress++;
     // Охваты — факт (Reels+TikTok), как и везде в приложении; считаем по ВСЕМ интеграциям
@@ -2359,7 +2360,7 @@ function microResponsibleSummary(month){
     // менеджер, у которого в месяце есть интеграции, всё равно показывается (новый — с планом 40).
     const zeroRowNames = (month && month >= MICRO_PLAN_V2_FROM_MONTH) ? Object.keys(MICRO_PLAN_BY_MANAGER) : microKnownResponsibles();
     zeroRowNames.forEach(name=>{
-      if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), dealsCount:0, inProgress:0, published:0, totalReach:0};
+      if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), forProduct:new Set(), dealsCount:0, inProgress:0, published:0, totalReach:0};
     });
   }
   return Object.values(map).map(a=>{
@@ -2372,6 +2373,7 @@ function microResponsibleSummary(month){
     return {
       responsible: a.responsible,
       uniqueBloggerCount: a.bloggers.size,
+      forProductCount: a.forProduct.size,
       dealsCount: a.dealsCount,
       inProgress: a.inProgress,
       published: a.published,
@@ -2389,6 +2391,11 @@ function microResponsibleSummary(month){
 // вместе, а не сумму uniqueBloggerCount по каждой строке (регрессия: если блогер за период
 // поработал с двумя разными менеджерами — например, его переназначили — он попадал в обе строки,
 // и при сложении "Итого" получалось больше, чем блогеров есть на самом деле: например 72 вместо 71).
+function microResponsibleTotalForProduct(month){
+  let deals = DataManager.state.microInfluencerDeals;
+  if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
+  return microForProductBloggers(deals);
+}
 function microResponsibleTotalUniqueBloggers(month){
   let deals = DataManager.state.microInfluencerDeals;
   if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
@@ -2417,11 +2424,13 @@ function microResponsibleGroupRows(month, rows){
     let deals = DataManager.state.microInfluencerDeals.filter(d=> names.includes((d.responsible||"").trim()));
     if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
     const unique = new Set(deals.map(d=>d.blogerName||"—")).size;
+    const forProductCount = microForProductBloggers(deals);
     const plans = memberRows.map(r=>r.plan).filter(v=>v);
     const plan = plans.length ? plans.reduce((a,b)=>a+b,0) : null;
     groups.push({
       lead: g.lead, memberRows,
       uniqueBloggerCount: unique,
+      forProductCount,
       plan,
       planLeft: plan==null ? null : Math.max(0, plan - unique),
       planPct: plan==null ? null : Math.round(unique / plan * 100),
@@ -2450,6 +2459,8 @@ function tplMicroResponsibleSummary(){
       <b style="color:${color};font-size:12px;white-space:nowrap">${pct}%</b>
     </div></td>`;
   };
+  // Под числом блогеров — сколько из них работают «за товар» (уникальные аккаунты).
+  const forProductNote = n => `<div style="font-size:10.5px;font-weight:400;color:var(--ink-mute);white-space:nowrap">из них за товар: ${n||0}</div>`;
   const cols = plan ? 10 : 7; // всего колонок в таблице — нужно для colspan пустой строки
   return `
     <div class="panel">
@@ -2493,7 +2504,7 @@ function tplMicroResponsibleSummary(){
               return `<tr${o.indent?' style="background:var(--canvas)"':''}>
               <td><button class="btn btn-ghost btn-sm responsible-toggle-btn" data-responsible="${escapeHtml(r.responsible)}" style="padding:2px 9px;line-height:1">${expanded?'−':'+'}</button></td>
               <td>${o.indent?'<span style="color:var(--ink-mute);margin-right:6px">└</span>':''}${o.indent?escapeHtml(label):`<b>${escapeHtml(label)}</b>`}</td>
-              <td>${r.uniqueBloggerCount}</td>
+              <td>${r.uniqueBloggerCount}${forProductNote(r.forProductCount)}</td>
               ${plan ? `${planCell(month,"manager",r.responsible,"bloggers",{auto:microDefaultPlanFor(month, r.responsible)})}<td>${r.planLeft==null?"—":r.planLeft}</td>${progressCell(r.planPct)}` : ""}
               <td>${r.inProgress}</td>
               <td>${r.published}</td>
@@ -2516,7 +2527,7 @@ function tplMicroResponsibleSummary(){
               return `<tr style="font-weight:600">
                 <td><button class="btn btn-ghost btn-sm responsible-group-toggle-btn" data-lead="${escapeHtml(g.lead)}" title="${open?'Свернуть':'Показать менеджеров группы'}" style="padding:2px 9px;line-height:1">${open?'▾':'▸'}</button></td>
                 <td><b>${escapeHtml(g.lead)}</b>${names?` <span style="font-weight:400;color:var(--ink-mute);font-size:11px">+ ${escapeHtml(names)}</span>`:""}</td>
-                <td>${g.uniqueBloggerCount}</td>
+                <td>${g.uniqueBloggerCount}${forProductNote(g.forProductCount)}</td>
                 ${plan ? `<td>${g.plan==null?"—":fmtNum(g.plan)}</td><td>${g.planLeft==null?"—":g.planLeft}</td>${progressCell(g.planPct)}` : ""}
                 <td>${g.inProgress}</td>
                 <td>${g.published}</td>
@@ -2529,7 +2540,7 @@ function tplMicroResponsibleSummary(){
           ${rows.length ? `<tr style="font-weight:700;border-top:2px solid var(--line-2)">
             <td></td>
             <td>Итого</td>
-            <td>${microResponsibleTotalUniqueBloggers(month)}</td>
+            <td>${microResponsibleTotalUniqueBloggers(month)}${forProductNote(microResponsibleTotalForProduct(month))}</td>
             ${plan ? (()=>{
               // Итоговый план — сумма личных планов (у каждой девочки свой), а выполнение считаем
               // через остаток: (план − сколько осталось) / план. Через сумму "Блогеров" считать
@@ -2571,7 +2582,13 @@ function tplMicroResponsibleSummary(){
 // "Лайфстайл"), из-за чего в сводке она расползалась на несколько строк и цифры дробились.
 // Приводим к каноничному написанию из MICRO_BLOGGER_CATEGORIES; явные опечатки чиним по словарю.
 // Сами записи в базе при этом не меняем — правка только на чтении, чтобы ничего не испортить.
-const CATEGORY_TYPO_FIX = {"лайфстал":"Лайфстайл"};
+// «Бартер» переименована в «За товар» (16.10.2026): старые записи в базе остаются «Бартер»,
+// на чтении показываем и считаем их как «За товар».
+const CATEGORY_TYPO_FIX = {"лайфстал":"Лайфстайл", "бартер":"За товар"};
+const MICRO_FOR_PRODUCT_CATEGORY = "За товар";
+const isMicroForProduct = d => normalizeBloggerCategory(d && d.bloggerCategory) === MICRO_FOR_PRODUCT_CATEGORY;
+// Сколько уникальных блогеров (аккаунтов) из этих интеграций работают «за товар».
+const microForProductBloggers = deals => new Set(deals.filter(isMicroForProduct).map(d=>d.blogerName||"—")).size;
 function normalizeBloggerCategory(raw){
   const v = String(raw||"").trim();
   if(!v) return "Не указана";
@@ -4697,7 +4714,7 @@ function tplMicroInfluencers(){
               <td class="rowcheck"><input type="checkbox" class="micro-row-check" data-id="${d.id}" ${UI.selectedMicroIds.has(d.id)?'checked':''}></td>
               <td>${i+1}</td>
               <td class="sticky-col">${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
-              <td>${inlineEditSpan(escapeHtml(d.bloggerCategory||"—"), d.id, 'bloggerCategory', d.bloggerCategory||'', 'select', MICRO_BLOGGER_CATEGORIES)}</td>
+              <td>${inlineEditSpan(escapeHtml(d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "—"), d.id, 'bloggerCategory', d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : '', 'select', MICRO_BLOGGER_CATEGORIES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.responsible||"—"), d.id, 'responsible', d.responsible||'', 'text')}</td>
               <td>${d.instagramAccount?`<a href="${escapeHtml(normalizeInstagramUrl(d.instagramAccount))}" target="_blank" rel="noopener">IG</a> `:""}${inlineEditSpan(fmtNum(d.followers||0), d.id, 'followers', d.followers||0, 'number')}</td>
               <td>${d.tiktokAccount?`<a href="${escapeHtml(d.tiktokAccount)}" target="_blank" rel="noopener">TT</a> `:""}${inlineEditSpan(fmtNum(d.followersTT||0), d.id, 'followersTT', d.followersTT||0, 'number')}</td>
@@ -5754,7 +5771,7 @@ function modalMicroDeal(existing, prefill){
     <h3>${isEdit?'Изменить':'Новая'} интеграция · Инфлюенс микро/средние</h3>
     <div class="form-row">
       <div class="field"><label>Блогер</label><input id="mm-name" placeholder="Имя / название аккаунта" value="${escapeHtml(d.blogerName)}"></div>
-      <div class="field"><label>Категория блогера</label><select id="mm-blogger-category"><option value="">—</option>${MICRO_BLOGGER_CATEGORIES.map(c=>`<option ${c===d.bloggerCategory?'selected':''}>${c}</option>`).join("")}</select></div>
+      <div class="field"><label>Категория блогера</label><select id="mm-blogger-category"><option value="">—</option>${MICRO_BLOGGER_CATEGORIES.map(c=>`<option ${d.bloggerCategory && c===normalizeBloggerCategory(d.bloggerCategory)?'selected':''}>${c}</option>`).join("")}</select></div>
       <div class="field"><label>Ответственный</label><input id="mm-responsible" value="${escapeHtml(d.responsible||'')}"></div>
       <div class="field"><label>Телефон</label><input id="mm-phone" value="${escapeHtml(d.phone||'')}"></div>
       <div class="field"><label>Город</label><input id="mm-city" value="${escapeHtml(d.city||'')}"></div>
@@ -7384,9 +7401,34 @@ async function runSelfTests(){
       if(!html.includes("426 уникальных блогеров") || !html.includes("790 интеграций")) throw new Error("в подсказке общий план команды");
       if(!/data-scope="team" data-key="micro" data-metric="bloggers" data-auto="426"/.test(html)) throw new Error("в «Итого» план команды 426");
       if(!/из<\/span> <span class="plan-cell"[^>]*data-metric="integrations"[^>]*>790</.test(html)) throw new Error("в «Итого» интеграции из 790");
-      if(!MICRO_BLOGGER_CATEGORIES.includes("Бартер")) throw new Error("нет категории «Бартер»");
+      if(!MICRO_BLOGGER_CATEGORIES.includes("За товар") || MICRO_BLOGGER_CATEGORIES.includes("Бартер")) throw new Error("категория «Бартер» должна называться «За товар»");
+      if(normalizeBloggerCategory("Бартер")!=="За товар") throw new Error("старые записи «Бартер» читаются как «За товар»");
     } finally {
       DataManager.state.microInfluencerDeals = savedMicro; DataManager.state.plans = savedPlans; UI.microResponsibleMonth = savedM;
+    }
+  });
+  TestSuite.test("Сводка по ответственным: «из них за товар» — уникальные аккаунты категории «За товар» (включая старые «Бартер»)", ()=>{
+    const savedMicro = DataManager.state.microInfluencerDeals, savedM = UI.microResponsibleMonth;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:99501, responsible:"Мадина", blogerName:"A", bloggerCategory:"За товар", publishDate:"2026-10-05", plannedDate:"2026-10-05", videoStatus:"опубликовано"},
+        {id:99502, responsible:"Мадина", blogerName:"A", bloggerCategory:"За товар", publishDate:"2026-10-09", plannedDate:"2026-10-09", videoStatus:"не опубликовано"},
+        {id:99503, responsible:"Мадина", blogerName:"B", bloggerCategory:"Бартер", publishDate:"2026-10-06", plannedDate:"2026-10-06", videoStatus:"опубликовано"},
+        {id:99504, responsible:"Марина", blogerName:"C", bloggerCategory:"Бьюти", publishDate:"2026-10-06", plannedDate:"2026-10-06", videoStatus:"опубликовано"},
+        {id:99505, responsible:"Марина", blogerName:"B", bloggerCategory:"бартер", publishDate:"2026-10-07", plannedDate:"2026-10-07", videoStatus:"опубликовано"},
+      ];
+      const rows = microResponsibleSummary("2026-10");
+      const mad = rows.find(r=>r.responsible==="Мадина"), mar = rows.find(r=>r.responsible==="Марина");
+      if(mad.forProductCount!==2) throw new Error("у Мадины 2 аккаунта за товар (A дважды = 1, B «Бартер»): "+mad.forProductCount);
+      if(mar.forProductCount!==1) throw new Error("у Марины 1: "+mar.forProductCount);
+      if(microResponsibleTotalForProduct("2026-10")!==2) throw new Error("всего уникальных за товар 2 (B у двух менеджеров — один раз)");
+      const g = microResponsibleGroupRows("2026-10", rows).groups.find(x=>x.lead==="Нина");
+      if(!g || g.forProductCount!==2) throw new Error("в группе Нины 2 уникальных за товар");
+      UI.microResponsibleMonth = "2026-10";
+      const html = tplMicroResponsibleSummary();
+      if(!html.includes("из них за товар: 2")) throw new Error("в таблице должна быть подпись «из них за товар»");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedMicro; UI.microResponsibleMonth = savedM;
     }
   });
   TestSuite.test("Сводка по ответственным: группы Нина (Мадина, Марина, Зарина, Камила), Сая (Надира), Анастасия (Сабрина) — общий подсчёт и раскрытие", ()=>{
@@ -8194,7 +8236,7 @@ async function runSelfTests(){
       // 2 в работе у Нины + 1 у Аружан = 3, 1 опубликовано у Нины = 1, 3 интеграции у Нины + 1 у Аружан = 4,
       // охваты 650 у Нины + 500 у Аружан = 1150).
       if(!html.includes(">Итого<")) throw new Error("должна быть итоговая строка 'Итого' внизу таблицы: "+html);
-      const totalRowMatch = html.match(/<tr[^>]*>\s*<td><\/td>\s*<td>Итого<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>([\d\s]+)<\/td>/);
+      const totalRowMatch = html.match(/<tr[^>]*>\s*<td><\/td>\s*<td>Итого<\/td>\s*<td>(\d+)(?:<div[^>]*>из них за товар: \d+<\/div>)?<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>([\d\s]+)<\/td>/);
       if(!totalRowMatch) throw new Error("не удалось найти ячейки итоговой строки: "+html);
       const [, totalBloggers, totalInProgress, totalPublished, totalDeals] = totalRowMatch.slice(0,5).map(Number);
       const totalReach = Number(totalRowMatch[5].replace(/\s/g,""));
@@ -8232,7 +8274,7 @@ async function runSelfTests(){
       if(sumOfRows !== 3) throw new Error("а сумма по менеджерам (наивный расчёт) должна дать 3 — именно эту разницу и чиним: "+sumOfRows);
 
       const html = tplMicroResponsibleSummary();
-      const totalRowMatch = html.match(/<tr[^>]*>\s*<td><\/td>\s*<td>Итого<\/td>\s*<td>(\d+)<\/td>/);
+      const totalRowMatch = html.match(/<tr[^>]*>\s*<td><\/td>\s*<td>Итого<\/td>\s*<td>(\d+)(?:<div[^>]*>из них за товар: \d+<\/div>)?<\/td>/);
       if(!totalRowMatch) throw new Error("не удалось найти ячейку 'Блогеров' итоговой строки: "+html);
       if(Number(totalRowMatch[1]) !== 2) throw new Error("в разметке 'Итого' по блогерам должно быть 2, а не сумма 3: "+totalRowMatch[1]);
     } finally {
