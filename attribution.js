@@ -54,7 +54,7 @@
 //    один раз (строка крупных), вторая duplicate. Отменённые (cancelled) не считаются.
 // ============================================================================
 
-const PARAMS_VERSION = "attrib-v8.2-2026-10-15";
+const PARAMS_VERSION = "attrib-v8.3-2026-10-15";
 
 const ASSUMED_POST_HOUR = { barter_box_deals: 12, barter_box_micro: 16 };
 const KERNEL_DAYS = 7;
@@ -359,32 +359,87 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
     const scale = new Map();
     for (const d of days) { const w = wk.get(weekOf(d)); scale.set(d, w.pred > 0 ? Math.min(1, Math.max(0, w.room) / w.pred) : 0); }
     const priceOf = (d) => { const r = rec(code, d); return r.qty > 0 ? r.kzt / r.qty : (medPrice || 0); };
-    // v8.2: если по истории товара доказано, что выходы двигают продажи (t ≥ 2), вклад = РЕАЛЬНЫЙ
-    // всплеск продаж сверх фона при той же цене (заказы − фон дня), поделённый между блогерами этого
-    // товара по их доле экспозиции в этот день. Дни считаются от дня выхода, пока продажи не вернулись
-    // к обычному уровню (с 3-го дня: всплеска нет — дальше не считаем), максимум 7 дней.
-    // Если связь не доказана — осторожная оценка по модели (b × сила выхода), срезанная до факта недели.
-    const observed = linked && fit.t >= 2;
-    const excessOf = (d) => rec(code, d).qty - baseOf(d) * wf[dowOf(d)];
+    // v8.3 (15.10.2026). Вклад выхода за день = БОЛЬШЕЕ из двух оценок:
+    //  (а) модель: b × сила выхода (средняя отдача этого товара; срезано до факта недели);
+    //  (б) реальный всплеск: заказы дня минус ЛОКАЛЬНЫЙ фон вокруг выхода (медиана продаж за 10 дней до
+    //      и 10 дней после, без самих дней выхода, при той же цене ±5%, с поправкой на день недели),
+    //      поделённый между блогерами этого дня по доле экспозиции; от дня выхода, пока всплеск не
+    //      закончился (с 3-го дня), до 7 дней. Локальный фон уже содержит постоянный поток рекламы этого
+    //      товара — поэтому «всплеск» отражает только то, что добавил именно этот выход.
+    // Затем по каждому дню: сумма всех блогеров ≤ заказы − фон дня (фон при цене дня из модели).
+    // (б) работает только если по истории доказано, что выходы двигают продажи (t ≥ 2).
+    const observedOk = linked && fit.t >= 2;
+    const localBaseOf = (m) => {
+      const p0 = dayPrice.get(m.d0) || medPrice || 0;
+      const cand = [];
+      for (let k = -10; k <= 14; k++) {
+        if (k >= -1 && k <= 4) continue;
+        const d = addDaysStr(m.d0, k);
+        if (!E.has(d)) continue;
+        cand.push({ y: rec(code, d).qty / wf[dowOf(d)], samePrice: p0 > 0 && Math.abs((dayPrice.get(d) || 0) / p0 - 1) <= PRICE_DRIFT_TOLERANCE });
+      }
+      const same = cand.filter((c) => c.samePrice);
+      const use = same.length >= 5 ? same : cand;
+      return use.length >= 5 ? median(use.map((c) => c.y)) : null;
+    };
+    const cand = new Map(); // id → Map day → {u, src}
     for (const m of members) {
-      let u0 = 0, k0 = 0, uT = 0, kT = 0, lastDay = null, cut = false, stoppedAt = null;
+      const lb = observedOk ? localBaseOf(m) : null;
+      const cm = new Map();
+      let stopped = null;
       const mDays = [...share.get(m.id).entries()].sort((x, y) => (x[0] < y[0] ? -1 : 1));
       for (const [d, v] of mDays) {
-        let u;
-        if (observed) {
+        const f = wf[dowOf(d)];
+        const uModel = bEff * v * f * scale.get(d);
+        let uObs = 0;
+        if (lb != null && !stopped) {
           const k = daysBetween(m.d0, d);
-          const ex = excessOf(d);
-          if (k >= 2 && ex <= 0) { stoppedAt = d; break; }
-          u = Math.max(0, ex) * (E.get(d) > 0 ? v / E.get(d) : 0);
-        } else {
-          const raw = bEff * v * wf[dowOf(d)];
-          u = raw * scale.get(d);
-          if (u < raw - 1e-9) cut = true;
+          const ex = rec(code, d).qty - lb * f;
+          if (k >= 2 && ex <= 0) stopped = d;
+          else uObs = Math.max(0, ex) * (E.get(d) > 0 ? v / E.get(d) : 0);
         }
+        cm.set(d, { u: Math.max(uModel, uObs), src: uObs > uModel ? "obs" : "model" });
+      }
+      cand.set(m.id, { cm, lb, stopped });
+    }
+    // Потолок дня по факту: заказы дня минус обычный уровень. Обычный уровень = большее из
+    //  (1) фона модели при цене дня и (2) медианы «чистых» дней рядом (±14 дн., без заметных выходов этого
+    //  SKU, при той же цене ±5%; нужно ≥5 таких дней). Если продажи давно держатся на одном уровне и
+    //  выход его не поднял — делить нечего, как бы ни была велика средняя отдача товара.
+    const posE = days.map((d) => E.get(d)).filter((x) => x > 0);
+    const cleanThr = posE.length ? 0.1 * median(posE) : 0;
+    const cleanDays = days.filter((d) => E.get(d) <= cleanThr && rec(code, d).qty >= 0);
+    const nearCleanBase = (d) => {
+      const p0 = dayPrice.get(d) || medPrice || 0;
+      const near = cleanDays.filter((x) => x !== d && Math.abs(daysBetween(d, x)) <= 14);
+      const same = near.filter((x) => p0 > 0 && Math.abs((dayPrice.get(x) || 0) / p0 - 1) <= PRICE_DRIFT_TOLERANCE);
+      const use = same.length >= 5 ? same : near;
+      return use.length >= 5 ? median(use.map((x) => rec(code, x).qty / wf[dowOf(x)])) : null;
+    };
+    const dayCap = new Map();
+    for (const d of days) {
+      let tot = 0;
+      for (const m of members) { const c = cand.get(m.id).cm.get(d); if (c) tot += c.u; }
+      if (tot <= 0) { dayCap.set(d, 1); continue; }
+      const nb = nearCleanBase(d);
+      const usual = Math.max(baseOf(d), nb == null ? 0 : nb);
+      const room = Math.max(0, rec(code, d).qty - usual * wf[dowOf(d)]);
+      dayCap.set(d, tot > room && tot > 0 ? room / tot : 1);
+    }
+    for (const m of members) {
+      let u0 = 0, k0 = 0, uT = 0, kT = 0, lastDay = null, cut = false, obsDays = 0;
+      const { cm, lb, stopped } = cand.get(m.id);
+      const stoppedAt = stopped;
+      for (const [d, c] of [...cm.entries()].sort((x, y) => (x[0] < y[0] ? -1 : 1))) {
+        const sc = dayCap.get(d);
+        if (sc < 1 - 1e-9) cut = true;
+        const u = c.u * sc;
+        if (c.src === "obs" && u > 0) obsDays++;
         const kz = u * priceOf(d);
         if (d === m.d0) { u0 += u; k0 += kz; } else { uT += u; kT += kz; }
         lastDay = d;
       }
+      const observed = obsDays > 0;
       let units = u0 + uT, kzt = k0 + kT, capped = false;
       if (!m.reachEstimated && units > m.reachUsed * MAX_PURCHASES_PER_VIEW && units > 0) {
         const k = (m.reachUsed * MAX_PURCHASES_PER_VIEW) / units;
@@ -394,7 +449,7 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
       const growing = daysBetween(m.d0, lastCompleteDay) < KERNEL_DAYS - 1;
       push(m.id, {
         code, status: kzt >= 1 ? "ok" : "zero", k0: Math.floor(k0), kT: Math.floor(kT), units, conf, linked, fit, a, cut, capped, growing: growing && !stoppedAt,
-        observed, stoppedAt, sharedWith: Math.max(0, (E.get(m.d0) || 0) > 0 ? 1 - (share.get(m.id).get(m.d0) || 0) / E.get(m.d0) : 0),
+        observed, localBase: lb, stoppedAt, sharedWith: Math.max(0, (E.get(m.d0) || 0) > 0 ? 1 - (share.get(m.id).get(m.d0) || 0) / E.get(m.d0) : 0),
         E0: E.get(m.d0) || 0, q0: rec(code, m.d0).qty, discount: isDiscount(m.d0),
         base0: baseOf(m.d0), price0: dayPrice.get(m.d0), medPrice, elast: fit.c,
       });
@@ -421,14 +476,14 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
     const bt = Math.min(...good.map((q) => q.fit.t)), r2 = Math.min(...good.map((q) => q.fit.r2));
     const txt = good.map((q) =>
       `SKU ${q.code}: ${q.observed
-        ? `вклад = реальный всплеск заказов сверх фона при той же цене, по дням от выхода${q.stoppedAt ? ` до ${ddmmD(addDaysStr(q.stoppedAt, -1))} (дальше продажи вернулись к обычным)` : ""}` + (q.sharedWith > 0.05 ? `, поделён с другими блогерами этого товара (её доля в день выхода ${Math.round((1 - q.sharedWith) * 100)}%)` : "")
-        : `связь продаж с выходами слабая — осторожная оценка «${q.fit.b > 0 ? fmtQ(q.fit.b * 1000) : 0} шт на 1000 ед. охват-силы»`} (история ${q.fit.n} дн., связь t=${q.fit.t.toFixed(1)}, R²=${q.fit.r2.toFixed(2)})` +
+        ? `реальный всплеск заказов над обычным уровнем вокруг выхода (${fmtQ(q.localBase)} шт/день при той же цене)${q.stoppedAt ? `, до ${ddmmD(addDaysStr(q.stoppedAt, -1))} (дальше продажи вернулись к обычным)` : ""}` + (q.sharedWith > 0.05 ? `, поделён с другими блогерами этого товара (доля в день выхода ${Math.round((1 - q.sharedWith) * 100)}%)` : "")
+        : `средняя отдача товара: ${q.fit.b > 0 ? fmtQ(q.fit.b * 1000) : 0} шт на 1000 ед. охват-силы × сила выхода`} (история ${q.fit.n} дн., связь t=${q.fit.t.toFixed(1)}, R²=${q.fit.r2.toFixed(2)})` +
       (q.linked ? "" : " — продажи не растут вместе с выходами, вклад 0") +
       (q.elast < 0 && q.medPrice
         ? `; фон зависит от цены: при обычной цене ${fmt(q.medPrice)} ₸ — ${fmtQ(q.a)} шт/день, цена +10% → обычных продаж ${fmtQ(Math.max(0, q.a + q.elast * Math.log(1.1)))} шт/день`
         : `; фон ${fmtQ(q.a)} шт/день`) +
       `; в день выхода цена ${fmt(q.price0 || 0)} ₸, фон при этой цене ${fmtQ(q.base0)} шт, заказов ${fmtQ(q.q0)} шт${q.discount ? " (скидка)" : ""}` +
-      (q.cut ? "; срезано до продаж сверх фона за неделю" : "") + (q.capped ? "; срезано до 1 покупки на 100 просмотров" : "") +
+      (q.cut ? "; срезано до реальных продаж сверх фона" : "") + (q.capped ? "; срезано до 1 покупки на 100 просмотров" : "") +
       ` → день выхода ${fmt(q.k0)} ₸ + следующие дни ${fmt(q.kT)} ₸`);
     const head = `Итого ${fmt(t)} ₸ (≈${fmtQ(units)} шт) = день выхода ${fmt(k0)} ₸ + следующие 6 дней ${fmt(kT)} ₸. Уверенность: ${CONF_LABEL[conf]}.` +
       (growing ? ` Ещё копится до ${ddmmD(addDaysStr(p.d0, KERNEL_DAYS - 1))}.` : "");
