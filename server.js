@@ -1475,17 +1475,10 @@ app.post("/api/attribution/recalc", requireAuth, async (req,res)=>{
   const out = await Promise.race([job.then(()=> "done"), timeout]);
   res.json(Object.assign({done: out==="done"}, state.attributionRun || {}));
 });
-// «Обновить просмотры сейчас» — Apify по ссылкам на ролики (social-views.js). Идёт в фоне до
-// нескольких минут; ответ сразу, результат — в state.socialViewsSync и в полях охвата.
-// body: {month:"YYYY-MM", kind:"micro"|"large"} — только ролики открытой вкладки за этот месяц.
+// Ручного запуска больше нет (15.10.2026): просмотры обновляет только сам сервер — ролики текущего месяца,
+// каждый раз в 3 дня. Маршрут оставлен, чтобы старая страница получила понятный ответ.
 app.post("/api/social-views/sync", requireAuth, (req,res)=>{
-  const b = req.body || {};
-  const month = /^\d{4}-\d{2}$/.test(String(b.month||"")) ? String(b.month) : null;
-  const kind = b.kind==="micro" || b.kind==="large" ? b.kind : null;
-  if(!month) return res.status(400).json({error:"выберите месяц — обновляются охваты только открытого месяца"});
-  if(socialRunning) return res.json(Object.assign({started:false, busy:true}, state.socialViewsSync || {}));
-  maybeSyncSocialViews(true, {month, kind});
-  res.json(Object.assign({started:true}, state.socialViewsSync || {}));
+  res.status(403).json(Object.assign({error:"Охваты обновляются автоматически раз в 3 дня — вручную не нужно"}, state.socialViewsSync || {}));
 });
 app.post("/api/drive-folders/sync", requireAuth, async (req,res)=>{
   try{ await maybeSyncDriveFolders(true); res.json(state.driveSync || {}); }
@@ -1529,7 +1522,7 @@ async function maybeSyncDriveFolders(force){
 }
 
 /* ---------- Просмотры роликов Instagram/TikTok через Apify (social-views.js) ----------
-   Раз в 30 мин проверяет, каким роликам пора обновить просмотры (свежие — чаще), и пишет их в
+   Раз в 30 мин проверяет, каким роликам текущего месяца пора обновить просмотры (раз в 3 дня), и пишет их в
    пустые поля охвата (ручная цифра главнее). Работает в фоне, тик не ждёт. Без APIFY_TOKEN — ничего. */
 const { syncSocialViews } = require("./social-views.js");
 const SOCIAL_EVERY_MS = 30*60*1000;
