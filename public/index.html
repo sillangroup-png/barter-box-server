@@ -324,6 +324,13 @@ const DEAL_STATUSES = ["Запланирована","Опубликована","
 // статус), но в суммы, планы/факты, дашборды, планер и расчёт вклада не идёт.
 function isDealCancelled(d){ return !!d && d.status==="Отменена"; }
 function activeInfluencerDeals(){ return (DataManager.state.influencerDeals||[]).filter(d=>!isDealCancelled(d)); }
+// Вышедшая крупная интеграция — то же правило, что и в расчёте вклада на сервере: статус «Опубликована»/
+// «Закрыта», или есть дата публикации и (оплачено или есть ссылка на ролик). Отменённые — никогда.
+function isLargeDealPublished(d){
+  if(!d || isDealCancelled(d)) return false;
+  if(d.status==="Опубликована" || d.status==="Закрыта") return true;
+  return !!d.publishedDate && (d.status==="Оплачена" || !!String(d.reelsLink||"").trim());
+}
 // Инфлюенс интеграции микро/средние (отв. Нина) — платные размещения у мелких/средних блогеров,
 // обычно Instagram Reels + TikTok кросспостингом за одну сумму. Без ROMI по продажам (см. server.js).
 const MICRO_PAYMENT_STATUSES = ["не оплачено","к оплате","оплачено"];
@@ -569,16 +576,25 @@ function tplAttributionRecalcBar(){
     <span>Вклад (Kaspi): ${info}.</span>
     ${UI.readOnly ? "" : `<button class="btn btn-ghost btn-sm attr-recalc-btn">Пересчитать вклад сейчас</button>`}
     <span style="flex-basis:100%;height:0"></span>
-    <span title="Просмотры роликов по ссылке на Reels/TikTok (Apify). Заменяют охват в поле (и в общем охвате) с пометкой «авто», ручная цифра тоже заменяется; где ссылки на ролик нет или просмотры не получены — остаётся ручная. Свежие ролики обновляются каждые 6 ч, до 8-го дня — раз в сутки. Сторис публично не видны — их охват вручную.">👁 Просмотры по ссылкам (авто-охват): ${svInfo}.</span>
-    ${UI.readOnly ? "" : (()=>{ const vs = viewsSyncScope(); return vs.month
-      ? `<button class="btn btn-ghost btn-sm views-sync-btn" title="Запросить просмотры по ссылкам у всех роликов ${vs.kind==="micro"?"микро/средних":"крупных"} интеграций за ${escapeHtml(monthLabel(vs.month))} (кроме проверенных меньше часа назад). Другие месяцы и вкладки не трогаются.">Обновить охваты за ${escapeHtml(monthLabel(vs.month))}</button>`
-      : `<button class="btn btn-ghost btn-sm" disabled title="Выберите месяц — охваты обновляются только за открытый месяц">Обновить охваты — выберите месяц</button>`; })()}
+    <span title="Просмотры роликов по ссылке на Reels/TikTok (Apify). Заменяют охват в поле (и в общем охвате) с пометкой «авто», ручная цифра тоже заменяется; где ссылки на ролик нет или просмотры не получены — остаётся ручная. Обновляет сам сервер, вручную не нужно: только ролики текущего месяца (и вышедшие за последние 7 дней) — новая ссылка при ближайшей проверке, дальше каждый ролик раз в 3 дня. Прошлые месяцы не пересчитываются. Сторис публично не видны — их охват вручную.">👁 Просмотры по ссылкам (авто-охват): ${svInfo}.</span>
+
   </div>`;
 }
 // Какой месяц и какая таблица сейчас открыты — кнопка «Обновить охваты» работает только по ним.
 function viewsSyncScope(){
   const micro = UI.tab==="microInfluencers";
   return {kind: micro ? "micro" : "large", month: (micro ? UI.microMonth : UI.inflMonth) || ""};
+}
+// Если вклад задан вручную, а расчёт по Kaspi даёт своё число — показываем его рядом и даём одной
+// кнопкой перейти на расчёт (очищает ручное поле). Ничего не меняется без клика менеджера.
+function manualVsAutoHint(d, kind){
+  const mcv = manualContributionValue(d);
+  if(mcv==null || !autoContributionHasNumber(d)) return "";
+  const auto = Math.round(Number(d.autoContributionKzt));
+  if(Math.abs(auto - mcv) < 1) return "";
+  const cost = kind==="micro" ? microDealTotalCost(d) : (d.cost||0);
+  const roas = cost>0 ? ` · ROAS ×${(auto/cost).toFixed(2)}` : "";
+  return `<br><span style="font-size:10.5px;color:var(--ink-mute)" title="Расчёт по заказам Kaspi (колонка «Авто (Kaspi)»). Сейчас во вкладе стоит ручная цифра, она главнее. Кнопка очистит ручную цифру — вклад и ROAS будут по расчёту.">📊 по Kaspi: <b>${fmtNum(auto)} ₸</b>${roas}</span>${UI.readOnly ? "" : ` <button class="btn btn-ghost btn-sm use-auto-contrib" data-id="${d.id}" data-kind="${kind}" style="padding:0 6px;font-size:10.5px">взять расчёт</button>`}`;
 }
 // Пометка у охвата: цифра пришла автоматически (просмотры по ссылке через Apify) или ручная,
 // а просмотры по ссылке есть рядом. fields — поля охвата этой строки.
@@ -608,6 +624,17 @@ function wireAttributionRecalc(){
         if(r && r.error) toast("Пересчёт с ошибкой: "+r.error, true);
         else if(r && r.done) toast("Вклад пересчитан");
         else toast("Пересчёт ещё идёт — обновите страницу через пару минут");
+      }catch(e){ toast(e.message, true); }
+      await DataManager.refresh(); renderDeskTab();
+    };
+  });
+  document.querySelectorAll(".use-auto-contrib").forEach(btn=>{
+    btn.onclick = async (ev)=>{
+      ev.stopPropagation();
+      const id = parseInt(btn.dataset.id,10);
+      try{
+        await withBusy(btn, ()=> btn.dataset.kind==="micro" ? Api.updateMicroDeal(id, {manualContribution:""}) : Api.updateDeal(id, {manualContribution:""}));
+        toast("Вклад теперь по расчёту Kaspi");
       }catch(e){ toast(e.message, true); }
       await DataManager.refresh(); renderDeskTab();
     };
@@ -1806,8 +1833,12 @@ function tplInfluencerBrandDashboard(allRows){
   // Единый месяц вкладки (см. UI.inflMonth): "" = весь период, иначе конкретный "YYYY-MM".
   const month = ensureMonthInitialized("inflMonth", months);
   const allPeriod = !month || !months.includes(month);
-  const monthRows = allRows.filter(r=> allPeriod || inflDealDate(r.deal).slice(0,7)===month);
+  const monthRowsAll = allRows.filter(r=> allPeriod || inflDealDate(r.deal).slice(0,7)===month);
+  // Факт (расходы, выручка, ROMI/ROAS, охват, лучший/худший) — только по ВЫШЕДШИМ интеграциям месяца;
+  // запланированные в факт не идут. «План» — по всем интеграциям месяца.
+  const monthRows = monthRowsAll.filter(r=> isLargeDealPublished(r.deal));
   const s = influencerBrandStats(monthRows);
+  const sPlan = influencerBrandStats(monthRowsAll);
 
   // Если данные копятся годами, пилюли-вкладки на все месяцы не влезут и не будут читаемы —
   // показываем только последние 6 (плюс выбранный месяц, если он старше), а остальные месяцы
@@ -1851,8 +1882,8 @@ function tplInfluencerBrandDashboard(allRows){
     </div>
 
     <div class="grid-kpi">
-      ${kpi("Расходы (факт)", fmtNum(s.totalCost)+" ₸", "сумма колонки «факт расход» — сколько уже реально потратили")}
-      ${kpi("План", fmtNum(s.plannedCost + (allPeriod ? (DataManager.state.plans||[]).filter(p=>p.scope==="cohort"&&p.key==="mid"&&p.metric==="budget").reduce((a,p)=>a+(p.value||0),0) : planValue(month,"cohort","mid","budget")))+" ₸", "сумма «план расход» (крупные) + план бюджета когорты «Средний инфлюенс» за месяц")}
+      ${kpi("Расходы (факт)", fmtNum(s.totalCost)+" ₸", `сумма «факт расход» по ${monthRows.length} вышедшим из ${monthRowsAll.length} интеграций месяца`)}
+      ${kpi("План", fmtNum(sPlan.plannedCost + (allPeriod ? (DataManager.state.plans||[]).filter(p=>p.scope==="cohort"&&p.key==="mid"&&p.metric==="budget").reduce((a,p)=>a+(p.value||0),0) : planValue(month,"cohort","mid","budget")))+" ₸", "сумма «план расход» (крупные) + план бюджета когорты «Средний инфлюенс» за месяц")}
       ${kpi("Выручка (Kaspi)", kaspiRevenueValue(s), kaspiCoverageNote(monthRows, s.coveredCount))}
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2), `по ${s.coveredCount} из ${monthRows.length} интеграций, где вклад посчитан`)}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%", `по ${s.coveredCount} из ${monthRows.length} интеграций, где вклад посчитан`)}
@@ -4418,7 +4449,7 @@ function tplInfluencerDeals(){
                 ${r.hasBaseline ? `<b>${fmtNum(r.netContribution)}</b>${r.capped?' <span title="Вклад ограничен потолком правдоподобия по охвату — реальный прирост продаж в эти дни объясняется другим фактором, не этой интеграцией" style="cursor:help">⚠️</span>':''}` : `<span style="color:var(--ink-mute)">нет данных</span>`}
                 ${d.plannedContribution && r.hasBaseline ? `<br><span style="font-size:11px;color:${r.netContribution>=d.plannedContribution?'var(--ok)':'var(--bad)'}">${Math.round(r.netContribution/d.plannedContribution*100)}% от плана</span>` : ""}
                 <br>${inlineEditSpan(d.noImpact==='Да' ? '<span style="color:var(--bad);font-size:10.5px" title="Отмечено вручную: реального всплеска продаж не было — эта интеграция исключена из расчёта вклада">🚫 нет всплеска</span>' : '<span style="color:var(--ink-mute);font-size:10.5px;text-decoration:underline dotted;cursor:pointer" title="Отметить вручную, если по факту мониторинга всплеска продаж не было">отметить: нет всплеска</span>', d.id, 'noImpact', d.noImpact||'Нет', 'select', ['Нет','Да'])}
-        <br>${inlineEditSpan(manualContributionValue(d)!=null ? `<span style="color:var(--ok);font-size:10.5px" title="Вклад задан вручную менеджером (оценка менеджера, не расчёт по Kaspi) — заменяет авторасчёт. Расчётная доля по Kaspi при этом остаётся нераспределённой. Кликните, чтобы изменить или очистить (пусто = вернуться к расчёту по Kaspi, 0 = вклада не было)">✏️ вручную (оценка менеджера): ${fmtNum(manualContributionValue(d))}</span>` : '<span style="color:var(--ink-mute);font-size:10.5px;text-decoration:underline dotted;cursor:pointer" title="Задать вклад в продажи вручную — если система считает неверно или не видит предзаказ вне 1С">➕ вклад вручную</span>', d.id, 'manualContribution', manualContributionValue(d)!=null ? String(manualContributionValue(d)) : '', 'text')}
+        <br>${inlineEditSpan(manualContributionValue(d)!=null ? `<span style="color:var(--ok);font-size:10.5px" title="Вклад задан вручную менеджером (оценка менеджера, не расчёт по Kaspi) — заменяет авторасчёт. Расчётная доля по Kaspi при этом остаётся нераспределённой. Кликните, чтобы изменить или очистить (пусто = вернуться к расчёту по Kaspi, 0 = вклада не было)">✏️ вручную (оценка менеджера): ${fmtNum(manualContributionValue(d))}</span>` : '<span style="color:var(--ink-mute);font-size:10.5px;text-decoration:underline dotted;cursor:pointer" title="Задать вклад в продажи вручную — если система считает неверно или не видит предзаказ вне 1С">➕ вклад вручную</span>', d.id, 'manualContribution', manualContributionValue(d)!=null ? String(manualContributionValue(d)) : '', 'text')}${manualVsAutoHint(d,'large')}
               </td>
               <td style="text-align:right">${(()=>{
               const contrib = d.plannedContribution || planTargetFromCost(d.plannedCost||d.cost||0);
@@ -4686,7 +4717,7 @@ function tplMicroInfluencers(){
                 <span style="color:var(--ink-mute)"> / </span>
                 <span title="Из заказов Kaspi за 24 ч после выхода — то же число, что в «Авто (Kaspi)». Вручную не редактируется (для ручного значения — «задать вручную» ниже)">${!d.barcode ? '<span style="color:var(--ink-mute)">нет ШК</span>' : (hasBaseline ? fmtNum(r.netContribution)+" ₸"+(r.capped?' <span title="Вклад ограничен потолком правдоподобия по охвату — реальный прирост продаж в эти дни объясняется другим фактором, не этой интеграцией" style="cursor:help">⚠️</span>':"") : '<span style="color:var(--ink-mute)">—</span>')}</span>
                 <br>${inlineEditSpan(d.noImpact==='Да' ? '<span style="color:var(--bad);font-size:10.5px" title="Отмечено вручную: реального всплеска продаж не было — эта интеграция исключена из расчёта вклада">🚫 нет всплеска</span>' : '<span style="color:var(--ink-mute);font-size:10.5px;text-decoration:underline dotted;cursor:pointer" title="Отметить вручную, если по факту мониторинга всплеска продаж не было">отметить: нет всплеска</span>', d.id, 'noImpact', d.noImpact||'Нет', 'select', ['Нет','Да'])}
-        <br>${inlineEditSpan(manualContributionValue(d)!=null ? `<span style="color:var(--ok);font-size:10.5px" title="Вклад задан вручную менеджером (оценка менеджера, не расчёт по Kaspi) — заменяет авторасчёт. Расчётная доля по Kaspi при этом остаётся нераспределённой. Кликните, чтобы изменить или очистить (пусто = вернуться к расчёту по Kaspi, 0 = вклада не было)">✏️ вручную (оценка менеджера): ${fmtNum(manualContributionValue(d))}</span>` : '<span style="color:var(--ink-mute);font-size:10.5px;text-decoration:underline dotted;cursor:pointer" title="Задать вклад в продажи вручную — если система считает неверно или не видит предзаказ вне 1С">➕ вклад вручную</span>', d.id, 'manualContribution', manualContributionValue(d)!=null ? String(manualContributionValue(d)) : '', 'text')}
+        <br>${inlineEditSpan(manualContributionValue(d)!=null ? `<span style="color:var(--ok);font-size:10.5px" title="Вклад задан вручную менеджером (оценка менеджера, не расчёт по Kaspi) — заменяет авторасчёт. Расчётная доля по Kaspi при этом остаётся нераспределённой. Кликните, чтобы изменить или очистить (пусто = вернуться к расчёту по Kaspi, 0 = вклада не было)">✏️ вручную (оценка менеджера): ${fmtNum(manualContributionValue(d))}</span>` : '<span style="color:var(--ink-mute);font-size:10.5px;text-decoration:underline dotted;cursor:pointer" title="Задать вклад в продажи вручную — если система считает неверно или не видит предзаказ вне 1С">➕ вклад вручную</span>', d.id, 'manualContribution', manualContributionValue(d)!=null ? String(manualContributionValue(d)) : '', 'text')}${manualVsAutoHint(d,'micro')}
               </td>
               <td style="text-align:right">${(()=>{
                 const contrib = d.plannedContribution || planTargetFromCost(microDealTotalCost(d));
@@ -7477,16 +7508,7 @@ async function runSelfTests(){
     const bar = tplAttributionRecalcBar();
     if(!bar.includes("Просмотры по ссылкам")) throw new Error("строка про просмотры в панели пересчёта");
     if(String(Api.syncSocialViews).indexOf("/api/social-views/sync")<0) throw new Error("эндпоинт");
-    const sTab = UI.tab, sMM = UI.microMonth, sIM = UI.inflMonth;
-    try{
-      UI.tab = "microInfluencers"; UI.microMonth = "2026-10";
-      const b1 = tplAttributionRecalcBar();
-      if(!b1.includes("Обновить охваты за") || !/октябр/i.test(b1)) throw new Error("кнопка с открытым месяцем: "+b1);
-      const v = viewsSyncScope(); if(v.kind!=="micro" || v.month!=="2026-10") throw new Error("scope micro");
-      UI.tab = "influencerDeals"; UI.inflMonth = "";
-      if(!tplAttributionRecalcBar().includes("выберите месяц")) throw new Error("без месяца — кнопка неактивна");
-      if(viewsSyncScope().kind!=="large") throw new Error("scope large");
-    } finally { UI.tab = sTab; UI.microMonth = sMM; UI.inflMonth = sIM; }
+    if(tplAttributionRecalcBar().includes("views-sync-btn")) throw new Error("кнопки обновления охватов больше нет — обновляет сервер раз в 3 дня");
   });
   TestSuite.test("Крупные: фильтр по статусу (Опубликована / Запланирована)", ()=>{
     const savedDeals = DataManager.state.influencerDeals, savedFilter = JSON.stringify(UI.inflFilter);
@@ -7526,6 +7548,27 @@ async function runSelfTests(){
     const cell = autoContributionCell({autoContributionStatus:"ok", autoContributionKzt:52190, autoContributionUnits:10.4, autoContributionNote:"⟦v8;t=52190;d0=10944;tl=41246;c=H;bt=7.1;r2=0.47;g=1⟧ Итого 52 190 ₸ …"});
     if(!/день выхода 10[\s\u00a0]944 · следующие дни 41[\s\u00a0]246 \(ещё копится\)/.test(cell)) throw new Error("разбивка v8: "+cell);
     if(!cell.includes("уверенность: высокая") || cell.includes("⟦")) throw new Error("уверенность/метка: "+cell);
+  });
+  TestSuite.test("Ручной вклад + расчёт Kaspi: рядом видно расчёт и ROAS, кнопка «взять расчёт»", ()=>{
+    const h = manualVsAutoHint({id:5, cost:1000000, manualContribution:"1000000", autoContributionStatus:"ok", autoContributionKzt:1900000}, "large");
+    if(!/по Kaspi: <b>1[\s\u00a0]900[\s\u00a0]000 ₸<\/b> · ROAS ×1\.90/.test(h)) throw new Error("подсказка: "+h);
+    if(!h.includes("use-auto-contrib")) throw new Error("кнопка");
+    if(manualVsAutoHint({id:6, cost:1, autoContributionStatus:"ok", autoContributionKzt:5}, "large")!=="") throw new Error("без ручного — пусто");
+  });
+  TestSuite.test("Дашборд крупных: факт — только по вышедшим, план — по всем", ()=>{
+    const savedDeals = DataManager.state.influencerDeals, savedM = UI.inflMonth;
+    try{
+      DataManager.state.influencerDeals = [
+        {id:79201, blogerLogin:"@pub", plannedDate:"2026-10-05", publishedDate:"2026-10-05", status:"Опубликована", cost:300000, plannedCost:300000, reach:100000},
+        {id:79202, blogerLogin:"@plan", plannedDate:"2026-10-20", publishedDate:"", status:"Запланирована", cost:900000, plannedCost:900000, reach:0},
+        {id:79203, blogerLogin:"@paidnotyet", plannedDate:"2026-10-25", publishedDate:"", status:"Оплачена", cost:500000, plannedCost:500000},
+      ];
+      UI.inflMonth = "2026-10";
+      const html = tplInfluencerBrandDashboard(computeInfluencerRomi());
+      if(!/300[\s\u00a0]000 ₸<\/div><div class="lbl">Расходы \(факт\)/.test(html)) throw new Error("факт расход только по вышедшим");
+      if(!html.includes("по 1 вышедшим из 3")) throw new Error("подпись");
+      if(!isLargeDealPublished({status:"Оплачена", publishedDate:"2026-10-01"}) || isLargeDealPublished({status:"Оплачена"}) || isLargeDealPublished({status:"Отменена", publishedDate:"2026-10-01"})) throw new Error("правило вышедших");
+    } finally { DataManager.state.influencerDeals = savedDeals; UI.inflMonth = savedM; }
   });
   TestSuite.test("D0: autoContributionCell показывает сумму только для ok/zero, у остальных статусов «—» без числа", ()=>{
     const okHtml = autoContributionCell({autoContributionStatus:"ok", autoContributionKzt:30000, autoContributionUnits:5});
