@@ -22,14 +22,16 @@
 //    Охват не заполнен → оценка по подписчикам (медианное отношение охват/подписчики по базе),
 //    без подписчиков — медианный охват; уверенность «низкая», в пояснении написано.
 //
-// 3. МОДЕЛЬ ПО КАЖДОМУ SKU: продажи дня (шт, с поправкой на день недели) = фон a + b × E.
-//    Подбирается по всей истории SKU (устойчивая регрессия, выбросы гасятся), дни со скидкой
-//    (цена ниже медианной > 5%) в подбор не идут. b — сколько штук даёт единица охват-силы:
+// 3. МОДЕЛЬ ПО КАЖДОМУ SKU: продажи дня (шт, с поправкой на день недели) = фон(цена) + b × E,
+//    фон(цена) = a + c·ln(цена дня / обычная цена), c ≤ 0 (v8.1, 15.10.2026): когда цену подняли,
+//    обычных продаж меньше — фон ниже, и прирост выходов при высокой цене не «съедается» старым фоном;
+//    при скидке фон выше — скидка не выдаётся за блогера. Если цена не менялась или модель даёт
+//    c > 0 — цена не учитывается. Подбор по всей истории SKU (устойчивая регрессия). b — сколько штук даёт единица охват-силы:
 //    находится из того, как продажи РЕАЛЬНО растут и падают вместе с количеством/охватом выходов.
 //    Если связи нет (b ≤ 0 или t < 1) — вклад 0, это честный ответ «продажи не двигаются вместе с выходами».
 //
-// 4. ВКЛАД ВЫХОДА за день = b × w × f(день) × (поправка дня недели). Сумма всех выходов за день не
-//    больше продаж сверх фона (заказы − a): если модель «обещает» больше — всё срезается пропорционально.
+// 4. ВКЛАД ВЫХОДА за день = b × w × f(день) × (поправка дня недели). Сумма всех выходов за неделю не
+//    больше продаж сверх фона за эту неделю: если модель «обещает» больше — всё срезается пропорционально.
 //    Итог = сумма за 7 дней (день выхода + последующие), в тенге по фактической цене дня.
 //    Потолок правдоподобия: не больше 1 покупки на 100 просмотров (если охват известен) — срезаем
 //    до потолка, а не ставим «—».
@@ -49,7 +51,7 @@
 //    один раз (строка крупных), вторая duplicate. Отменённые (cancelled) не считаются.
 // ============================================================================
 
-const PARAMS_VERSION = "attrib-v8.0-2026-10-13";
+const PARAMS_VERSION = "attrib-v8.1-2026-10-15";
 
 const ASSUMED_POST_HOUR = { barter_box_deals: 12, barter_box_micro: 16 };
 const KERNEL_DAYS = 7;
@@ -174,6 +176,52 @@ function robustFit(xs, ys) {
   return { a, b, se, t: se > 0 && Number.isFinite(se) ? b / se : 0, r2: sst > 0 ? Math.max(0, 1 - sse / sst) : 0, n };
 }
 
+// Устойчивая регрессия y = a + b·x1 + c·x2 (Huber). Возвращает a, b, c, se(b), t(b), r2.
+function solve3(M, v) {
+  const A = M.map((r, i) => r.concat([v[i]]));
+  for (let i = 0; i < 3; i++) {
+    let p = i; for (let r = i + 1; r < 3; r++) if (Math.abs(A[r][i]) > Math.abs(A[p][i])) p = r;
+    if (Math.abs(A[p][i]) < 1e-12) return null;
+    [A[i], A[p]] = [A[p], A[i]];
+    for (let r = 0; r < 3; r++) if (r !== i) { const f = A[r][i] / A[i][i]; for (let c = i; c < 4; c++) A[r][c] -= f * A[i][c]; }
+  }
+  return [A[0][3] / A[0][0], A[1][3] / A[1][1], A[2][3] / A[2][2]];
+}
+function robustFit2(x1, x2, ys) {
+  const n = ys.length;
+  let w = Array(n).fill(1), coef = null;
+  const wls = () => {
+    const M = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], v = [0, 0, 0];
+    for (let i = 0; i < n; i++) {
+      const r = [1, x1[i], x2[i]];
+      for (let j = 0; j < 3; j++) { v[j] += w[i] * r[j] * ys[i]; for (let k = 0; k < 3; k++) M[j][k] += w[i] * r[j] * r[k]; }
+    }
+    const c = solve3(M, v);
+    if (!c) return null;
+    coef = c; return M;
+  };
+  let M = wls();
+  if (!M) return null;
+  for (let it = 0; it < 6; it++) {
+    const res = ys.map((y, i) => y - coef[0] - coef[1] * x1[i] - coef[2] * x2[i]);
+    const mres = median(res);
+    const mad = median(res.map((r) => Math.abs(r - mres))) || 0;
+    const sc = mad > 0 ? mad / 0.6745 : (Math.sqrt(res.reduce((q, r) => q + r * r, 0) / n) || 1);
+    w = res.map((r) => { const u = Math.abs(r) / (HUBER_K * sc); return u <= 1 ? 1 : 1 / u; });
+    M = wls();
+    if (!M) return null;
+  }
+  let sw = 0, sy = 0, sse = 0, sst = 0;
+  for (let i = 0; i < n; i++) { sw += w[i]; sy += w[i] * ys[i]; }
+  const my = sy / sw;
+  for (let i = 0; i < n; i++) { const r = ys[i] - coef[0] - coef[1] * x1[i] - coef[2] * x2[i]; sse += w[i] * r * r; sst += w[i] * (ys[i] - my) ** 2; }
+  const sigma2 = sse / Math.max(1, n - 3);
+  const e1 = solve3(M, [0, 1, 0]);
+  const varB = e1 ? sigma2 * e1[1] : Infinity;
+  const se = varB > 0 ? Math.sqrt(varB) : Infinity;
+  return { a: coef[0], b: coef[1], c: coef[2], se, t: Number.isFinite(se) && se > 0 ? coef[1] / se : 0, r2: sst > 0 ? Math.max(0, 1 - sse / sst) : 0, n };
+}
+
 // ---------------------------------------------------------------------------
 // ЧИСТАЯ функция расчёта (без базы).
 //   placements — вышедшие интеграции [{id, source, blogger_handle, reach, followers, platform, kaspi_code, published_date}]
@@ -264,14 +312,24 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
     }
     const prices = days.map((d) => rec(code, d)).filter((r) => r.qty > 0).map((r) => r.kzt / r.qty);
     const medPrice = median(prices);
+    // Цена дня (по фактическим продажам; в день без продаж — последняя известная). В модели — как
+    // лог-отклонение от обычной цены: при более высокой цене обычных продаж меньше, и фон ниже.
+    const dayPrice = new Map();
+    { let last = medPrice || 0; for (const d of days) { const r = rec(code, d); if (r.qty > 0) last = r.kzt / r.qty; dayPrice.set(d, last); } }
+    const lnP = (d) => (medPrice && dayPrice.get(d) > 0 ? Math.log(dayPrice.get(d) / medPrice) : 0);
     const isDiscount = (d) => { const r = rec(code, d); return medPrice && r.qty > 0 && r.kzt / r.qty < medPrice * (1 - PRICE_DRIFT_TOLERANCE); };
-    const fitDays = days.filter((d) => !isDiscount(d));
+    const fitDays = days;
     const exposedDays = fitDays.filter((d) => E.get(d) > 0).length;
     let fit = null, why = null;
     if (fitDays.length < MIN_FIT_DAYS) why = `по SKU всего ${fitDays.length} дн. истории заказов — модель не из чего построить`;
     else if (exposedDays < MIN_EXPOSED_DAYS) why = `по SKU всего ${exposedDays} дн. с выходами — модель не из чего построить`;
     else {
-      fit = robustFit(fitDays.map((d) => E.get(d)), fitDays.map((d) => rec(code, d).qty / wf[dowOf(d)]));
+      const ys = fitDays.map((d) => rec(code, d).qty / wf[dowOf(d)]);
+      const xE = fitDays.map((d) => E.get(d)), xP = fitDays.map(lnP);
+      const priceVaries = Math.max(...xP) - Math.min(...xP) > 0.03;
+      fit = priceVaries ? robustFit2(xE, xP, ys) : null;
+      // Цена должна снижать продажи (c ≤ 0); если модель говорит обратное — цену не учитываем.
+      if (!fit || !(fit.c <= 0)) { const f1 = robustFit(xE, ys); fit = f1 ? Object.assign(f1, { c: 0 }) : null; }
       if (!fit) why = "выходы этого SKU шли равномерно каждый день — связь продаж с ними не выделить";
     }
     if (why) {
@@ -279,16 +337,24 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
       continue;
     }
     const a = Math.max(0, fit.a);
+    const baseOf = (d) => Math.max(0, fit.a + fit.c * lnP(d));   // фон дня с учётом цены дня
     const linked = fit.b > 0 && fit.t >= 1;
     const bEff = linked ? fit.b : 0;
-    // Масштаб по дням: сумма вкладов ≤ продаж сверх фона.
-    const scale = new Map();
+    // Потолок по факту — по неделям (пн–вс): сумма вкладов всех блогеров за неделю ≤ продаж сверх фона
+    // за эту неделю (фон — при цене каждого дня). По неделе, а не по дню: случайные недобор/перебор
+    // заказов в отдельные дни взаимно гасятся и не срезают вклад систематически.
+    const weekOf = (d) => addDaysStr(d, -((dowOf(d) + 6) % 7));
+    const wk = new Map();
     for (const d of days) {
       const f = wf[dowOf(d)];
-      const pred = bEff * E.get(d) * f;
-      const room = Math.max(0, rec(code, d).qty - a * f);
-      scale.set(d, pred > 0 ? Math.min(1, room / pred) : 0);
+      const k = weekOf(d);
+      const cur = wk.get(k) || { pred: 0, room: 0 };
+      cur.pred += bEff * E.get(d) * f;
+      cur.room += rec(code, d).qty - baseOf(d) * f;
+      wk.set(k, cur);
     }
+    const scale = new Map();
+    for (const d of days) { const w = wk.get(weekOf(d)); scale.set(d, w.pred > 0 ? Math.min(1, Math.max(0, w.room) / w.pred) : 0); }
     const priceOf = (d) => { const r = rec(code, d); return r.qty > 0 ? r.kzt / r.qty : (medPrice || 0); };
     for (const m of members) {
       let u0 = 0, k0 = 0, uT = 0, kT = 0, lastDay = null, cut = false;
@@ -311,6 +377,7 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
       push(m.id, {
         code, status: kzt >= 1 ? "ok" : "zero", k0: Math.floor(k0), kT: Math.floor(kT), units, conf, linked, fit, a, cut, capped, growing,
         E0: E.get(m.d0) || 0, q0: rec(code, m.d0).qty, discount: isDiscount(m.d0),
+        base0: baseOf(m.d0), price0: dayPrice.get(m.d0), medPrice, elast: fit.c,
       });
     }
   }
@@ -334,10 +401,13 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
     const t = k0 + kT;
     const bt = Math.min(...good.map((q) => q.fit.t)), r2 = Math.min(...good.map((q) => q.fit.r2));
     const txt = good.map((q) =>
-      `SKU ${q.code}: модель «продажи = фон ${fmtQ(q.a)} шт/день + ${q.fit.b > 0 ? fmtQ(q.fit.b * 1000) : 0} шт на 1000 ед. охват-силы» по ${q.fit.n} дн. (связь t=${q.fit.t.toFixed(1)}, R²=${q.fit.r2.toFixed(2)})` +
+      `SKU ${q.code}: модель «продажи = фон + ${q.fit.b > 0 ? fmtQ(q.fit.b * 1000) : 0} шт на 1000 ед. охват-силы» по ${q.fit.n} дн. (связь t=${q.fit.t.toFixed(1)}, R²=${q.fit.r2.toFixed(2)})` +
       (q.linked ? "" : " — продажи не растут вместе с выходами, вклад 0") +
-      `; в день выхода заказов ${fmtQ(q.q0)} шт${q.discount ? " (в этот день была скидка)" : ""}` +
-      (q.cut ? "; срезано до продаж сверх фона" : "") + (q.capped ? "; срезано до 1 покупки на 100 просмотров" : "") +
+      (q.elast < 0 && q.medPrice
+        ? `; фон зависит от цены: при обычной цене ${fmt(q.medPrice)} ₸ — ${fmtQ(q.a)} шт/день, цена +10% → обычных продаж ${fmtQ(Math.max(0, q.a + q.elast * Math.log(1.1)))} шт/день`
+        : `; фон ${fmtQ(q.a)} шт/день`) +
+      `; в день выхода цена ${fmt(q.price0 || 0)} ₸, фон при этой цене ${fmtQ(q.base0)} шт, заказов ${fmtQ(q.q0)} шт${q.discount ? " (скидка)" : ""}` +
+      (q.cut ? "; срезано до продаж сверх фона за неделю" : "") + (q.capped ? "; срезано до 1 покупки на 100 просмотров" : "") +
       ` → день выхода ${fmt(q.k0)} ₸ + следующие дни ${fmt(q.kT)} ₸`);
     const head = `Итого ${fmt(t)} ₸ (≈${fmtQ(units)} шт) = день выхода ${fmt(k0)} ₸ + следующие 6 дней ${fmt(kT)} ₸. Уверенность: ${CONF_LABEL[conf]}.` +
       (growing ? ` Ещё копится до ${ddmmD(addDaysStr(p.d0, KERNEL_DAYS - 1))}.` : "");
@@ -350,7 +420,7 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
       units: Math.round(units * 100) / 100,
       kzt: t,
       breakdown: { dayZeroKzt: k0, tailKzt: kT, confidence: conf },
-      note: `${tag} ${head} ${txt.join(" | ")}.${how}${badNote}${replNote}${dupNote} Сумма всех блогеров за день не больше продаж сверх фона.${V}`,
+      note: `${tag} ${head} ${txt.join(" | ")}.${how}${badNote}${replNote}${dupNote} Сумма всех блогеров за неделю не больше продаж сверх фона.${V}`,
     });
   }
   return { results };
