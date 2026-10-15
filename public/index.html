@@ -5685,6 +5685,8 @@ function tplMicroCalendar(){
           ${responsibles.map(r=>`<option value="${escapeHtml(r)}" ${r===resp?'selected':''}>${escapeHtml(r)}</option>`).join("")}
         </select>
         ${resp ? `<span style="align-self:center;color:var(--ink-mute);font-size:11.5px">показаны только блогеры ${escapeHtml(resp)} — ${allBloggers.length} шт.</span>` : ""}
+        ${(()=>{ const inM = Object.keys(entriesByDate).filter(d=>d.slice(0,7)===ym).reduce((a,d)=>a+(entriesByDate[d]||[]).filter(e=>!hidden.has(e.name)).length,0);
+          return `<span class="planner-month-count" style="align-self:center;font-size:12px;margin-left:auto"><b>${inM}</b> видео за ${escapeHtml(monthLabel(ym))}${resp?` у ${escapeHtml(resp)}`:""}</span>`; })()}
       </div>
       <div class="login-hint" style="margin-bottom:10px">
         Дата ячейки — плановая дата публикации, а если её ещё нет — фактическая дата выкладки.
@@ -5711,7 +5713,7 @@ function tplMicroCalendar(){
           const items = (entriesByDate[dateStr]||[]).filter(e=>!hidden.has(e.name));
           return `<div class="planner-day ${inMonth?'':'out'} ${isToday?'today':''}">
             <div class="planner-day-head">
-              <span>${dayNum}</span>
+              <span>${dayNum}${items.length?` <span class="planner-day-count" title="Видео на этот день${resp?` у ${escapeHtml(resp)}`:""}: ${items.length}, из них уже вышло ${items.filter(e=>e.done).length}" style="font-size:10.5px;font-weight:700;color:#fff;background:${source==="large"?INFL_BRAND:MICRO_BRAND};border-radius:8px;padding:0 6px;margin-left:4px">${items.length} видео</span>`:""}</span>
               <button class="planner-day-add" data-add-date="${dateStr}" title="Добавить интеграцию на эту дату">+</button>
             </div>
             ${items.map(e=>{
@@ -7569,6 +7571,23 @@ async function runSelfTests(){
       if(!html.includes("по 1 вышедшим из 3")) throw new Error("подпись");
       if(!isLargeDealPublished({status:"Оплачена", publishedDate:"2026-10-01"}) || isLargeDealPublished({status:"Оплачена"}) || isLargeDealPublished({status:"Отменена", publishedDate:"2026-10-01"})) throw new Error("правило вышедших");
     } finally { DataManager.state.influencerDeals = savedDeals; UI.inflMonth = savedM; }
+  });
+  TestSuite.test("Планер: счётчик видео в день и за месяц, учитывает фильтр по менеджеру", ()=>{
+    const savedMicro = DataManager.state.microInfluencerDeals, sM = UI.calendarMonth, sS = UI.calendarSource, sR = UI.calendarResponsible, sH = UI.calendarHiddenBloggers;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:79301, blogerName:"a1", responsible:"Нина", plannedDate:"2026-11-14"},
+        {id:79302, blogerName:"a2", responsible:"Нина", plannedDate:"2026-11-14"},
+        {id:79303, blogerName:"b1", responsible:"Сая", plannedDate:"2026-11-14"},
+        {id:79304, blogerName:"b2", responsible:"Сая", plannedDate:"2026-11-20"},
+      ];
+      UI.calendarMonth = "2026-11"; UI.calendarSource = "micro"; UI.calendarHiddenBloggers = new Set(); UI.calendarResponsible = "";
+      let html = tplMicroCalendar();
+      if(!html.includes(">3 видео<") || !html.includes("<b>4</b> видео за")) throw new Error("все менеджеры: "+(html.match(/\d+ видео/g)||[]).join(","));
+      UI.calendarResponsible = "Нина";
+      html = tplMicroCalendar();
+      if(!html.includes(">2 видео<") || !html.includes("<b>2</b> видео за")) throw new Error("фильтр Нина: "+(html.match(/\d+ видео/g)||[]).join(","));
+    } finally { DataManager.state.microInfluencerDeals = savedMicro; UI.calendarMonth = sM; UI.calendarSource = sS; UI.calendarResponsible = sR; UI.calendarHiddenBloggers = sH; }
   });
   TestSuite.test("D0: autoContributionCell показывает сумму только для ok/zero, у остальных статусов «—» без числа", ()=>{
     const okHtml = autoContributionCell({autoContributionStatus:"ok", autoContributionKzt:30000, autoContributionUnits:5});
