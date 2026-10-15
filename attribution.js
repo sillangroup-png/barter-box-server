@@ -30,7 +30,10 @@
 //    находится из того, как продажи РЕАЛЬНО растут и падают вместе с количеством/охватом выходов.
 //    Если связи нет (b ≤ 0 или t < 1) — вклад 0, это честный ответ «продажи не двигаются вместе с выходами».
 //
-// 4. ВКЛАД ВЫХОДА за день = b × w × f(день) × (поправка дня недели). Сумма всех выходов за неделю не
+// 4. v8.2: если выходы товара доказанно двигают продажи (t ≥ 2) — вклад = реальный всплеск заказов
+//    сверх фона при той же цене (заказы − фон дня), поделённый между блогерами товара по доле экспозиции
+//    этого дня; от дня выхода, пока всплеск не закончился (с 3-го дня), до 7 дней. Иначе — осторожно:
+//    ВКЛАД ВЫХОДА за день = b × w × f(день) × (поправка дня недели). Сумма всех выходов за неделю не
 //    больше продаж сверх фона за эту неделю: если модель «обещает» больше — всё срезается пропорционально.
 //    Итог = сумма за 7 дней (день выхода + последующие), в тенге по фактической цене дня.
 //    Потолок правдоподобия: не больше 1 покупки на 100 просмотров (если охват известен) — срезаем
@@ -51,7 +54,7 @@
 //    один раз (строка крупных), вторая duplicate. Отменённые (cancelled) не считаются.
 // ============================================================================
 
-const PARAMS_VERSION = "attrib-v8.1-2026-10-15";
+const PARAMS_VERSION = "attrib-v8.2-2026-10-15";
 
 const ASSUMED_POST_HOUR = { barter_box_deals: 12, barter_box_micro: 16 };
 const KERNEL_DAYS = 7;
@@ -356,13 +359,28 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
     const scale = new Map();
     for (const d of days) { const w = wk.get(weekOf(d)); scale.set(d, w.pred > 0 ? Math.min(1, Math.max(0, w.room) / w.pred) : 0); }
     const priceOf = (d) => { const r = rec(code, d); return r.qty > 0 ? r.kzt / r.qty : (medPrice || 0); };
+    // v8.2: если по истории товара доказано, что выходы двигают продажи (t ≥ 2), вклад = РЕАЛЬНЫЙ
+    // всплеск продаж сверх фона при той же цене (заказы − фон дня), поделённый между блогерами этого
+    // товара по их доле экспозиции в этот день. Дни считаются от дня выхода, пока продажи не вернулись
+    // к обычному уровню (с 3-го дня: всплеска нет — дальше не считаем), максимум 7 дней.
+    // Если связь не доказана — осторожная оценка по модели (b × сила выхода), срезанная до факта недели.
+    const observed = linked && fit.t >= 2;
+    const excessOf = (d) => rec(code, d).qty - baseOf(d) * wf[dowOf(d)];
     for (const m of members) {
-      let u0 = 0, k0 = 0, uT = 0, kT = 0, lastDay = null, cut = false;
-      for (const [d, v] of share.get(m.id)) {
-        const f = wf[dowOf(d)];
-        const raw = bEff * v * f;
-        const u = raw * scale.get(d);
-        if (u < raw - 1e-9) cut = true;
+      let u0 = 0, k0 = 0, uT = 0, kT = 0, lastDay = null, cut = false, stoppedAt = null;
+      const mDays = [...share.get(m.id).entries()].sort((x, y) => (x[0] < y[0] ? -1 : 1));
+      for (const [d, v] of mDays) {
+        let u;
+        if (observed) {
+          const k = daysBetween(m.d0, d);
+          const ex = excessOf(d);
+          if (k >= 2 && ex <= 0) { stoppedAt = d; break; }
+          u = Math.max(0, ex) * (E.get(d) > 0 ? v / E.get(d) : 0);
+        } else {
+          const raw = bEff * v * wf[dowOf(d)];
+          u = raw * scale.get(d);
+          if (u < raw - 1e-9) cut = true;
+        }
         const kz = u * priceOf(d);
         if (d === m.d0) { u0 += u; k0 += kz; } else { uT += u; kT += kz; }
         lastDay = d;
@@ -375,7 +393,8 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
       const conf = !linked ? "L" : (fit.t >= 3 && fit.r2 >= 0.3 && !m.reachEstimated ? "H" : (fit.t >= 2 && !m.reachEstimated ? "M" : "L"));
       const growing = daysBetween(m.d0, lastCompleteDay) < KERNEL_DAYS - 1;
       push(m.id, {
-        code, status: kzt >= 1 ? "ok" : "zero", k0: Math.floor(k0), kT: Math.floor(kT), units, conf, linked, fit, a, cut, capped, growing,
+        code, status: kzt >= 1 ? "ok" : "zero", k0: Math.floor(k0), kT: Math.floor(kT), units, conf, linked, fit, a, cut, capped, growing: growing && !stoppedAt,
+        observed, stoppedAt, sharedWith: Math.max(0, (E.get(m.d0) || 0) > 0 ? 1 - (share.get(m.id).get(m.d0) || 0) / E.get(m.d0) : 0),
         E0: E.get(m.d0) || 0, q0: rec(code, m.d0).qty, discount: isDiscount(m.d0),
         base0: baseOf(m.d0), price0: dayPrice.get(m.d0), medPrice, elast: fit.c,
       });
@@ -401,7 +420,9 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
     const t = k0 + kT;
     const bt = Math.min(...good.map((q) => q.fit.t)), r2 = Math.min(...good.map((q) => q.fit.r2));
     const txt = good.map((q) =>
-      `SKU ${q.code}: модель «продажи = фон + ${q.fit.b > 0 ? fmtQ(q.fit.b * 1000) : 0} шт на 1000 ед. охват-силы» по ${q.fit.n} дн. (связь t=${q.fit.t.toFixed(1)}, R²=${q.fit.r2.toFixed(2)})` +
+      `SKU ${q.code}: ${q.observed
+        ? `вклад = реальный всплеск заказов сверх фона при той же цене, по дням от выхода${q.stoppedAt ? ` до ${ddmmD(addDaysStr(q.stoppedAt, -1))} (дальше продажи вернулись к обычным)` : ""}` + (q.sharedWith > 0.05 ? `, поделён с другими блогерами этого товара (её доля в день выхода ${Math.round((1 - q.sharedWith) * 100)}%)` : "")
+        : `связь продаж с выходами слабая — осторожная оценка «${q.fit.b > 0 ? fmtQ(q.fit.b * 1000) : 0} шт на 1000 ед. охват-силы»`} (история ${q.fit.n} дн., связь t=${q.fit.t.toFixed(1)}, R²=${q.fit.r2.toFixed(2)})` +
       (q.linked ? "" : " — продажи не растут вместе с выходами, вклад 0") +
       (q.elast < 0 && q.medPrice
         ? `; фон зависит от цены: при обычной цене ${fmt(q.medPrice)} ₸ — ${fmtQ(q.a)} шт/день, цена +10% → обычных продаж ${fmtQ(Math.max(0, q.a + q.elast * Math.log(1.1)))} шт/день`
