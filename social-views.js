@@ -14,15 +14,16 @@
 // остаётся ручная цифра. deal.reachAutoSet[поле] — что записал сервер; детали последнего запроса —
 // deal.socialViewsAuto = {ig:{...}, tt:{...}}.
 //
-// Когда обновляем: ролики ≤ 2 дней — раз в 6 ч, ≤ 8 дней — раз в сутки, потом цифра
-// фиксируется. Старые выходы (с 01.09.2026) — один раз (дозаполнение/замена).
+// Когда обновляем (v3, 15.10.2026): только сам сервер, кнопки нет. Ролики текущего месяца (и вышедшие
+// за последние 7 дней): новая ссылка — при ближайшей проверке, дальше каждый ролик раз в 3 дня.
+// Прошлые месяцы не пересчитываются.
 // Нужен APIFY_TOKEN в Render → Environment. Без него модуль ничего не делает.
 // Стоимость (сентябрь 2026): Instagram Scraper ~$1.5, TikTok Scraper ~$1.7 за 1000 роликов.
 // ============================================================================
 
 const IG_ACTOR = process.env.APIFY_IG_ACTOR || "apify~instagram-scraper";
 const TT_ACTOR = process.env.APIFY_TT_ACTOR || "clockworks~tiktok-scraper";
-const BACKFILL_FROM = process.env.SOCIAL_VIEWS_BACKFILL_FROM || "2026-09-01";
+const REFRESH_EVERY_H = Number(process.env.SOCIAL_VIEWS_REFRESH_HOURS) || 72;   // раз в 3 дня
 const MAX_PER_RUN = Number(process.env.SOCIAL_VIEWS_MAX_PER_RUN) || 150;
 const H = 3600 * 1000;
 
@@ -77,17 +78,13 @@ function isDue(deal, kind, t, nowMs, today) {
   const prev = deal.socialViewsAuto && deal.socialViewsAuto[t.net];
   const sameLink = prev && prev.url === t.url;
   const last = sameLink && prev.fetchedAt ? Date.parse(prev.fetchedAt) : 0;
+  // v3 (15.10.2026, решение Нины): только ролики ТЕКУЩЕГО месяца (+ вышедшие за последние 7 дней,
+  // чтобы ролики конца прошлого месяца добрали просмотры). Прошлые месяцы не пересчитываются.
+  if (pd.slice(0, 7) !== today.slice(0, 7) && age > 7) return false;
   if (sameLink && prev.errors >= 3 && !prev.views) return false;                  // 3 раза не нашли — хватит
-  if (!sameLink || !last) {
-    // Новая ссылка: свежие выходы — сразу; старые с 01.09 — один раз.
-    return age <= 8 || pd >= BACKFILL_FROM;
-  }
-  if (prev.error && nowMs - last < 24 * H) return false;
-  if (age <= 2) return nowMs - last >= 6 * H;
-  if (age <= 8) return nowMs - last >= 24 * H;
-  // Финальная фиксация: один раз после 8-го дня, если последний замер был раньше.
-  const lastAge = daysBetween(pd, new Date(last + 5 * H).toISOString().slice(0, 10));
-  return lastAge < 8 && age <= 14;
+  if (!sameLink || !last) return true;                                             // новая ссылка — при ближайшей проверке
+  if (prev.error && !prev.views) return nowMs - last >= 24 * H;                    // ошибка — повтор через сутки
+  return nowMs - last >= REFRESH_EVERY_H * H;                                      // дальше — раз в 3 дня
 }
 
 async function runActor(actor, input, token, { timeoutSec = 240 } = {}) {
@@ -215,7 +212,7 @@ async function syncSocialViews(state, { force = false, month = null, kind: onlyK
           if (!fresh) jobs.push({ d, kind, t });
           continue;
         }
-        if (isDue(d, kind, t, started, today) || (force && !!pubDateOf(d, kind) && daysBetween(pubDateOf(d, kind), today) <= 8)) jobs.push({ d, kind, t });
+        if (isDue(d, kind, t, started, today)) jobs.push({ d, kind, t });
       }
     }
     // Сначала самые свежие выходы.
