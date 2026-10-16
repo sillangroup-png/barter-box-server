@@ -1691,7 +1691,7 @@ function microInfluencerSummary(from, to){
   const pendingCount = deals.filter(d=>d.paymentStatus==="не оплачено" && d.videoStatus!=="опубликовано").length;
   // Уникальных блогеров — не то же самое, что кол-во интеграций: один блогер может продавать
   // пакетом несколько постов/товаров (3-4 интеграции сразу), поэтому считаем отдельно по имени.
-  const uniqueBloggerCount = new Set(deals.map(d=>d.blogerName||"—")).size;
+  const uniqueBloggerCount = new Set(deals.map(d=>microBloggerKey(d.blogerName))).size;
   const avgCpv = (totalCost>0 && totalFactReach>0) ? totalCost/totalFactReach : null;
 
   let romiRows = computeMicroInfluencerRomi();
@@ -1716,13 +1716,13 @@ function microDetailStats(deals){
   const paidReach = paid.reduce((s,d)=>s+microDealFactReach(d),0);
   const paidCpv = (paidSum>0 && paidReach>0) ? paidSum/paidReach : null;
   const paidPublishedCount = paid.filter(d=>d.videoStatus==="опубликовано").length;
-  const paidBloggers = new Set(paid.map(d=>d.blogerName||"—")).size;
+  const paidBloggers = new Set(paid.map(d=>microBloggerKey(d.blogerName))).size;
 
   // "В работе" — по статусу ПУБЛИКАЦИИ (не по оплате): пока видео не вышло, для маркетолога это
   // всё ещё открытая задача "ждём контент от блогера", даже если оплата уже прошла заранее.
   const inProgress = deals.filter(d=>d.videoStatus!=="опубликовано");
   const inProgressSum = inProgress.reduce((s,d)=>s+microDealTotalCost(d),0);
-  const inProgressBloggers = new Set(inProgress.map(d=>d.blogerName||"—")).size;
+  const inProgressBloggers = new Set(inProgress.map(d=>microBloggerKey(d.blogerName))).size;
   const inProgressPaidCount = inProgress.filter(d=>d.paymentStatus==="оплачено").length;
   const inProgressToPayCount = inProgress.filter(d=>d.paymentStatus==="к оплате").length;
   const inProgressUnpaidCount = inProgress.filter(d=>d.paymentStatus==="не оплачено").length;
@@ -1930,9 +1930,9 @@ function tplInfluencerBrandDashboard(allRows){
 function microBloggerAgg(rows){
   const map = {};
   rows.forEach(r=>{
-    const login = r.deal.blogerName || "—";
-    if(!map[login]) map[login] = {login, reach:0, contribution:0, cost:0, dealsCount:0};
-    const a = map[login];
+    const login = r.deal.blogerName || "—", key = microBloggerKey(r.deal.blogerName);
+    if(!map[key]) map[key] = {login, reach:0, contribution:0, cost:0, dealsCount:0};
+    const a = map[key];
     a.reach += microDealFactReach(r.deal);
     a.contribution += r.netContribution||0;
     a.cost += microDealTotalCost(r.deal); // оплата + себестоимость товара, см. комментарий у microDealTotalCost
@@ -2193,9 +2193,9 @@ function microBloggerSummary(month){
   computeMicroInfluencerRomi().forEach(r=>{ romiById[r.deal.id] = r; });
   const map = {};
   deals.forEach(d=>{
-    const name = d.blogerName || "—";
-    if(!map[name]) map[name] = {blogerName:name, dealsCount:0, totalReach:0, totalCost:0, totalContribution:0, hasAnyBaseline:false};
-    const a = map[name];
+    const name = d.blogerName || "—", key = microBloggerKey(d.blogerName);
+    if(!map[key]) map[key] = {blogerName:name, dealsCount:0, totalReach:0, totalCost:0, totalContribution:0, hasAnyBaseline:false};
+    const a = map[key];
     a.dealsCount++;
     a.totalReach += microDealFactReach(d);
     a.totalCost += microDealTotalCost(d);
@@ -2337,19 +2337,20 @@ function microResponsibleSummary(month){
   const map = {};
   deals.forEach(d=>{
     const name = d.responsible || "Не указан";
-    if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), forProduct:new Set(), dealsCount:0, inProgress:0, published:0, totalReach:0};
+    if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), forProduct:new Set(), dealsCount:0, inProgress:0, published:0, totalReach:0, reachNoViral:0, viralCount:0};
     const a = map[name];
-    if(isMicroForProduct(d)) a.forProduct.add(d.blogerName || "—");
+    if(isMicroForProduct(d)) a.forProduct.add(microBloggerKey(d.blogerName));
     // Город/категория запоминаются по блогеру (не по интеграции), чтобы разбивка ниже (в
     // развёрнутой карточке) считала тех же "уникальных блогеров", что и колонка "Блогеров" —
     // если блогер продавал пакетом несколько интеграций, берём город/категорию с последней.
-    a.bloggers.set(d.blogerName || "—", {city: d.city || "Не указан", category: d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "Не указана"});
+    a.bloggers.set(microBloggerKey(d.blogerName), {city: d.city || "Не указан", category: d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "Не указана"});
     a.dealsCount++;
     if(d.videoStatus === "опубликовано") a.published++; else a.inProgress++;
     // Охваты — факт (Reels+TikTok), как и везде в приложении; считаем по ВСЕМ интеграциям
     // менеджера за период (не только опубликованным), но у неопубликованных факт.охват обычно 0,
     // так что на итог это не влияет.
     a.totalReach += microDealFactReach(d);
+    if(microDealFactReach(d) >= MICRO_VIRAL_REACH_MIN) a.viralCount++; else a.reachNoViral += microDealFactReach(d);
   });
   // Достраиваем нулевые строки тем, у кого за месяц ещё нет ни одной интеграции (см. комментарий
   // к microKnownResponsibles). Делаем это только когда на месяц есть план — за прошлые месяцы
@@ -2360,7 +2361,7 @@ function microResponsibleSummary(month){
     // менеджер, у которого в месяце есть интеграции, всё равно показывается (новый — с планом 40).
     const zeroRowNames = (month && month >= MICRO_PLAN_V2_FROM_MONTH) ? Object.keys(MICRO_PLAN_BY_MANAGER) : microKnownResponsibles();
     zeroRowNames.forEach(name=>{
-      if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), forProduct:new Set(), dealsCount:0, inProgress:0, published:0, totalReach:0};
+      if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), forProduct:new Set(), dealsCount:0, inProgress:0, published:0, totalReach:0, reachNoViral:0, viralCount:0};
     });
   }
   return Object.values(map).map(a=>{
@@ -2378,6 +2379,8 @@ function microResponsibleSummary(month){
       inProgress: a.inProgress,
       published: a.published,
       totalReach: a.totalReach,
+      reachNoViral: a.reachNoViral,
+      viralCount: a.viralCount,
       // План/остаток/процент выполнения — null, если на этот месяц плана нет.
       plan: hasPlan ? microPlanPerResponsible(month, a.responsible) : null,
       planLeft: !hasPlan || !microPlanPerResponsible(month, a.responsible) ? null : Math.max(0, microPlanPerResponsible(month, a.responsible) - a.bloggers.size),
@@ -2399,7 +2402,7 @@ function microResponsibleTotalForProduct(month){
 function microResponsibleTotalUniqueBloggers(month){
   let deals = DataManager.state.microInfluencerDeals;
   if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
-  return new Set(deals.map(d=>d.blogerName||"—")).size;
+  return new Set(deals.map(d=>microBloggerKey(d.blogerName))).size;
 }
 // Группы для «Сводки по ответственным» (структура от 01.10.2026): сверху — общий подсчёт по
 // руководителю группы, по клику раскрываются её менеджеры. Руководитель сама тоже ведёт блогеров —
@@ -2423,7 +2426,7 @@ function microResponsibleGroupRows(month, rows){
     memberRows.forEach(r=>used.add(r.responsible));
     let deals = DataManager.state.microInfluencerDeals.filter(d=> names.includes((d.responsible||"").trim()));
     if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
-    const unique = new Set(deals.map(d=>d.blogerName||"—")).size;
+    const unique = new Set(deals.map(d=>microBloggerKey(d.blogerName))).size;
     const forProductCount = microForProductBloggers(deals);
     const plans = memberRows.map(r=>r.plan).filter(v=>v);
     const plan = plans.length ? plans.reduce((a,b)=>a+b,0) : null;
@@ -2438,6 +2441,8 @@ function microResponsibleGroupRows(month, rows){
       published: memberRows.reduce((a,r)=>a+r.published,0),
       dealsCount: memberRows.reduce((a,r)=>a+r.dealsCount,0),
       totalReach: memberRows.reduce((a,r)=>a+r.totalReach,0),
+      reachNoViral: memberRows.reduce((a,r)=>a+r.reachNoViral,0),
+      viralCount: memberRows.reduce((a,r)=>a+r.viralCount,0),
     });
   });
   const ungrouped = rows.filter(r=>!used.has(r.responsible));
@@ -2460,6 +2465,8 @@ function tplMicroResponsibleSummary(){
     </div></td>`;
   };
   // Под числом блогеров — сколько из них работают «за товар» (уникальные аккаунты).
+  // Под охватами — сумма без вирусных роликов (от 500 тыс. просмотров), чтобы один такой ролик не искажал картину.
+  const noViralNote = (sum, cnt) => `<div style="font-size:10.5px;font-weight:400;color:var(--ink-mute);white-space:nowrap" title="Сумма охватов без роликов от ${fmtNum(MICRO_VIRAL_REACH_MIN)} просмотров${cnt?` (таких роликов: ${cnt})`:""}. На вклад не влияет.">без всплесков: ${fmtNum(sum||0)}${cnt?` <span style="opacity:.8">(−${cnt} шт)</span>`:""}</div>`;
   const forProductNote = n => `<div style="font-size:10.5px;font-weight:400;color:var(--ink-mute);white-space:nowrap">из них за товар: ${n||0}</div>`;
   const cols = plan ? 10 : 7; // всего колонок в таблице — нужно для colspan пустой строки
   return `
@@ -2509,7 +2516,7 @@ function tplMicroResponsibleSummary(){
               <td>${r.inProgress}</td>
               <td>${r.published}</td>
               <td>${r.dealsCount}</td>
-              <td>${fmtNum(r.totalReach)}</td>
+              <td>${fmtNum(r.totalReach)}${noViralNote(r.reachNoViral, r.viralCount)}</td>
             </tr>${expanded ? `<tr${o.indent?' style="background:var(--canvas)"':''}>
               <td></td>
               <td colspan="${cols-1}" style="padding:6px 0 16px ${o.indent?'22px':'0'}">
@@ -2532,7 +2539,7 @@ function tplMicroResponsibleSummary(){
                 <td>${g.inProgress}</td>
                 <td>${g.published}</td>
                 <td>${g.dealsCount}</td>
-                <td>${fmtNum(g.totalReach)}</td>
+                <td>${fmtNum(g.totalReach)}${noViralNote(g.reachNoViral, g.viralCount)}</td>
               </tr>${open ? g.memberRows.map(r=> personRow(r, {indent:true, label: r.responsible===g.lead ? r.responsible+" (лично)" : r.responsible})).join("") : ""}`;
             }).join("");
             return (groupHtml + ungrouped.map(r=>personRow(r)).join("")) || `<tr><td class="empty" colspan="${cols}">${month ? "Нет интеграций за выбранный месяц" : "Интеграций пока нет"}</td></tr>`;
@@ -2566,7 +2573,7 @@ function tplMicroResponsibleSummary(){
               const pct = Math.round(totalDeals/team.integrations*100);
               return `${totalDeals} <span style="font-weight:400;color:var(--ink-mute)">из</span> ${planCellInlineValue(month,"team","micro","integrations",MICRO_TEAM_PLAN_INTEGRATIONS)} <span style="font-weight:600;color:${pct>=100?'var(--ok)':(pct>=60?'var(--warn)':'var(--bad)')}">${pct}%</span>`;
             })()}</td>
-            <td>${fmtNum(rows.reduce((s,r)=>s+r.totalReach,0))}</td>
+            <td>${fmtNum(rows.reduce((s,r)=>s+r.totalReach,0))}${noViralNote(rows.reduce((s,r)=>s+r.reachNoViral,0), rows.reduce((s,r)=>s+r.viralCount,0))}</td>
           </tr>` : ""}
         </tbody>
       </table></div>
@@ -2586,9 +2593,24 @@ function tplMicroResponsibleSummary(){
 // на чтении показываем и считаем их как «За товар».
 const CATEGORY_TYPO_FIX = {"лайфстал":"Лайфстайл", "бартер":"За товар"};
 const MICRO_FOR_PRODUCT_CATEGORY = "За товар";
+// «Охваты без всплесков» в сводке по ответственным: сумма охватов без вирусных роликов — интеграций,
+// у которых факт. охват от 500 тыс. просмотров (один такой ролик перекрывает охваты всех остальных).
+// Только для отображения, на вклад и другие расчёты не влияет.
+const MICRO_VIRAL_REACH_MIN = 500000;
+// Один блогер = один аккаунт, как бы ни записали имя: «dehnara», «Dehnara бартер», «@dehnara»,
+// «instagram.com/dehnara», «dehnara (за товар)» — один и тот же блогер. Регистр, @, ссылка,
+// пометки «бартер / за товар» и знаки препинания при подсчёте уникальных блогеров не учитываются.
+function microBloggerKey(name){
+  let s = String(name||"").toLowerCase().replace(/ё/g,"е").trim();
+  s = s.replace(/^https?:\/\//,"").replace(/^(www\.)?(instagram\.com|tiktok\.com)\/(@)?/,"").split(/[?#]/)[0];
+  s = s.replace(/\([^)]*\)/g," ");
+  s = s.replace(/(^|[^a-zа-я0-9])(бартер|barter|за\s*товар)(?=$|[^a-zа-я0-9])/g,"$1 ");
+  s = s.replace(/[^a-zа-я0-9]+/g,"");
+  return s || "—";
+}
 const isMicroForProduct = d => normalizeBloggerCategory(d && d.bloggerCategory) === MICRO_FOR_PRODUCT_CATEGORY;
 // Сколько уникальных блогеров (аккаунтов) из этих интеграций работают «за товар».
-const microForProductBloggers = deals => new Set(deals.filter(isMicroForProduct).map(d=>d.blogerName||"—")).size;
+const microForProductBloggers = deals => new Set(deals.filter(isMicroForProduct).map(d=>microBloggerKey(d.blogerName))).size;
 function normalizeBloggerCategory(raw){
   const v = String(raw||"").trim();
   if(!v) return "Не указана";
@@ -2607,13 +2629,13 @@ function microCategorySummary(month){
     if(!map[cat]) map[cat] = {category:cat, dealsCount:0, bloggers:new Set(), cost:0, reach:0, contribution:0, hasAnyBaseline:false, byResponsible:{}};
     const a = map[cat];
     a.dealsCount++;
-    a.bloggers.add(d.blogerName||"—");
+    a.bloggers.add(microBloggerKey(d.blogerName));
     a.cost += microDealTotalCost(d);
     a.reach += microDealFactReach(d);
     const r = romiById[d.id];
     if(r && r.hasBaseline){ a.contribution += (r.netContribution||0); a.hasAnyBaseline = true; }
     const resp = d.responsible || "Не указан";
-    (a.byResponsible[resp] = a.byResponsible[resp] || new Set()).add(d.blogerName||"—");
+    (a.byResponsible[resp] = a.byResponsible[resp] || new Set()).add(microBloggerKey(d.blogerName));
   });
   return Object.values(map).map(a=>({
     category: a.category,
@@ -2635,7 +2657,7 @@ function microCategorySummary(month){
 function microCategoryTotalUniqueBloggers(month){
   let deals = DataManager.state.microInfluencerDeals;
   if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
-  return new Set(deals.map(d=>d.blogerName||"—")).size;
+  return new Set(deals.map(d=>microBloggerKey(d.blogerName))).size;
 }
 function tplMicroCategorySummary(){
   const month = UI.microMonth;
@@ -4022,7 +4044,7 @@ function cohortUnits(month, cohort, romi){
 // Факт по когорте за месяц: людей, бюджет, вклад в продажи.
 function cohortFact(month, cohort, romi){
   const units = cohortUnits(month, cohort, romi);
-  const names = new Set(units.map(u=>u.deal.blogerLogin || u.deal.blogerName || "—"));
+  const names = new Set(units.map(u=>u.deal.blogerLogin || microBloggerKey(u.deal.blogerName)));
   return {
     people: names.size,
     integrations: units.length,
@@ -7407,6 +7429,37 @@ async function runSelfTests(){
       DataManager.state.microInfluencerDeals = savedMicro; DataManager.state.plans = savedPlans; UI.microResponsibleMonth = savedM;
     }
   });
+  TestSuite.test("Сводка по ответственным: «охваты без всплесков» — без роликов от 500 тыс. просмотров", ()=>{
+    const savedMicro = DataManager.state.microInfluencerDeals, savedM = UI.microResponsibleMonth;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:99701, responsible:"Марина", blogerName:"v1", publishDate:"2026-10-05", plannedDate:"2026-10-05", videoStatus:"опубликовано", factReachReels:1484984, factReachTT:0},
+        {id:99702, responsible:"Марина", blogerName:"v2", publishDate:"2026-10-06", plannedDate:"2026-10-06", videoStatus:"опубликовано", factReachReels:20000, factReachTT:5000},
+      ];
+      const r = microResponsibleSummary("2026-10").find(x=>x.responsible==="Марина");
+      if(r.totalReach!==1509984) throw new Error("общий охват не меняется: "+r.totalReach);
+      if(r.reachNoViral!==25000 || r.viralCount!==1) throw new Error("без всплесков 25 000 и 1 вирусный: "+r.reachNoViral+" / "+r.viralCount);
+      UI.microResponsibleMonth = "2026-10";
+      if(!tplMicroResponsibleSummary().includes("без всплесков: 25")) throw new Error("подпись «без всплесков» под охватами");
+    } finally { DataManager.state.microInfluencerDeals = savedMicro; UI.microResponsibleMonth = savedM; }
+  });
+  TestSuite.test("Уникальные блогеры: «dehnara» и «Dehnara бартер» (и @, ссылка, «(за товар)») — один блогер", ()=>{
+    const k = microBloggerKey("dehnara");
+    ["Dehnara бартер","@dehnara","dehnara (бартер)","https://www.instagram.com/dehnara/","DEHNARA  за товар","dehnara Бартер "].forEach(v=>{
+      if(microBloggerKey(v)!==k) throw new Error(`«${v}» → ${microBloggerKey(v)}, а должно быть ${k}`);
+    });
+    if(microBloggerKey("Айгерим Бартерова")===microBloggerKey("Айгерим")) throw new Error("«бартер» внутри слова не вырезаем");
+    const savedMicro = DataManager.state.microInfluencerDeals;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:99601, responsible:"Мадина", blogerName:"dehnara", bloggerCategory:"Бьюти", publishDate:"2026-10-05", plannedDate:"2026-10-05", videoStatus:"опубликовано"},
+        {id:99602, responsible:"Мадина", blogerName:"dehnara бартер", bloggerCategory:"Бартер", publishDate:"2026-10-08", plannedDate:"2026-10-08", videoStatus:"опубликовано"},
+      ];
+      const r = microResponsibleSummary("2026-10").find(x=>x.responsible==="Мадина");
+      if(r.uniqueBloggerCount!==1) throw new Error("у Мадины 1 блогер, а не "+r.uniqueBloggerCount);
+      if(microResponsibleTotalUniqueBloggers("2026-10")!==1) throw new Error("в Итого 1 блогер");
+    } finally { DataManager.state.microInfluencerDeals = savedMicro; }
+  });
   TestSuite.test("Сводка по ответственным: «из них за товар» — уникальные аккаунты категории «За товар» (включая старые «Бартер»)", ()=>{
     const savedMicro = DataManager.state.microInfluencerDeals, savedM = UI.microResponsibleMonth;
     try{
@@ -8236,7 +8289,7 @@ async function runSelfTests(){
       // 2 в работе у Нины + 1 у Аружан = 3, 1 опубликовано у Нины = 1, 3 интеграции у Нины + 1 у Аружан = 4,
       // охваты 650 у Нины + 500 у Аружан = 1150).
       if(!html.includes(">Итого<")) throw new Error("должна быть итоговая строка 'Итого' внизу таблицы: "+html);
-      const totalRowMatch = html.match(/<tr[^>]*>\s*<td><\/td>\s*<td>Итого<\/td>\s*<td>(\d+)(?:<div[^>]*>из них за товар: \d+<\/div>)?<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>([\d\s]+)<\/td>/);
+      const totalRowMatch = html.match(/<tr[^>]*>\s*<td><\/td>\s*<td>Итого<\/td>\s*<td>(\d+)(?:<div[^>]*>из них за товар: \d+<\/div>)?<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>([\d\s]+)(?:<div[^>]*>без всплесков:[\s\S]*?<\/div>)?<\/td>/);
       if(!totalRowMatch) throw new Error("не удалось найти ячейки итоговой строки: "+html);
       const [, totalBloggers, totalInProgress, totalPublished, totalDeals] = totalRowMatch.slice(0,5).map(Number);
       const totalReach = Number(totalRowMatch[5].replace(/\s/g,""));
