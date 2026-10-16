@@ -1663,10 +1663,14 @@ function microLinkStoriesCell(d){
   let stories = "";
   if(microHasStories(d)){
     const reach = d.factReachStories||0, clicks = d.storiesClicks||0;
+    const sl = String(d.storiesLink||"").trim();
+    const storiesLinkHtml = sl
+      ? `<a href="${escapeHtml(normalizeLinkUrl(sl))}" target="_blank" rel="noopener">🔗 сторис</a> ${inlineEditSpan("✎", d.id, 'storiesLink', sl, 'text')}`
+      : inlineEditSpan('<span style="color:var(--ink-mute);text-decoration:underline dotted">+ ссылка на сторис</span>', d.id, 'storiesLink', '', 'text');
     const ctr = reach>0 && clicks>0 ? ` · CTR ${(clicks/reach*100).toFixed(2)}%` : "";
     stories = `<div style="margin-top:4px;padding:4px 8px;border-radius:8px;background:var(--canvas);border:1px solid var(--line);white-space:nowrap">
       <b>📱 Сторис</b> · охват ${inlineEditSpan(reach ? fmtNum(reach) : '<span style="color:var(--bad)">впишите</span>', d.id, 'factReachStories', reach, 'number')}
-      · клики ${inlineEditSpan(clicks ? fmtNum(clicks) : "—", d.id, 'storiesClicks', clicks, 'number')}${ctr}</div>`;
+      · клики ${inlineEditSpan(clicks ? fmtNum(clicks) : "—", d.id, 'storiesClicks', clicks, 'number')}${ctr}<br>${storiesLinkHtml}</div>`;
   }
   return `${fmtSel}${link?`<br>${link}`:""}${stories}`;
 }
@@ -2456,8 +2460,15 @@ function microProblemReasonSummary(month){
 function tplMicroProblemReasons(month){
   const {rows, total} = microProblemReasonSummary(month);
   if(!rows.length) return `<div class="login-hint" style="margin-top:12px">Проблемных блогеров ${month?`за ${escapeHtml(monthLabel(month))} `:""}не отмечено.</div>`;
+  const open = !!UI.microProblemReasonsOpen;
+  const head = `<div style="margin-top:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <b>Проблемные блогеры по причинам</b>${month?`<span style="color:var(--ink-mute);font-size:11.5px">— ${escapeHtml(monthLabel(month))}</span>`:""}
+        <span style="font-size:12px;color:var(--bad)">всего ${total.total}${total["Открыта"]?` · открыто ${total["Открыта"]}`:""}</span>
+        <button class="btn btn-ghost btn-sm" id="micro-problem-reasons-toggle">${open?"Скрыть ▴":"Показать ▾"}</button>
+      </div>`;
+  if(!open) return head;
   return `
-      <div style="margin-top:16px;font-weight:600">Проблемные блогеры по причинам ${month?`<span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">— ${escapeHtml(monthLabel(month))}</span>`:""}</div>
+      ${head}
       <div class="login-hint" style="margin:4px 0 8px">Блогер считается один раз; если у него две причины — попадает в обе строки. Отметить — колонка «Проблема» в таблице интеграций ниже.</div>
       <div class="table-wrap"><table>
         <thead><tr><th>Причина</th><th>Блогеров</th>${MICRO_PROBLEM_STATUSES.map(st=>`<th>${st}</th>`).join("")}</tr></thead>
@@ -2901,7 +2912,10 @@ const UI = {
   reportPeriod: {from:"", to:""}, // период (по дате публикации) для сводки "Сколько выложили" в верхней части "Сводного отчёта" — см. reportPeriodSummary()
   reportOnlyWaiting: false, // фильтр "Сводного отчёта": показывать только доставленные, но ещё не выложенные (чтобы обзванивать блогеров)
   inflFilter: {search:"", sort:"default", month:"", dateFrom:"", dateTo:"", responsible:"", category:"", status:""},
-  microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:"", dateFrom:"", dateTo:"", problem:""},
+  microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:"", dateFrom:"", dateTo:"", problem:"", video:""},
+  microPage: 1,          // страница таблицы микро (по 50 строк) — чтобы не рисовать 1000+ строк разом
+  microPageSig: "",      // при смене фильтров/сортировки страница сбрасывается на первую
+  microProblemReasonsOpen: false, // таблица «Проблемные блогеры по причинам» свёрнута по умолчанию
   // ЕДИНЫЙ месяц на всю вкладку. Раньше на каждой вкладке было 3-4 независимых фильтра месяца
   // (дашборд / сводка по блогерам / сводка по ответственным / таблица интеграций), и месяц
   // приходилось выбирать в каждом блоке отдельно — цифры на одном экране легко оказывались за
@@ -4682,6 +4696,9 @@ function tplMicroInfluencers(){
   if(mf.responsible){
     deals = deals.filter(d=> d.responsible===mf.responsible);
   }
+  // Статус видео: «опубликовано» = вышла (в т.ч. сторис с охватом без ссылки), см. microDealPublished.
+  if(mf.video==="published") deals = deals.filter(microDealPublished);
+  else if(mf.video==="notpublished") deals = deals.filter(d=>!microDealPublished(d));
   // Проблемные: по блогеру (если у блогера есть проблема в любой интеграции — показываем все его строки).
   const problemIdx = microProblemIndex();
   if(mf.problem){
@@ -4719,6 +4736,23 @@ function tplMicroInfluencers(){
     kaspi_asc: (a,b)=> (Number(a.autoContributionKzt)||0)-(Number(b.autoContributionKzt)||0),
   };
   if(sorters[mf.sort]) deals = deals.slice().sort(sorters[mf.sort]);
+  // Постранично по 50: таблица со всеми 1000+ интеграциями рисовалась очень долго.
+  const MICRO_PAGE_SIZE = 50;
+  const pageSig = JSON.stringify(mf);
+  if(UI.microPageSig !== pageSig){ UI.microPage = 1; UI.microPageSig = pageSig; }
+  const pageCount = Math.max(1, Math.ceil(deals.length / MICRO_PAGE_SIZE));
+  const page = Math.min(Math.max(1, UI.microPage||1), pageCount);
+  UI.microPage = page;
+  const pageOffset = (page-1) * MICRO_PAGE_SIZE;
+  const pageDeals = deals.slice(pageOffset, pageOffset + MICRO_PAGE_SIZE);
+  const pager = pageCount<=1 ? (deals.length ? `<div class="login-hint" style="margin:6px 0">Показано ${deals.length} интеграций</div>` : "") : `
+      <div class="toolbar" style="margin:8px 0;align-items:center;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm micro-page-btn" data-page="${page-1}" ${page<=1?'disabled':''}>‹ Назад</button>
+        ${Array.from({length:pageCount},(_,k)=>k+1).filter(n=> n===1 || n===pageCount || Math.abs(n-page)<=2).map((n,ix,arr)=>
+          `${ix>0 && n-arr[ix-1]>1 ? '<span style="color:var(--ink-mute)">…</span>' : ''}<button class="btn btn-sm ${n===page?'btn-primary':'btn-ghost'} micro-page-btn" data-page="${n}">${n}</button>`).join("")}
+        <button class="btn btn-ghost btn-sm micro-page-btn" data-page="${page+1}" ${page>=pageCount?'disabled':''}>Вперёд ›</button>
+        <span style="color:var(--ink-mute);font-size:12px">строки ${pageOffset+1}–${pageOffset+pageDeals.length} из ${deals.length}</span>
+      </div>`;
 
   return `
     ${tplMicroInfluencerBrandDashboard(s.romiRows)}
@@ -4802,6 +4836,11 @@ function tplMicroInfluencers(){
           <option value="">Все ответственные</option>
           ${availableResponsibles.map(r=>`<option value="${escapeHtml(r)}" ${mf.responsible===r?'selected':''}>${escapeHtml(r)}</option>`).join("")}
         </select>
+        <select id="micro-video-filter" title="Статус видео">
+          <option value="">Все статусы видео</option>
+          <option value="published" ${mf.video==='published'?'selected':''}>Опубликовано</option>
+          <option value="notpublished" ${mf.video==='notpublished'?'selected':''}>Не опубликовано</option>
+        </select>
         <select id="micro-problem-filter" title="Проблемные блогеры">
           <option value="">Все блогеры</option>
           <option value="active" ${mf.problem==='active'?'selected':''}>⚠ Проблемные (не решённые)</option>
@@ -4844,6 +4883,8 @@ function tplMicroInfluencers(){
         <button class="btn btn-danger btn-sm" id="micro-bulk-delete-btn">Удалить выделенное</button>
       </div>` : "";
       })()}
+      <div id="micro-table-top"></div>
+      ${pager}
       <div class="table-wrap"><table>
         <thead><tr>
           <th class="rowcheck"><input type="checkbox" id="micro-check-all"></th>
@@ -4855,7 +4896,7 @@ function tplMicroInfluencers(){
           <th>Статус товара</th><th>Статус видео</th><th>Плановая дата</th><th>Дата выкладки</th><th title="Формат (Reels + TikTok / Сторис / Сторис + Reels + TikTok), ссылка на Reels; у сторис — охват и клики вручную (ссылки нет)">Ссылка / сторис</th><th></th>
         </tr></thead>
         <tbody>
-          ${deals.map((d,i)=>{
+          ${pageDeals.map((d,i)=>{
             const factReach = microDealFactReach(d);
             const cpv = microDealCpv(d);
             const r = romiById[d.id];
@@ -4864,7 +4905,7 @@ function tplMicroInfluencers(){
             const rowStyle = !pb || pb.status==="Решена" ? "" : ` style="background:${pb.status==="Отказ от блогера" ? "rgba(200,40,50,.16)" : "rgba(220,60,70,.08)"}"`;
             return `<tr${rowStyle}>
               <td class="rowcheck"><input type="checkbox" class="micro-row-check" data-id="${d.id}" ${UI.selectedMicroIds.has(d.id)?'checked':''}></td>
-              <td>${i+1}</td>
+              <td>${pageOffset+i+1}</td>
               <td class="sticky-col">${pb && pb.status==="Отказ от блогера" ? '<span title="Отказ от блогера">⛔ </span>' : ""}${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')}${microHasStories(d) ? ` <span style="font-size:10.5px;padding:1px 6px;border-radius:8px;background:var(--canvas);border:1px solid var(--line);white-space:nowrap" title="${escapeHtml(microFormatOf(d))}">📱 сторис</span>` : ""}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
               <td>${microProblemCell(d, pb)}</td>
               <td>${inlineEditSpan(escapeHtml(d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "—"), d.id, 'bloggerCategory', d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : '', 'select', MICRO_BLOGGER_CATEGORIES)}</td>
@@ -4910,6 +4951,7 @@ function tplMicroInfluencers(){
           }).join("") || `<tr><td class="empty" colspan="24">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
+      ${pager}
     </div>
   `;
 }
@@ -5865,15 +5907,7 @@ function tplMicroCalendar(){
         ${!responsibles.length ? `<br><b>Ответственный пока никому не проставлен</b> в этой базе — заполните поле «Ответственный» в карточке интеграции, и здесь появится выбор менеджера.`
           : (withoutResp ? `<br>У ${withoutResp} интеграций ответственный не указан — они видны только при «Все менеджеры».` : "")}
       </div>
-      ${allBloggers.length ? `
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-        <span style="align-self:center;color:var(--ink-mute);font-size:12px">Блогеры:</span>
-        ${allBloggers.map(name=>{
-          const col = bloggerColor(name);
-          const isHidden = hidden.has(name);
-          return `<button class="planner-chip ${isHidden?'inactive':''}" data-blogger="${escapeHtml(name)}" style="--c:${col.c}"><span class="dot"></span>${escapeHtml(name)}</button>`;
-        }).join("")}
-      </div>` : ""}
+      ${""/* список блогеров-чипов над календарём убран (16.10.2026): при 500+ блогерах он занимал экран и тормозил */}
       <div class="planner-cal">
         ${dowLabels.map(l=>`<div class="planner-cal-head">${l}</div>`).join("")}
         ${days.map(dateStr=>{
@@ -6032,6 +6066,7 @@ function modalMicroDeal(existing, prefill){
       <div class="field"><label>Формат</label><select id="mm-format">${MICRO_FORMATS.map(f=>`<option ${microFormatOf(d)===f?'selected':''}>${f}</option>`).join("")}</select></div>
       <div class="field"><label>Охват сторис (вручную)</label><input id="mm-stories-reach" type="number" value="${d.factReachStories||0}"></div>
       <div class="field"><label>Клики сторис</label><input id="mm-stories-clicks" type="number" value="${d.storiesClicks||0}"></div>
+      <div class="field"><label>Ссылка на сторис (Google Диск)</label><input id="mm-stories-link" placeholder="https://drive.google.com/..." value="${escapeHtml(d.storiesLink||'')}"></div>
     </div>
     <div class="form-row">
       <div class="field"><label>Ссылка на Reels</label><input id="mm-reels-link" value="${escapeHtml(d.reelsLink||'')}"></div>
@@ -6091,6 +6126,7 @@ function modalMicroDeal(existing, prefill){
       contentFormat: document.getElementById("mm-format").value==="Reels + TikTok" ? "" : document.getElementById("mm-format").value,
       factReachStories: parseInt(document.getElementById("mm-stories-reach").value,10)||0,
       storiesClicks: parseInt(document.getElementById("mm-stories-clicks").value,10)||0,
+      storiesLink: document.getElementById("mm-stories-link").value.trim(),
       plannedDate: document.getElementById("mm-planned-date").value,
       publishDate: document.getElementById("mm-publish-date").value,
       notes: document.getElementById("mm-notes").value.trim(),
@@ -6622,6 +6658,11 @@ function wireDeskTab(){
     document.getElementById("micro-sort").onchange = e=>{ UI.microFilter.sort = e.target.value; renderDeskTab(); };
     const problemFilterEl = document.getElementById("micro-problem-filter");
     if(problemFilterEl) problemFilterEl.onchange = e=>{ UI.microFilter.problem = e.target.value; renderDeskTab(); };
+    const videoFilterEl = document.getElementById("micro-video-filter");
+    if(videoFilterEl) videoFilterEl.onchange = e=>{ UI.microFilter.video = e.target.value; renderDeskTab(); };
+    document.querySelectorAll(".micro-page-btn").forEach(b=>{ b.onclick = ()=>{ UI.microPage = +b.dataset.page; renderDeskTab(); const t = document.getElementById("micro-table-top"); if(t && t.scrollIntoView) t.scrollIntoView({block:"start"}); }; });
+    const reasonsToggle = document.getElementById("micro-problem-reasons-toggle");
+    if(reasonsToggle) reasonsToggle.onclick = ()=>{ UI.microProblemReasonsOpen = !UI.microProblemReasonsOpen; renderDeskTab(); };
     document.querySelectorAll(".micro-problem-btn").forEach(el=>{ el.onclick = ()=> modalMicroProblem(+el.dataset.id); });
     // Сортировка кликом по заголовку колонки ("как в Excel") — см. sortableTh(). Первый клик по
     // колонке ставит "сначала больше", повторный клик по той же колонке — переключает на
@@ -6759,7 +6800,7 @@ function wireDeskTab(){
       // которые реально пушатся в lines.push(...) ниже — иначе заголовок "уезжает" относительно
       // данных (была живая регрессия: сюда забыли добавить "ответственный"/"категория блогера",
       // когда их добавили в сами строки — эти два столбца тихо съезжали на всё, что после блогера).
-      const header = ["id","ответственный","блогер","категория блогера","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий","проблема","причина 2","статус проблемы","комментарий проблемы","формат","охват сторис","клики сторис"];
+      const header = ["id","ответственный","блогер","категория блогера","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий","проблема","причина 2","статус проблемы","комментарий проблемы","формат","охват сторис","клики сторис","ссылка на сторис"];
       const lines = [header.map(csvEscape).join(",")];
       // "deals" — переменная из tplMicroInfluencers() (учитывает поиск/фильтр), а этот обработчик
       // живёт в wireDeskTab() — отдельной функции, где такой переменной нет. Раньше это падало
@@ -6778,7 +6819,7 @@ function wireDeskTab(){
           d.reelsLink||"", d.factReachReels||0, d.tiktokVideoLink||"", d.factReachTT||0,
           d.plannedDate||"", d.publishDate||"", d.notes||"",
           d.problemReason||"", d.problemReason2||"", d.problemReason ? microProblemStatusOf(d) : "", d.problemNote||"",
-          microFormatOf(d), d.factReachStories||0, d.storiesClicks||0,
+          microFormatOf(d), d.factReachStories||0, d.storiesClicks||0, d.storiesLink||"",
         ].map(csvEscape).join(","));
       });
       downloadFile("barter-box-micro-influencers-export.csv", "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
@@ -7721,6 +7762,33 @@ async function runSelfTests(){
       if(r.published!==2 || r.totalReach!==52400) throw new Error("сводка по ответственным учитывает сторис: "+r.published+" / "+r.totalReach);
     } finally {
       DataManager.state.microInfluencerDeals = savedMicro; UI.microFilter = JSON.parse(savedF); UI.microResponsibleMonth = savedM;
+    }
+  });
+  TestSuite.test("Таблица микро: по 50 строк на страницу, фильтр «Опубликовано», ссылка на сторис, свёрнутая таблица причин", ()=>{
+    const savedMicro = DataManager.state.microInfluencerDeals, savedF = JSON.stringify(UI.microFilter), savedP = UI.microPage, savedSig = UI.microPageSig, savedO = UI.microProblemReasonsOpen, savedM = UI.microResponsibleMonth;
+    try{
+      const list = [];
+      for(let i=0;i<120;i++) list.push({id:99000+i, responsible:"Мадина", blogerName:"@b"+i, publishDate:"2026-10-05", plannedDate:"2026-10-05", videoStatus: i<30 ? "опубликовано" : "не опубликовано"});
+      list.push({id:99200, responsible:"Мадина", blogerName:"@st", publishDate:"2026-10-05", plannedDate:"2026-10-05", videoStatus:"не опубликовано", contentFormat:"Сторис", factReachStories:1000, storiesLink:"https://drive.google.com/x", problemReason:"P01"});
+      DataManager.state.microInfluencerDeals = list;
+      UI.microFilter = {search:"", sort:"default", paymentStatus:"", month:"", responsible:"", dateFrom:"", dateTo:"", problem:"", video:""};
+      const rowsOf = h => (h.match(/class="micro-row-check"/g)||[]).length;
+      let html = tplMicroInfluencers();
+      if(rowsOf(html)!==50) throw new Error("на странице 50 строк, а не "+rowsOf(html));
+      if(!html.includes("строки 1–50 из 121")) throw new Error("подпись страниц");
+      UI.microPage = 3; html = tplMicroInfluencers();
+      if(rowsOf(html)!==21 || !html.includes("строки 101–121 из 121")) throw new Error("третья страница — 21 строка");
+      UI.microFilter.video = "published"; html = tplMicroInfluencers();
+      if(UI.microPage!==1) throw new Error("при смене фильтра — на первую страницу");
+      if(rowsOf(html)!==31) throw new Error("опубликовано: 30 + сторис с охватом = 31, а не "+rowsOf(html));
+      if(!html.includes("🔗 сторис") || !html.includes("https://drive.google.com/x")) throw new Error("ссылка на сторис видна");
+      UI.microResponsibleMonth = "2026-10"; UI.microProblemReasonsOpen = false;
+      let rs = tplMicroResponsibleSummary();
+      if(!rs.includes("micro-problem-reasons-toggle") || rs.includes("<th>Причина</th>")) throw new Error("таблица причин свёрнута по умолчанию");
+      UI.microProblemReasonsOpen = true; rs = tplMicroResponsibleSummary();
+      if(!rs.includes("<th>Причина</th>")) throw new Error("по кнопке таблица причин раскрывается");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedMicro; UI.microFilter = JSON.parse(savedF); UI.microPage = savedP; UI.microPageSig = savedSig; UI.microProblemReasonsOpen = savedO; UI.microResponsibleMonth = savedM;
     }
   });
   TestSuite.test("Уникальные блогеры: «dehnara» и «Dehnara бартер» (и @, ссылка, «(за товар)») — один блогер", ()=>{
@@ -9547,10 +9615,7 @@ async function runSelfTests(){
 
       document.getElementById("main").innerHTML = tplMicroCalendar();
       wireDeskTab();
-      const chip = document.querySelector('.planner-chip[data-blogger="Камила"]');
-      if(!chip) throw new Error("чип-легенда 'Камила' должен быть в DOM");
-      chip.click();
-      if(!UI.calendarHiddenBloggers.has("Камила")) throw new Error("клик по чипу должен скрыть блогера");
+      if(document.querySelector('.planner-chip')) throw new Error("список блогеров-чипов над планером убран");
 
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
       document.getElementById("app").innerHTML = '<main id="main"></main><div id="toast"></div>';
