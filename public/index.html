@@ -1674,6 +1674,58 @@ function microLinkStoriesCell(d){
   }
   return `${fmtSel}${link?`<br>${link}`:""}${stories}`;
 }
+// CPV в работе (16.10.2026): по дорогому CPV менеджер оставляет комментарий («доснимет сторис»,
+// «сделала ещё видео»). Бесплатные доп. видео остаются ОТДЕЛЬНЫМИ строками с суммой 0 ₸ (как и заносят) —
+// а под CPV оплаченной строки мелко и автоматически пишется: сколько у этого блогера доп. видео за 0 ₸
+// в том же месяце, их охват и CPV вместе с ними. Основной CPV и сводки не меняются.
+function microFreeExtrasFor(d){
+  if(!d || microDealTotalCost(d) <= 0) return [];
+  const key = microBloggerKey(d.blogerName), month = microDealDate(d).slice(0,7);
+  return (DataManager.state.microInfluencerDeals||[]).filter(x=> x.id!==d.id && microDealTotalCost(x) <= 0
+    && microBloggerKey(x.blogerName)===key && (!month || microDealDate(x).slice(0,7)===month));
+}
+function microDealCpvWithExtras(d){
+  const ex = microFreeExtrasFor(d);
+  const exReach = ex.reduce((a,x)=>a+microDealFactReach(x),0);
+  if(!ex.length || !exReach) return null;
+  const reach = microDealFactReach(d) + exReach, cost = microDealTotalCost(d);
+  return (cost>0 && reach>0) ? cost/reach : null;
+}
+function microCpvCell(d, cpv){
+  const parts = [];
+  const ex = microFreeExtrasFor(d);
+  if(ex.length){
+    const exReach = ex.reduce((a,x)=>a+microDealFactReach(x),0);
+    const withEx = microDealCpvWithExtras(d);
+    parts.push(`<div style="font-size:10.5px;color:var(--ok);white-space:nowrap" title="Доп. видео этого блогера за 0 ₸ в том же месяце (отдельные строки): ${escapeHtml(ex.map(x=>x.blogerName).join(", "))}">🎁 + ${ex.length} доп. за 0 ₸${exReach?` · охват ${fmtNum(exReach)}`:""}${withEx!=null?` · <b>вместе ${withEx.toFixed(3)} ₸</b>`:""}</div>`);
+  }
+  if(d.cpvNote){
+    const meta = [d.cpvNoteBy || "", d.cpvNoteAt ? d.cpvNoteAt.slice(8,10)+"."+d.cpvNoteAt.slice(5,7) : ""].filter(Boolean).join(", ");
+    parts.push(`<div style="font-size:10.5px;color:var(--ink);max-width:220px;white-space:normal">📝 ${escapeHtml(d.cpvNote)}${meta?` <span style="color:var(--ink-mute)">— ${escapeHtml(meta)}</span>`:""}</div>`);
+  }
+  const edit = `<span class="micro-cpv-btn" data-id="${d.id}" style="cursor:pointer;font-size:10.5px;color:var(--ink-mute);text-decoration:underline dotted" title="Комментарий по CPV: что сделано или договорено (доп. видео, сторис…)">${d.cpvNote?"✎ комментарий":"+ комментарий"}</span>`;
+  return `<span title="Считается автоматически: (сумма + стоимость товара) ÷ факт.охват">${cpv==null?"—":cpv.toFixed(3)+" ₸"}</span>${parts.join("")}<div>${edit}</div>`;
+}
+function modalMicroCpv(id){
+  const d = DataManager.state.microInfluencerDeals.find(x=>x.id===id);
+  if(!d) return;
+  const cpv = microDealCpv(d), withEx = microDealCpvWithExtras(d);
+  openModal(`
+    <h3>Комментарий по CPV · ${escapeHtml(d.blogerName||"")}</h3>
+    <div class="login-hint" style="margin-bottom:10px">CPV: <b>${cpv==null?"—":cpv.toFixed(3)+" ₸"}</b>${withEx!=null?` · вместе с доп. видео за 0 ₸: <b>${withEx.toFixed(3)} ₸</b>`:""}. Доп. видео заносите отдельной строкой с суммой 0 — они подтянутся сюда сами.</div>
+    <div class="field"><label>Комментарий (что сделано / договорено)</label><textarea id="cpv-note" placeholder="Например: сделает сторис до 20.10; дала ещё 2 видео бесплатно">${escapeHtml(d.cpvNote||"")}</textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="cpv-cancel">Отмена</button>
+      <button class="btn btn-primary" id="cpv-save">Сохранить</button>
+    </div>
+  `);
+  document.getElementById("cpv-cancel").onclick = closeModal;
+  document.getElementById("cpv-save").onclick = async ()=>{
+    const btn = document.getElementById("cpv-save");
+    try{ await withBusy(btn, ()=> Api.updateMicroDeal(id, {cpvNote: document.getElementById("cpv-note").value.trim()})); closeModal(); toast("Сохранено"); await DataManager.refresh(); render(); }
+    catch(e){ toast(e.message, true); }
+  };
+}
 function microDealAvgReach(d){ return (d.avgReach||0) + (d.avgReachTT||0); }
 // Полная стоимость интеграции для расходов/CPV/ROMI — оплата блогеру (cost) + себестоимость
 // товара, отданного бартером (productCost). Раньше в расходы шла только оплата, но выдача
@@ -4929,7 +4981,7 @@ function tplMicroInfluencers(){
               <td>${inlineEditSpan(fmtNum(d.productCost||0)+" ₸", d.id, 'productCost', d.productCost||0, 'number')}</td>
               <td>${inlineEditSpan(escapeHtml(d.paymentStatus||"—"), d.id, 'paymentStatus', d.paymentStatus||'', 'select', MICRO_PAYMENT_STATUSES)}</td>
               <td>${inlineEditSpan(fmtNum(factReach), d.id, 'factReachTotal', factReach, 'number')}${socialViewsBadge(d,["factReachReels","factReachTT"])}${(d.factReachStories||0)>0 ? `<br><span style="font-size:10.5px;color:var(--ink-mute)">в т.ч. сторис ${fmtNum(d.factReachStories)}</span>` : ""}</td>
-              <td title="Считается автоматически: (сумма + стоимость товара) ÷ факт.охват">${cpv==null?"—":cpv.toFixed(3)+" ₸"}</td>
+              <td>${microCpvCell(d, cpv)}</td>
               <td>
                 ${(()=>{
                   const auto = !d.plannedContribution ? planTargetFromCost(microDealTotalCost(d)) : 0;
@@ -6679,6 +6731,7 @@ function wireDeskTab(){
     const reasonsToggle = document.getElementById("micro-problem-reasons-toggle");
     if(reasonsToggle) reasonsToggle.onclick = ()=>{ UI.microProblemReasonsOpen = !UI.microProblemReasonsOpen; renderDeskTab(); };
     document.querySelectorAll(".micro-problem-btn").forEach(el=>{ el.onclick = ()=> modalMicroProblem(+el.dataset.id); });
+    document.querySelectorAll(".micro-cpv-btn").forEach(el=>{ el.onclick = ()=> modalMicroCpv(+el.dataset.id); });
     // Сортировка кликом по заголовку колонки ("как в Excel") — см. sortableTh(). Первый клик по
     // колонке ставит "сначала больше", повторный клик по той же колонке — переключает на
     // "сначала меньше"; это тот же UI.microFilter.sort, что и выпадающий список сортировки выше.
@@ -6815,7 +6868,7 @@ function wireDeskTab(){
       // которые реально пушатся в lines.push(...) ниже — иначе заголовок "уезжает" относительно
       // данных (была живая регрессия: сюда забыли добавить "ответственный"/"категория блогера",
       // когда их добавили в сами строки — эти два столбца тихо съезжали на всё, что после блогера).
-      const header = ["id","ответственный","блогер","категория блогера","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий","проблема","причина 2","статус проблемы","комментарий проблемы","формат","охват сторис","клики сторис","ссылка на сторис"];
+      const header = ["id","ответственный","блогер","категория блогера","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий","проблема","причина 2","статус проблемы","комментарий проблемы","формат","охват сторис","клики сторис","ссылка на сторис","комментарий cpv"];
       const lines = [header.map(csvEscape).join(",")];
       // "deals" — переменная из tplMicroInfluencers() (учитывает поиск/фильтр), а этот обработчик
       // живёт в wireDeskTab() — отдельной функции, где такой переменной нет. Раньше это падало
@@ -6835,6 +6888,7 @@ function wireDeskTab(){
           d.plannedDate||"", d.publishDate||"", d.notes||"",
           d.problemReason||"", d.problemReason2||"", d.problemReason ? microProblemStatusOf(d) : "", d.problemNote||"",
           microFormatOf(d), d.factReachStories||0, d.storiesClicks||0, d.storiesLink||"",
+          d.cpvNote||"",
         ].map(csvEscape).join(","));
       });
       downloadFile("barter-box-micro-influencers-export.csv", "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
@@ -7811,6 +7865,23 @@ async function runSelfTests(){
     } finally {
       DataManager.state.microInfluencerDeals = savedMicro; UI.microFilter = JSON.parse(savedF); UI.microPage = savedP; UI.microPageSig = savedSig; UI.microProblemReasonsOpen = savedO; UI.microResponsibleMonth = savedM;
     }
+  });
+  TestSuite.test("CPV: комментарий менеджера; доп. видео за 0 ₸ (отдельные строки) мелко под CPV и CPV вместе с ними", ()=>{
+    const savedMicro = DataManager.state.microInfluencerDeals;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:99950, blogerName:"@karakoz", publishDate:"2026-10-05", cost:90000, productCost:10000, factReachReels:20000, cpvNote:"сделает сторис", cpvNoteBy:"Мадина", cpvNoteAt:"2026-10-16"},
+        {id:99951, blogerName:"@karakoz ДОП ВИДЕО", publishDate:"2026-10-08", cost:0, productCost:0, factReachReels:30000},
+        {id:99952, blogerName:"@karakoz доп видео", publishDate:"2026-09-08", cost:0, factReachReels:99999},
+      ];
+      const d = DataManager.state.microInfluencerDeals[0];
+      if(Math.abs(microDealCpv(d) - 5) > 1e-9) throw new Error("основной CPV не меняется");
+      if(microFreeExtrasFor(d).length!==1) throw new Error("доп. видео за 0 ₸ того же блогера и месяца — 1 (сентябрьское не в счёт)");
+      if(Math.abs(microDealCpvWithExtras(d) - 2) > 1e-9) throw new Error("вместе: 100 000 / 50 000 = 2");
+      const cell = microCpvCell(d, microDealCpv(d));
+      if(!cell.includes("+ 1 доп. за 0 ₸") || !cell.includes("вместе 2.000 ₸") || !cell.includes("📝 сделает сторис") || !cell.includes("Мадина, 16.10")) throw new Error("ячейка CPV: "+cell);
+      if(microFreeExtrasFor(DataManager.state.microInfluencerDeals[1]).length) throw new Error("у строки за 0 ₸ своих «доп.» нет");
+    } finally { DataManager.state.microInfluencerDeals = savedMicro; }
   });
   TestSuite.test("Уникальные блогеры: «dehnara» и «Dehnara бартер» (и @, ссылка, «(за товар)») — один блогер", ()=>{
     const k = microBloggerKey("dehnara");
