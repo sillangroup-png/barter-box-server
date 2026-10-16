@@ -1227,6 +1227,11 @@ app.patch("/api/micro-influencer-deals/:id", requireAuth, (req,res)=>{
   if("reelsLink" in body) body.reelsLink = normalizeLinkUrl(body.reelsLink);
   if("tiktokVideoLink" in body) body.tiktokVideoLink = normalizeLinkUrl(body.tiktokVideoLink);
   if("storiesLink" in body) body.storiesLink = normalizeLinkUrl(body.storiesLink);
+  // Комментарий по CPV: кто и когда написал (имя из логина, если есть; иначе ответственный).
+  if("cpvNote" in body && String(body.cpvNote||"").trim() !== String(d.cpvNote||"").trim()){
+    body.cpvNoteAt = body.cpvNote ? new Date().toISOString().slice(0,10) : "";
+    body.cpvNoteBy = body.cpvNote ? ((req.session && req.session.name) || d.responsible || "") : "";
+  }
   delete body.socialViewsAuto; delete body.reachAutoSet; // просмотры по ссылке (Apify) ведёт только сервер
   Object.assign(d, body);
   persist();
@@ -1300,6 +1305,7 @@ app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
     if(has("охват сторис")) fields.factReachStories = parseInt(r["охват сторис"] || 0, 10) || 0;
     if(has("клики сторис")) fields.storiesClicks = parseInt(r["клики сторис"] || 0, 10) || 0;
     if(has("ссылка на сторис")) fields.storiesLink = normalizeLinkUrl(r["ссылка на сторис"] || "");
+    if(has("комментарий cpv")) fields.cpvNote = String(r["комментарий cpv"] || "").trim();
     if(has("проблема")){
       const code = String(r["проблема"]||"").trim().toUpperCase().slice(0,3);
       fields.problemReason = /^P(0[1-9]|10)$/.test(code) ? code : "";
