@@ -541,6 +541,7 @@ function buildPlacementRows(){
     const storiesOnly = String(d.contentFormat||"").trim() === "Сторис";
     let platform = hasIg && hasTt ? "Instagram Reels + TikTok" : hasIg ? "Instagram Reels" : hasTt ? "TikTok" : "unknown";
     if(storiesOnly) platform = "Instagram Stories";
+    else if(String(d.contentFormat||"").trim() === "Reels + Сторис") platform = "Instagram Reels + Stories";
     else if(microHasStories(d)) platform = (platform === "unknown" ? "Instagram" : platform) + " + Stories";
     const followers = (safeInt(d.followers)||0) + (safeInt(d.followersTT)||0) || null;
     const reach = (safeInt(d.factReachReels)||0) + (safeInt(d.factReachTT)||0) + (safeInt(d.factReachStories)||0) || null;
@@ -1295,7 +1296,7 @@ app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
     };
     // Проблемный блогер и сторис — только если колонки есть в файле (старые CSV их не стирают).
     const has = k => Object.prototype.hasOwnProperty.call(r, k);
-    if(has("формат")) fields.contentFormat = ["Сторис","Сторис + Reels + TikTok"].includes(String(r["формат"]||"").trim()) ? String(r["формат"]).trim() : "";
+    if(has("формат")) fields.contentFormat = ["Сторис","Reels + Сторис","Сторис + Reels + TikTok"].includes(String(r["формат"]||"").trim()) ? String(r["формат"]).trim() : "";
     if(has("охват сторис")) fields.factReachStories = parseInt(r["охват сторис"] || 0, 10) || 0;
     if(has("клики сторис")) fields.storiesClicks = parseInt(r["клики сторис"] || 0, 10) || 0;
     if(has("ссылка на сторис")) fields.storiesLink = normalizeLinkUrl(r["ссылка на сторис"] || "");
