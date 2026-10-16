@@ -1632,9 +1632,9 @@ function influencerDetailStats(rows){
 // в продажи и ROMI (computeMicroInfluencerRomi). from/to — необязательный фильтр периода
 // по дате выкладки (тот же паттерн, что и в marketingSummary/influencerSummary).
 // Сторис (16.10.2026): у интеграции есть «Формат» — Reels + TikTok (по умолчанию) / Сторис /
-// Сторис + Reels + TikTok. У сторис нет ссылки, охват и клики вводятся вручную (Apify их не считает)
+// Reels + Сторис / Сторис + Reels + TikTok. У сторис нет ссылки, охват и клики вводятся вручную (Apify их не считает)
 // и входят в общий факт.охват, CPV и сводки. Сторис с охватом считается вышедшей и без ссылки.
-const MICRO_FORMATS = ["Reels + TikTok","Сторис","Сторис + Reels + TikTok"];
+const MICRO_FORMATS = ["Reels + TikTok","Сторис","Reels + Сторис","Сторис + Reels + TikTok"];
 function microFormatOf(d){ return MICRO_FORMATS.includes(d && d.contentFormat) ? d.contentFormat : "Reels + TikTok"; }
 function microHasStories(d){ return !!d && (/Сторис/.test(microFormatOf(d)) || (d.factReachStories||0) > 0); }
 function microDealPublished(d){ return !!d && (d.videoStatus==="опубликовано" || (microHasStories(d) && (d.factReachStories||0) > 0)); }
@@ -4893,7 +4893,7 @@ function tplMicroInfluencers(){
           ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
           ${sortableTh("Вклад в продажи (план/факт)","sales",mf.sort)}<th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th>${sortableTh("ROAS, ×","romi",mf.sort)}
         <th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (сумма оплаты + стоимость переданного товара). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th><th title="Вклад по заказам Kaspi: продажи товара сверх обычного уровня в дни выхода. Обычный уровень — среднее за дни до выхода при той же цене, без других блогеров этого товара (если цена была другой — дни после). Окно — с дня выхода, пока продажи не вернутся к обычным (до 7 дней). Скидка вычитается по прошлым сменам цены. Если в те же дни выходили другие блогеры этого товара — прирост делится по охвату. Всплеска нет — 0. «—» — если обычный уровень определить не из чего. Ручной вклад менеджера главнее.">${UI.collapsedColGroups.has("infl-auto") ? `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">+ Авто</span>` : `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">− Авто (Kaspi)</span>`}</th>
-          <th>Статус товара</th><th>Статус видео</th><th>Плановая дата</th><th>Дата выкладки</th><th title="Формат (Reels + TikTok / Сторис / Сторис + Reels + TikTok), ссылка на Reels; у сторис — охват и клики вручную (ссылки нет)">Ссылка / сторис</th><th></th>
+          <th>Статус товара</th><th>Статус видео</th><th>Плановая дата</th><th>Дата выкладки</th><th title="Формат (Reels + TikTok / Сторис / Reels + Сторис / Сторис + Reels + TikTok), ссылка на Reels; у сторис — охват и клики вручную (ссылки нет)">Ссылка / сторис</th><th></th>
         </tr></thead>
         <tbody>
           ${pageDeals.map((d,i)=>{
@@ -7748,6 +7748,7 @@ async function runSelfTests(){
       const [a,b,c] = DataManager.state.microInfluencerDeals;
       if(!microDealPublished(a)) throw new Error("сторис с охватом — вышла без ссылки");
       if(microDealPublished(c)) throw new Error("обычная без статуса и ссылки — не вышла");
+      if(!microHasStories({contentFormat:"Reels + Сторис"}) || microFormatOf({contentFormat:"Reels + Сторис"})!=="Reels + Сторис") throw new Error("формат «Reels + Сторис»");
       if(microDealFactReach(b)!==40000) throw new Error("охват = reels + tt + сторис");
       if(Math.abs(microDealCpv(a) - 20000/12400) > 1e-9) throw new Error("CPV у сторис считается по её охвату");
       if(microDealFactReachPatch(b, 50000).factReachReels!==40000) throw new Error("правка общего охвата не трогает сторис и TikTok");
