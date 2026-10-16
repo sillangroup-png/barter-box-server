@@ -1631,14 +1631,44 @@ function influencerDetailStats(rows){
 // название товара) — тем же decay-движком, что и для крупных инфлюенсеров, считаем вклад
 // в продажи и ROMI (computeMicroInfluencerRomi). from/to — необязательный фильтр периода
 // по дате выкладки (тот же паттерн, что и в marketingSummary/influencerSummary).
-function microDealFactReach(d){ return (d.factReachReels||0) + (d.factReachTT||0); }
+// Сторис (16.10.2026): у интеграции есть «Формат» — Reels + TikTok (по умолчанию) / Сторис /
+// Сторис + Reels + TikTok. У сторис нет ссылки, охват и клики вводятся вручную (Apify их не считает)
+// и входят в общий факт.охват, CPV и сводки. Сторис с охватом считается вышедшей и без ссылки.
+const MICRO_FORMATS = ["Reels + TikTok","Сторис","Сторис + Reels + TikTok"];
+function microFormatOf(d){ return MICRO_FORMATS.includes(d && d.contentFormat) ? d.contentFormat : "Reels + TikTok"; }
+function microHasStories(d){ return !!d && (/Сторис/.test(microFormatOf(d)) || (d.factReachStories||0) > 0); }
+function microDealPublished(d){ return !!d && (d.videoStatus==="опубликовано" || (microHasStories(d) && (d.factReachStories||0) > 0)); }
+function microDealFactReach(d){ return (d.factReachReels||0) + (d.factReachTT||0) + (d.factReachStories||0); }
 // Таблица показывает и редактирует ОДНУ общую ячейку "Факт.охват" (Reels+TikTok вместе), но
 // хранятся они как два отдельных поля (factReachReels/factReachTT — второе не выведено отдельной
 // колонкой). Чтобы клик по общей ячейке сохранял именно то число, что ввёл маркетолог, TikTok-часть
 // оставляем как есть и весь новый итог относим на factReachReels: reels = новый_итог − текущий TT.
 function microDealFactReachPatch(d, newTotal){
-  const tt = d.factReachTT || 0;
-  return { factReachReels: Math.max(0, (newTotal||0) - tt) };
+  const tt = d.factReachTT || 0, st = d.factReachStories || 0;
+  return { factReachReels: Math.max(0, (newTotal||0) - tt - st) };
+}
+// Сторис за период: сколько интеграций со сторис, их охват, клики, CTR.
+function microStoriesStats(deals){
+  const st = deals.filter(microHasStories);
+  const reach = st.reduce((a,d)=>a+(d.factReachStories||0),0), clicks = st.reduce((a,d)=>a+(d.storiesClicks||0),0);
+  return {count: st.length, reach, clicks, ctr: reach>0 ? clicks/reach*100 : null};
+}
+// Ячейка «Ссылка / сторис» в таблице микро: формат (выбор), ссылка на Reels, блок сторис с охватом и кликами.
+function microLinkStoriesCell(d){
+  const fmtSel = inlineEditSpan(`<span style="font-size:10.5px;color:var(--ink-mute);text-decoration:underline dotted">${escapeHtml(microFormatOf(d))}</span>`, d.id, 'contentFormat', microFormatOf(d), 'select', MICRO_FORMATS);
+  const storiesOnly = microFormatOf(d)==="Сторис";
+  const link = storiesOnly ? "" : (d.reelsLink
+    ? `<a href="${escapeHtml(normalizeLinkUrl(d.reelsLink))}" target="_blank" rel="noopener">${escapeHtml(d.reelsLink)}</a> ${inlineEditSpan("✎", d.id, 'reelsLink', d.reelsLink, 'text')}`
+    : inlineEditSpan("—", d.id, 'reelsLink', '', 'text'));
+  let stories = "";
+  if(microHasStories(d)){
+    const reach = d.factReachStories||0, clicks = d.storiesClicks||0;
+    const ctr = reach>0 && clicks>0 ? ` · CTR ${(clicks/reach*100).toFixed(2)}%` : "";
+    stories = `<div style="margin-top:4px;padding:4px 8px;border-radius:8px;background:var(--canvas);border:1px solid var(--line);white-space:nowrap">
+      <b>📱 Сторис</b> · охват ${inlineEditSpan(reach ? fmtNum(reach) : '<span style="color:var(--bad)">впишите</span>', d.id, 'factReachStories', reach, 'number')}
+      · клики ${inlineEditSpan(clicks ? fmtNum(clicks) : "—", d.id, 'storiesClicks', clicks, 'number')}${ctr}</div>`;
+  }
+  return `${fmtSel}${link?`<br>${link}`:""}${stories}`;
 }
 function microDealAvgReach(d){ return (d.avgReach||0) + (d.avgReachTT||0); }
 // Полная стоимость интеграции для расходов/CPV/ROMI — оплата блогеру (cost) + себестоимость
@@ -1684,11 +1714,11 @@ function microInfluencerSummary(from, to){
   const paidCount = deals.filter(d=>d.paymentStatus==="оплачено").length;
   const unpaidCount = deals.filter(d=>d.paymentStatus==="не оплачено").length;
   const toPayCount = deals.filter(d=>d.paymentStatus==="к оплате").length;
-  const publishedCount = deals.filter(d=>d.videoStatus==="опубликовано").length;
+  const publishedCount = deals.filter(microDealPublished).length;
   // Ещё запланировано — интеграции, по которым пока вообще ничего не сделано (ни оплаты, ни публикации).
   // Отдельно от paidCount/publishedCount, потому что те просто разбивают по одному статусу, а тут — обе
   // стадии сразу, то есть по сути "план", который ещё только предстоит выполнить.
-  const pendingCount = deals.filter(d=>d.paymentStatus==="не оплачено" && d.videoStatus!=="опубликовано").length;
+  const pendingCount = deals.filter(d=>d.paymentStatus==="не оплачено" && !microDealPublished(d)).length;
   // Уникальных блогеров — не то же самое, что кол-во интеграций: один блогер может продавать
   // пакетом несколько постов/товаров (3-4 интеграции сразу), поэтому считаем отдельно по имени.
   const uniqueBloggerCount = new Set(deals.map(d=>microBloggerKey(d.blogerName))).size;
@@ -1715,12 +1745,12 @@ function microDetailStats(deals){
   const paidSum = paid.reduce((s,d)=>s+microDealTotalCost(d),0);
   const paidReach = paid.reduce((s,d)=>s+microDealFactReach(d),0);
   const paidCpv = (paidSum>0 && paidReach>0) ? paidSum/paidReach : null;
-  const paidPublishedCount = paid.filter(d=>d.videoStatus==="опубликовано").length;
+  const paidPublishedCount = paid.filter(microDealPublished).length;
   const paidBloggers = new Set(paid.map(d=>microBloggerKey(d.blogerName))).size;
 
   // "В работе" — по статусу ПУБЛИКАЦИИ (не по оплате): пока видео не вышло, для маркетолога это
   // всё ещё открытая задача "ждём контент от блогера", даже если оплата уже прошла заранее.
-  const inProgress = deals.filter(d=>d.videoStatus!=="опубликовано");
+  const inProgress = deals.filter(d=>!microDealPublished(d));
   const inProgressSum = inProgress.reduce((s,d)=>s+microDealTotalCost(d),0);
   const inProgressBloggers = new Set(inProgress.map(d=>microBloggerKey(d.blogerName))).size;
   const inProgressPaidCount = inProgress.filter(d=>d.paymentStatus==="оплачено").length;
@@ -1986,7 +2016,7 @@ function microInfluencerBrandStats(monthRows){
   const totalReach = monthRows.reduce((s,r)=>s+microDealFactReach(r.deal),0);
   const totalContribution = withBaseline.reduce((s,r)=>s+(r.netContribution||0),0);
   const dealsCount = monthRows.length;
-  const publishedCount = monthRows.filter(r=>r.deal.videoStatus==="опубликовано").length;
+  const publishedCount = monthRows.filter(r=>microDealPublished(r.deal)).length;
   const paidCount = monthRows.filter(r=>r.deal.paymentStatus==="оплачено").length;
 
   // ROMI/ROAS/ДРР — по одному набору интеграций (где вклад посчитан), см. influencerBrandStats.
@@ -2071,7 +2101,7 @@ function tplMicroInfluencerBrandDashboard(allRows){
   // Список вариантов строим из реально встречающихся значений, а не из справочника, — чтобы не
   // предлагать пустые категории и не терять те, что вписали руками.
   const catOf = r => normalizeBloggerCategory(r.deal.bloggerCategory);
-  const periodRows = allRows.filter(r=>r.deal.videoStatus==="опубликовано" && (allPeriod || microDealDate(r.deal).slice(0,7)===month));
+  const periodRows = allRows.filter(r=>microDealPublished(r.deal) && (allPeriod || microDealDate(r.deal).slice(0,7)===month));
   const availableCategories = [...new Set(periodRows.map(catOf))].sort((a,b)=>{
     if(a==="Не указана") return 1;            // служебную строку всегда в конец списка
     if(b==="Не указана") return -1;
@@ -2135,8 +2165,9 @@ function tplMicroInfluencerBrandDashboard(allRows){
       ${kpi("ROMI", s.romi==null?"—":"×"+s.romi.toFixed(2), `вклад ÷ расходы — по ${s.coveredCount} из ${monthRows.length} интеграций, где вклад посчитан`)}
       ${kpi("ROAS", s.roasPct==null?"—":Math.round(s.roasPct)+"%", `вклад ÷ расходы × 100% — по ${s.coveredCount} из ${monthRows.length}`)}
       ${kpi("ДРР", s.drrPct==null?"—":s.drrPct.toFixed(1)+"%", `расходы ÷ выручка Kaspi × 100% — по тем же ${s.coveredCount} интеграциям`)}
-      ${kpi("CPV", s.cpv==null?"—":(Math.round(s.cpv*100)/100)+" ₸", "расходы ÷ факт.охват (Reels + TikTok)")}
-      ${kpi("Охват", fmtNum(s.totalReach), "сумма факт.охвата всех интеграций месяца")}
+      ${kpi("CPV", s.cpv==null?"—":(Math.round(s.cpv*100)/100)+" ₸", "расходы ÷ факт.охват (Reels + TikTok + сторис)")}
+      ${kpi("Охват", fmtNum(s.totalReach), "сумма факт.охвата всех интеграций месяца (Reels + TikTok + сторис)")}
+      ${(()=>{ const st = microStoriesStats(monthRows.map(r=>r.deal)); return st.count ? kpi("📱 Сторис", st.count+" шт", `охват ${fmtNum(st.reach)} · клики ${fmtNum(st.clicks)}${st.ctr!=null?` · CTR ${st.ctr.toFixed(2)}%`:""} — входит в общий охват и CPV`) : ""; })()}
       ${kpi("Прирост ₸/просмотр", s.upliftPerView==null?"—":(Math.round(s.upliftPerView*100)/100)+" ₸", "вклад в продажи ÷ факт.охват")}
       ${kpi("Прирост ₸/интеграцию", s.upliftPerDeal==null?"—":fmtNum(Math.round(s.upliftPerDeal))+" ₸", "среднее (вклад в продажи − расход) по интеграциям с посчитанным ROMI")}
     </div>
@@ -2337,15 +2368,16 @@ function microResponsibleSummary(month){
   const map = {};
   deals.forEach(d=>{
     const name = d.responsible || "Не указан";
-    if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), forProduct:new Set(), dealsCount:0, inProgress:0, published:0, totalReach:0, reachNoViral:0, viralCount:0};
+    if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), forProduct:new Set(), problem:new Set(), dealsCount:0, inProgress:0, published:0, totalReach:0, reachNoViral:0, viralCount:0};
     const a = map[name];
     if(isMicroForProduct(d)) a.forProduct.add(microBloggerKey(d.blogerName));
+    if(microProblemActive(d)) a.problem.add(microBloggerKey(d.blogerName));
     // Город/категория запоминаются по блогеру (не по интеграции), чтобы разбивка ниже (в
     // развёрнутой карточке) считала тех же "уникальных блогеров", что и колонка "Блогеров" —
     // если блогер продавал пакетом несколько интеграций, берём город/категорию с последней.
     a.bloggers.set(microBloggerKey(d.blogerName), {city: d.city || "Не указан", category: d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "Не указана"});
     a.dealsCount++;
-    if(d.videoStatus === "опубликовано") a.published++; else a.inProgress++;
+    if(microDealPublished(d)) a.published++; else a.inProgress++;
     // Охваты — факт (Reels+TikTok), как и везде в приложении; считаем по ВСЕМ интеграциям
     // менеджера за период (не только опубликованным), но у неопубликованных факт.охват обычно 0,
     // так что на итог это не влияет.
@@ -2361,7 +2393,7 @@ function microResponsibleSummary(month){
     // менеджер, у которого в месяце есть интеграции, всё равно показывается (новый — с планом 40).
     const zeroRowNames = (month && month >= MICRO_PLAN_V2_FROM_MONTH) ? Object.keys(MICRO_PLAN_BY_MANAGER) : microKnownResponsibles();
     zeroRowNames.forEach(name=>{
-      if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), forProduct:new Set(), dealsCount:0, inProgress:0, published:0, totalReach:0, reachNoViral:0, viralCount:0};
+      if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), forProduct:new Set(), problem:new Set(), dealsCount:0, inProgress:0, published:0, totalReach:0, reachNoViral:0, viralCount:0};
     });
   }
   return Object.values(map).map(a=>{
@@ -2375,6 +2407,7 @@ function microResponsibleSummary(month){
       responsible: a.responsible,
       uniqueBloggerCount: a.bloggers.size,
       forProductCount: a.forProduct.size,
+      problemCount: a.problem.size,
       dealsCount: a.dealsCount,
       inProgress: a.inProgress,
       published: a.published,
@@ -2394,6 +2427,46 @@ function microResponsibleSummary(month){
 // вместе, а не сумму uniqueBloggerCount по каждой строке (регрессия: если блогер за период
 // поработал с двумя разными менеджерами — например, его переназначили — он попадал в обе строки,
 // и при сложении "Итого" получалось больше, чем блогеров есть на самом деле: например 72 вместо 71).
+function microResponsibleTotalProblem(month){
+  let deals = DataManager.state.microInfluencerDeals;
+  if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
+  return microProblemBloggers(deals);
+}
+// «Проблемы по причинам» за месяц: по каждой причине — сколько блогеров (уникальных) и в каком статусе.
+// Вторая причина тоже считается. Блогер с несколькими интеграциями — один раз (берётся самый серьёзный статус).
+function microProblemReasonSummary(month){
+  let deals = DataManager.state.microInfluencerDeals.filter(d=>d.problemReason);
+  if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
+  const rows = MICRO_PROBLEM_REASONS.map(r=>{
+    const byKey = new Map();
+    deals.filter(d=> d.problemReason===r.code || d.problemReason2===r.code).forEach(d=>{
+      const k = microBloggerKey(d.blogerName), st = microProblemStatusOf(d);
+      if(!byKey.has(k) || MICRO_PROBLEM_RANK[st] > MICRO_PROBLEM_RANK[byKey.get(k)]) byKey.set(k, st);
+    });
+    const c = {code:r.code, label:r.label, total:byKey.size};
+    MICRO_PROBLEM_STATUSES.forEach(st=>{ c[st] = [...byKey.values()].filter(v=>v===st).length; });
+    return c;
+  }).filter(r=>r.total>0);
+  const all = new Map();
+  deals.forEach(d=>{ const k = microBloggerKey(d.blogerName), st = microProblemStatusOf(d); if(!all.has(k) || MICRO_PROBLEM_RANK[st] > MICRO_PROBLEM_RANK[all.get(k)]) all.set(k, st); });
+  const total = {total: all.size};
+  MICRO_PROBLEM_STATUSES.forEach(st=>{ total[st] = [...all.values()].filter(v=>v===st).length; });
+  return {rows, total};
+}
+function tplMicroProblemReasons(month){
+  const {rows, total} = microProblemReasonSummary(month);
+  if(!rows.length) return `<div class="login-hint" style="margin-top:12px">Проблемных блогеров ${month?`за ${escapeHtml(monthLabel(month))} `:""}не отмечено.</div>`;
+  return `
+      <div style="margin-top:16px;font-weight:600">Проблемные блогеры по причинам ${month?`<span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">— ${escapeHtml(monthLabel(month))}</span>`:""}</div>
+      <div class="login-hint" style="margin:4px 0 8px">Блогер считается один раз; если у него две причины — попадает в обе строки. Отметить — колонка «Проблема» в таблице интеграций ниже.</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Причина</th><th>Блогеров</th>${MICRO_PROBLEM_STATUSES.map(st=>`<th>${st}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${rows.map(r=>`<tr><td><b>${r.code}</b> ${escapeHtml(r.label)}</td><td><b>${r.total}</b></td>${MICRO_PROBLEM_STATUSES.map(st=>`<td${r[st]&&st!=="Решена"?' style="color:var(--bad)"':''}>${r[st]||"—"}</td>`).join("")}</tr>`).join("")}
+          <tr style="font-weight:700;border-top:2px solid var(--line-2)"><td>Всего блогеров</td><td>${total.total}</td>${MICRO_PROBLEM_STATUSES.map(st=>`<td>${total[st]||"—"}</td>`).join("")}</tr>
+        </tbody>
+      </table></div>`;
+}
 function microResponsibleTotalForProduct(month){
   let deals = DataManager.state.microInfluencerDeals;
   if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
@@ -2428,12 +2501,14 @@ function microResponsibleGroupRows(month, rows){
     if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
     const unique = new Set(deals.map(d=>microBloggerKey(d.blogerName))).size;
     const forProductCount = microForProductBloggers(deals);
+    const problemCount = microProblemBloggers(deals);
     const plans = memberRows.map(r=>r.plan).filter(v=>v);
     const plan = plans.length ? plans.reduce((a,b)=>a+b,0) : null;
     groups.push({
       lead: g.lead, memberRows,
       uniqueBloggerCount: unique,
       forProductCount,
+      problemCount,
       plan,
       planLeft: plan==null ? null : Math.max(0, plan - unique),
       planPct: plan==null ? null : Math.round(unique / plan * 100),
@@ -2467,6 +2542,8 @@ function tplMicroResponsibleSummary(){
   // Под числом блогеров — сколько из них работают «за товар» (уникальные аккаунты).
   // Под охватами — сумма без вирусных роликов (от 500 тыс. просмотров), чтобы один такой ролик не искажал картину.
   const noViralNote = (sum, cnt) => `<div style="font-size:10.5px;font-weight:400;color:var(--ink-mute);white-space:nowrap" title="Сумма охватов без роликов от ${fmtNum(MICRO_VIRAL_REACH_MIN)} просмотров${cnt?` (таких роликов: ${cnt})`:""}. На вклад не влияет.">без всплесков: ${fmtNum(sum||0)}${cnt?` <span style="opacity:.8">(−${cnt} шт)</span>`:""}</div>`;
+  // Под числом блогеров — сколько из них проблемных (не решённые: Открыта / В работе / Отказ).
+  const problemNote = n => n ? `<div style="font-size:10.5px;font-weight:600;color:var(--bad);white-space:nowrap">⚠ проблемных: ${n}</div>` : "";
   const forProductNote = n => `<div style="font-size:10.5px;font-weight:400;color:var(--ink-mute);white-space:nowrap">из них за товар: ${n||0}</div>`;
   const cols = plan ? 10 : 7; // всего колонок в таблице — нужно для colspan пустой строки
   return `
@@ -2511,7 +2588,7 @@ function tplMicroResponsibleSummary(){
               return `<tr${o.indent?' style="background:var(--canvas)"':''}>
               <td><button class="btn btn-ghost btn-sm responsible-toggle-btn" data-responsible="${escapeHtml(r.responsible)}" style="padding:2px 9px;line-height:1">${expanded?'−':'+'}</button></td>
               <td>${o.indent?'<span style="color:var(--ink-mute);margin-right:6px">└</span>':''}${o.indent?escapeHtml(label):`<b>${escapeHtml(label)}</b>`}</td>
-              <td>${r.uniqueBloggerCount}${forProductNote(r.forProductCount)}</td>
+              <td>${r.uniqueBloggerCount}${forProductNote(r.forProductCount)}${problemNote(r.problemCount)}</td>
               ${plan ? `${planCell(month,"manager",r.responsible,"bloggers",{auto:microDefaultPlanFor(month, r.responsible)})}<td>${r.planLeft==null?"—":r.planLeft}</td>${progressCell(r.planPct)}` : ""}
               <td>${r.inProgress}</td>
               <td>${r.published}</td>
@@ -2534,7 +2611,7 @@ function tplMicroResponsibleSummary(){
               return `<tr style="font-weight:600">
                 <td><button class="btn btn-ghost btn-sm responsible-group-toggle-btn" data-lead="${escapeHtml(g.lead)}" title="${open?'Свернуть':'Показать менеджеров группы'}" style="padding:2px 9px;line-height:1">${open?'▾':'▸'}</button></td>
                 <td><b>${escapeHtml(g.lead)}</b>${names?` <span style="font-weight:400;color:var(--ink-mute);font-size:11px">+ ${escapeHtml(names)}</span>`:""}</td>
-                <td>${g.uniqueBloggerCount}${forProductNote(g.forProductCount)}</td>
+                <td>${g.uniqueBloggerCount}${forProductNote(g.forProductCount)}${problemNote(g.problemCount)}</td>
                 ${plan ? `<td>${g.plan==null?"—":fmtNum(g.plan)}</td><td>${g.planLeft==null?"—":g.planLeft}</td>${progressCell(g.planPct)}` : ""}
                 <td>${g.inProgress}</td>
                 <td>${g.published}</td>
@@ -2547,7 +2624,7 @@ function tplMicroResponsibleSummary(){
           ${rows.length ? `<tr style="font-weight:700;border-top:2px solid var(--line-2)">
             <td></td>
             <td>Итого</td>
-            <td>${microResponsibleTotalUniqueBloggers(month)}${forProductNote(microResponsibleTotalForProduct(month))}</td>
+            <td>${microResponsibleTotalUniqueBloggers(month)}${forProductNote(microResponsibleTotalForProduct(month))}${problemNote(microResponsibleTotalProblem(month))}</td>
             ${plan ? (()=>{
               // Итоговый план — сумма личных планов (у каждой девочки свой), а выполнение считаем
               // через остаток: (план − сколько осталось) / план. Через сумму "Блогеров" считать
@@ -2577,6 +2654,7 @@ function tplMicroResponsibleSummary(){
           </tr>` : ""}
         </tbody>
       </table></div>
+      ${tplMicroProblemReasons(month)}
     </div>
   `;
 }
@@ -2597,14 +2675,50 @@ const MICRO_FOR_PRODUCT_CATEGORY = "За товар";
 // у которых факт. охват от 500 тыс. просмотров (один такой ролик перекрывает охваты всех остальных).
 // Только для отображения, на вклад и другие расчёты не влияет.
 const MICRO_VIRAL_REACH_MIN = 500000;
+// ---- Проблемные блогеры (16.10.2026, только микро/средние) ----
+// Причина (P01–P10) + вторая причина (необязательно) + статус + короткий комментарий — на интеграции.
+// Подсвечивается БЛОГЕР целиком (все его интеграции, по microBloggerKey), а не одна строка.
+const MICRO_PROBLEM_REASONS = [
+  {code:"P01", label:"Нет связи / игнор"},
+  {code:"P02", label:"Срыв сроков / переносы"},
+  {code:"P03", label:"Отказ от правок / ТЗ"},
+  {code:"P04", label:"Долгие правки / согласование"},
+  {code:"P05", label:"Публикация без согласования"},
+  {code:"P06", label:"Деньги получены, видео нет"},
+  {code:"P07", label:"Личные обстоятельства (беременность, болезнь, отпуск)"},
+  {code:"P08", label:"Репутационный риск (негатив, скандалы в Threads)"},
+  {code:"P09", label:"Видео заблокировано / охват срезан"},
+  {code:"P10", label:"Другое"},
+];
+const MICRO_PROBLEM_STATUSES = ["Открыта","В работе","Решена","Отказ от блогера"];
+const MICRO_PROBLEM_RANK = {"Отказ от блогера":4, "Открыта":3, "В работе":2, "Решена":1};
+const microProblemReasonLabel = code => (MICRO_PROBLEM_REASONS.find(r=>r.code===code)||{}).label || code || "";
+const microProblemStatusOf = d => d && d.problemReason ? (MICRO_PROBLEM_STATUSES.includes(d.problemStatus) ? d.problemStatus : "Открыта") : "";
+// Активная проблема — всё, кроме «Решена».
+const microProblemActive = d => !!(d && d.problemReason) && microProblemStatusOf(d) !== "Решена";
+// Блогер → самая серьёзная отметка по всем его интеграциям (Отказ > Открыта > В работе > Решена).
+function microProblemIndex(deals){
+  const idx = new Map();
+  (deals || DataManager.state.microInfluencerDeals || []).forEach(d=>{
+    if(!d.problemReason) return;
+    const key = microBloggerKey(d.blogerName), st = microProblemStatusOf(d);
+    const cur = idx.get(key);
+    if(!cur || MICRO_PROBLEM_RANK[st] > MICRO_PROBLEM_RANK[cur.status]) idx.set(key, {status: st, deal: d});
+  });
+  return idx;
+}
+const microProblemBloggers = deals => new Set(deals.filter(microProblemActive).map(d=>microBloggerKey(d.blogerName))).size;
 // Один блогер = один аккаунт, как бы ни записали имя: «dehnara», «Dehnara бартер», «@dehnara»,
 // «instagram.com/dehnara», «dehnara (за товар)» — один и тот же блогер. Регистр, @, ссылка,
-// пометки «бартер / за товар» и знаки препинания при подсчёте уникальных блогеров не учитываются.
+// пометки «бартер / за товар / черный список / доп.видео», всё после «@логина» и знаки препинания при подсчёте уникальных блогеров не учитываются.
 function microBloggerKey(name){
   let s = String(name||"").toLowerCase().replace(/ё/g,"е").trim();
   s = s.replace(/^https?:\/\//,"").replace(/^(www\.)?(instagram\.com|tiktok\.com)\/(@)?/,"").split(/[?#]/)[0];
+  // «@логин …что угодно после…» — блогер = логин («@zhanayovna черный список», «@aknur НЕ СОГЛАСОВАНО»).
+  const at = s.match(/^@([a-z0-9._]+)/);
+  if(at) return at[1].replace(/[^a-z0-9]/g,"") || "—";
   s = s.replace(/\([^)]*\)/g," ");
-  s = s.replace(/(^|[^a-zа-я0-9])(бартер|barter|за\s*товар)(?=$|[^a-zа-я0-9])/g,"$1 ");
+  s = s.replace(/(^|[^a-zа-я0-9])(бартер|barter|за\s*товар|черный\s*список|не\s*согласовано|доп\.?\s*видео|допик)(?=$|[^a-zа-я0-9])/g,"$1 ");
   s = s.replace(/[^a-zа-я0-9]+/g,"");
   return s || "—";
 }
@@ -2730,7 +2844,7 @@ function tplMicroInfluencerCompare(rows){
   }
   // Оплаченные, но ещё не выложенные интеграции сюда не берём — та же логика, что и на дашборде
   // выше, иначе "Расход" за месяц в сравнении не совпадал бы с "Расходы" в KPI-плашках дашборда.
-  const publishedRows = rows.filter(r=>r.deal.videoStatus==="опубликовано");
+  const publishedRows = rows.filter(r=>microDealPublished(r.deal));
   const a = microPeriodStats(publishedRows, cmp.aFrom, cmp.aTo);
   const b = microPeriodStats(publishedRows, cmp.bFrom, cmp.bTo);
   const metricRow = (label, av, bv, fmt) => `<tr>
@@ -2787,7 +2901,7 @@ const UI = {
   reportPeriod: {from:"", to:""}, // период (по дате публикации) для сводки "Сколько выложили" в верхней части "Сводного отчёта" — см. reportPeriodSummary()
   reportOnlyWaiting: false, // фильтр "Сводного отчёта": показывать только доставленные, но ещё не выложенные (чтобы обзванивать блогеров)
   inflFilter: {search:"", sort:"default", month:"", dateFrom:"", dateTo:"", responsible:"", category:"", status:""},
-  microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:"", dateFrom:"", dateTo:""},
+  microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:"", dateFrom:"", dateTo:"", problem:""},
   // ЕДИНЫЙ месяц на всю вкладку. Раньше на каждой вкладке было 3-4 независимых фильтра месяца
   // (дашборд / сводка по блогерам / сводка по ответственным / таблица интеграций), и месяц
   // приходилось выбирать в каждом блоке отдельно — цифры на одном экране легко оказывались за
@@ -4568,6 +4682,16 @@ function tplMicroInfluencers(){
   if(mf.responsible){
     deals = deals.filter(d=> d.responsible===mf.responsible);
   }
+  // Проблемные: по блогеру (если у блогера есть проблема в любой интеграции — показываем все его строки).
+  const problemIdx = microProblemIndex();
+  if(mf.problem){
+    const allDeals = DataManager.state.microInfluencerDeals;
+    const keysWith = pred => new Set(allDeals.filter(pred).map(d=>microBloggerKey(d.blogerName)));
+    const keys = mf.problem==="active" ? keysWith(microProblemActive)
+      : mf.problem==="any" ? keysWith(d=>!!d.problemReason)
+      : keysWith(d=> d.problemReason===mf.problem || d.problemReason2===mf.problem);
+    deals = deals.filter(d=> keys.has(microBloggerKey(d.blogerName)));
+  }
   // Вклад в продажи/ROMI посчитаны в microInfluencerSummary() через romiRows — раскладываем
   // по id сделки, чтобы показать в таблице рядом с каждой интеграцией (как в "Инфлюенс интеграции крупные").
   const romiById = {};
@@ -4657,11 +4781,9 @@ function tplMicroInfluencers(){
         </div>
       </div>
       <div class="login-hint" style="margin-bottom:12px">
-        «Вклад в продажи» и ROMI — заказы Kaspi по ШК/SKU интеграции за 24 часа после выхода. Точного
-        времени нет, принято допущение: микро/средние выходят в 16:00, окно — до 16:00 следующего дня
-        (у крупных — с 12:00 до 12:00). Из заказов вычитается обоснованный фон, прирост каждого часа делится
-        между всеми блогерами (крупными и микро) с этим SKU, чьё окно его накрывает. Где фон или деление
-        обосновать нельзя — «—». Без ШК — только CPV = сумма / факт.охват (Reels + TikTok кросспостинг).
+        «Вклад в продажи» и ROMI — по заказам Kaspi по ШК/SKU: продажи сверх обычного уровня в дни выхода
+        (см. подсказку у колонки «Авто (Kaspi)»). Без ШК — только CPV = сумма / факт.охват (Reels + TikTok).
+        Колонка «Проблема» — отметить проблемного блогера (причина, статус); подсвечивается весь блогер.
       </div>
       ${tplAttributionRecalcBar()}
       <div class="toolbar" style="margin-bottom:12px">
@@ -4679,6 +4801,12 @@ function tplMicroInfluencers(){
         <select id="micro-responsible-filter">
           <option value="">Все ответственные</option>
           ${availableResponsibles.map(r=>`<option value="${escapeHtml(r)}" ${mf.responsible===r?'selected':''}>${escapeHtml(r)}</option>`).join("")}
+        </select>
+        <select id="micro-problem-filter" title="Проблемные блогеры">
+          <option value="">Все блогеры</option>
+          <option value="active" ${mf.problem==='active'?'selected':''}>⚠ Проблемные (не решённые)</option>
+          <option value="any" ${mf.problem==='any'?'selected':''}>Все с отметкой (вкл. решённые)</option>
+          ${MICRO_PROBLEM_REASONS.map(r=>`<option value="${r.code}" ${mf.problem===r.code?'selected':''}>${r.code} ${escapeHtml(r.label)}</option>`).join("")}
         </select>
         <select id="micro-sort">
           <option value="default" ${mf.sort==='default'?'selected':''}>Без сортировки</option>
@@ -4720,11 +4848,11 @@ function tplMicroInfluencers(){
         <thead><tr>
           <th class="rowcheck"><input type="checkbox" id="micro-check-all"></th>
           <th>#</th>
-          <th class="sticky-col">Блогер</th><th>Категория блогера</th><th>Ответственный</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
+          <th class="sticky-col">Блогер</th><th title="Проблемный блогер: причина и статус. Подсвечивается весь блогер — все его интеграции.">Проблема</th><th>Категория блогера</th><th>Ответственный</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
           ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
           ${sortableTh("Вклад в продажи (план/факт)","sales",mf.sort)}<th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th>${sortableTh("ROAS, ×","romi",mf.sort)}
         <th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (сумма оплаты + стоимость переданного товара). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th><th title="Вклад по заказам Kaspi: продажи товара сверх обычного уровня в дни выхода. Обычный уровень — среднее за дни до выхода при той же цене, без других блогеров этого товара (если цена была другой — дни после). Окно — с дня выхода, пока продажи не вернутся к обычным (до 7 дней). Скидка вычитается по прошлым сменам цены. Если в те же дни выходили другие блогеры этого товара — прирост делится по охвату. Всплеска нет — 0. «—» — если обычный уровень определить не из чего. Ручной вклад менеджера главнее.">${UI.collapsedColGroups.has("infl-auto") ? `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">+ Авто</span>` : `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">− Авто (Kaspi)</span>`}</th>
-          <th>Статус товара</th><th>Статус видео</th><th>Плановая дата</th><th>Дата выкладки</th><th>Ссылка на Reels</th><th></th>
+          <th>Статус товара</th><th>Статус видео</th><th>Плановая дата</th><th>Дата выкладки</th><th title="Формат (Reels + TikTok / Сторис / Сторис + Reels + TikTok), ссылка на Reels; у сторис — охват и клики вручную (ссылки нет)">Ссылка / сторис</th><th></th>
         </tr></thead>
         <tbody>
           ${deals.map((d,i)=>{
@@ -4732,10 +4860,13 @@ function tplMicroInfluencers(){
             const cpv = microDealCpv(d);
             const r = romiById[d.id];
             const hasBaseline = r && r.hasBaseline;
-            return `<tr>
+            const pb = problemIdx.get(microBloggerKey(d.blogerName));
+            const rowStyle = !pb || pb.status==="Решена" ? "" : ` style="background:${pb.status==="Отказ от блогера" ? "rgba(200,40,50,.16)" : "rgba(220,60,70,.08)"}"`;
+            return `<tr${rowStyle}>
               <td class="rowcheck"><input type="checkbox" class="micro-row-check" data-id="${d.id}" ${UI.selectedMicroIds.has(d.id)?'checked':''}></td>
               <td>${i+1}</td>
-              <td class="sticky-col">${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
+              <td class="sticky-col">${pb && pb.status==="Отказ от блогера" ? '<span title="Отказ от блогера">⛔ </span>' : ""}${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')}${microHasStories(d) ? ` <span style="font-size:10.5px;padding:1px 6px;border-radius:8px;background:var(--canvas);border:1px solid var(--line);white-space:nowrap" title="${escapeHtml(microFormatOf(d))}">📱 сторис</span>` : ""}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
+              <td>${microProblemCell(d, pb)}</td>
               <td>${inlineEditSpan(escapeHtml(d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "—"), d.id, 'bloggerCategory', d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : '', 'select', MICRO_BLOGGER_CATEGORIES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.responsible||"—"), d.id, 'responsible', d.responsible||'', 'text')}</td>
               <td>${d.instagramAccount?`<a href="${escapeHtml(normalizeInstagramUrl(d.instagramAccount))}" target="_blank" rel="noopener">IG</a> `:""}${inlineEditSpan(fmtNum(d.followers||0), d.id, 'followers', d.followers||0, 'number')}</td>
@@ -4745,7 +4876,7 @@ function tplMicroInfluencers(){
               <td>${inlineEditSpan(fmtNum(d.cost||0)+" ₸", d.id, 'cost', d.cost||0, 'number')}</td>
               <td>${inlineEditSpan(fmtNum(d.productCost||0)+" ₸", d.id, 'productCost', d.productCost||0, 'number')}</td>
               <td>${inlineEditSpan(escapeHtml(d.paymentStatus||"—"), d.id, 'paymentStatus', d.paymentStatus||'', 'select', MICRO_PAYMENT_STATUSES)}</td>
-              <td>${inlineEditSpan(fmtNum(factReach), d.id, 'factReachTotal', factReach, 'number')}${socialViewsBadge(d,["factReachReels","factReachTT"])}</td>
+              <td>${inlineEditSpan(fmtNum(factReach), d.id, 'factReachTotal', factReach, 'number')}${socialViewsBadge(d,["factReachReels","factReachTT"])}${(d.factReachStories||0)>0 ? `<br><span style="font-size:10.5px;color:var(--ink-mute)">в т.ч. сторис ${fmtNum(d.factReachStories)}</span>` : ""}</td>
               <td title="Считается автоматически: (сумма + стоимость товара) ÷ факт.охват">${cpv==null?"—":cpv.toFixed(3)+" ₸"}</td>
               <td>
                 ${(()=>{
@@ -4767,12 +4898,10 @@ function tplMicroInfluencers(){
               })()}</td><td title="Считается автоматически: вклад в продажи ÷ (сумма + стоимость товара)">${(r && r.romi!=null) ? r.romi.toFixed(2) : "—"}</td><td>${(r && r.romi!=null) ? `×${r.romi.toFixed(2)}` : "—"}</td>
               <td>${UI.collapsedColGroups.has("infl-auto") ? `<span style="color:var(--ink-mute);cursor:default" title="Свёрнуто — нажмите «+ Авто» в заголовке колонки, чтобы показать">⋯</span>` : autoContributionCell(d)}</td>
               <td>${inlineEditSpan(escapeHtml(d.productStatus||"—"), d.id, 'productStatus', d.productStatus||'', 'select', MICRO_PRODUCT_STATUSES)}</td>
-              <td>${inlineEditSpan(escapeHtml(d.videoStatus||"—"), d.id, 'videoStatus', d.videoStatus||'', 'select', MICRO_VIDEO_STATUSES)}</td>
+              <td>${inlineEditSpan(escapeHtml(d.videoStatus||"—"), d.id, 'videoStatus', d.videoStatus||'', 'select', MICRO_VIDEO_STATUSES)}${d.videoStatus!=="опубликовано" && microDealPublished(d) ? `<br><span style="font-size:10.5px;color:var(--ok)" title="Сторис с охватом считается вышедшей, даже без ссылки">✓ сторис вышла</span>` : ""}</td>
               <td>${inlineEditSpan(escapeHtml(d.plannedDate||"—"), d.id, 'plannedDate', d.plannedDate||'', 'date')}</td>
               <td>${inlineEditSpan(escapeHtml(d.publishDate||"—"), d.id, 'publishDate', d.publishDate||'', 'date')}</td>
-              <td>${d.reelsLink
-                ? `<a href="${escapeHtml(normalizeLinkUrl(d.reelsLink))}" target="_blank" rel="noopener">${escapeHtml(d.reelsLink)}</a> ${inlineEditSpan("✎", d.id, 'reelsLink', d.reelsLink, 'text')}`
-                : inlineEditSpan("—", d.id, 'reelsLink', '', 'text')}</td>
+              <td>${microLinkStoriesCell(d)}</td>
               <td>
                 <button class="btn btn-ghost btn-sm edit-micro-btn" data-id="${d.id}">✎</button>
                 <button class="btn btn-danger btn-sm del-micro-btn" data-id="${d.id}">✕</button>
@@ -5775,6 +5904,73 @@ function tplMicroCalendar(){
   `;
 }
 
+// Ячейка «Проблема»: своя отметка этой интеграции, либо (серым) отметка блогера из другой его интеграции.
+function microProblemCell(d, pb){
+  const btn = (inner, title) => `<span class="micro-problem-btn" data-id="${d.id}" style="cursor:pointer" title="${escapeHtml(title)}">${inner}</span>`;
+  if(d.problemReason){
+    const st = microProblemStatusOf(d);
+    const color = st==="Решена" ? "var(--ink-mute)" : "var(--bad)";
+    const reasons = [d.problemReason, d.problemReason2].filter(Boolean);
+    const title = reasons.map(c=>`${c} ${microProblemReasonLabel(c)}`).join(" + ") + ` · ${st}` + (d.problemNote ? `\n${d.problemNote}` : "") + "\nНажмите, чтобы изменить";
+    return btn(`<span style="color:${color};font-weight:600;font-size:11.5px;white-space:nowrap">${st==="Отказ от блогера"?"⛔":st==="Решена"?"✓":"⚠"} ${reasons.join("+")}</span><br><span style="font-size:10.5px;color:${color}">${escapeHtml(microProblemReasonLabel(d.problemReason))}</span><br><span style="font-size:10px;color:var(--ink-mute)">${escapeHtml(st)}</span>`, title);
+  }
+  if(pb){
+    const o = pb.deal;
+    return btn(`<span style="font-size:10.5px;color:var(--ink-mute)">у блогера: ${escapeHtml(o.problemReason)} · ${escapeHtml(pb.status)}</span>`, `Отмечено в другой интеграции этого блогера (id ${o.id}): ${o.problemReason} ${microProblemReasonLabel(o.problemReason)}. Нажмите, чтобы отметить и эту.`);
+  }
+  return btn(`<span style="font-size:10.5px;color:var(--ink-mute);text-decoration:underline dotted">отметить</span>`, "Отметить блогера как проблемного");
+}
+function modalMicroProblem(id){
+  const d = DataManager.state.microInfluencerDeals.find(x=>x.id===id);
+  if(!d) return;
+  const opt = (list, cur, empty) => (empty?`<option value="">${empty}</option>`:"") + list.map(r=>`<option value="${r.code}" ${cur===r.code?'selected':''}>${r.code} ${escapeHtml(r.label)}</option>`).join("");
+  openModal(`
+    <h3>Проблемный блогер · ${escapeHtml(d.blogerName||"")}</h3>
+    <div class="form-row">
+      <div class="field"><label>Причина</label><select id="pb-reason">${opt(MICRO_PROBLEM_REASONS, d.problemReason||"", "— выберите —")}</select></div>
+      <div class="field"><label>Вторая причина (если есть)</label><select id="pb-reason2">${opt(MICRO_PROBLEM_REASONS, d.problemReason2||"", "—")}</select></div>
+      <div class="field"><label>Статус</label><select id="pb-status">${MICRO_PROBLEM_STATUSES.map(st=>`<option ${microProblemStatusOf(d)===st || (!d.problemReason && st==="Открыта")?'selected':''}>${st}</option>`).join("")}</select></div>
+    </div>
+    <div class="field"><label>Комментарий (что случилось)</label><textarea id="pb-note">${escapeHtml(d.problemNote||"")}</textarea></div>
+    <div class="login-hint">Подсвечивается весь блогер — все его интеграции. «Решена» снимает подсветку, но метка остаётся. «Отказ от блогера» — ⛔, при новой интеграции с ним будет предупреждение.</div>
+    <div class="modal-actions">
+      ${d.problemReason ? `<button class="btn btn-ghost" id="pb-clear">Снять отметку</button>` : ""}
+      <button class="btn btn-ghost" id="pb-cancel">Отмена</button>
+      <button class="btn btn-primary" id="pb-save">Сохранить</button>
+    </div>
+  `);
+  const save = async (btn, changes)=>{
+    try{ await withBusy(btn, ()=> Api.updateMicroDeal(id, changes)); closeModal(); toast("Сохранено"); await DataManager.refresh(); render(); }
+    catch(e){ toast(e.message, true); }
+  };
+  document.getElementById("pb-cancel").onclick = closeModal;
+  const clearBtn = document.getElementById("pb-clear");
+  if(clearBtn) clearBtn.onclick = ()=> save(clearBtn, {problemReason:"", problemReason2:"", problemStatus:"", problemNote:"", problemAt:""});
+  document.getElementById("pb-save").onclick = ()=>{
+    const reason = document.getElementById("pb-reason").value;
+    if(!reason){ toast("Выберите причину", true); return; }
+    const reason2 = document.getElementById("pb-reason2").value;
+    save(document.getElementById("pb-save"), {
+      problemReason: reason, problemReason2: reason2 && reason2!==reason ? reason2 : "",
+      problemStatus: document.getElementById("pb-status").value,
+      problemNote: document.getElementById("pb-note").value.trim(),
+      problemAt: d.problemAt || new Date().toISOString().slice(0,10),
+    });
+  };
+}
+// Предупреждение в форме интеграции: этот блогер уже отмечен как проблемный.
+function microProblemWarning(name, exceptId){
+  if(!String(name||"").trim()) return "";
+  const key = microBloggerKey(name);
+  const own = DataManager.state.microInfluencerDeals.filter(x=> x.id!==exceptId && x.problemReason && microBloggerKey(x.blogerName)===key);
+  if(!own.length) return "";
+  const pb = microProblemIndex(own).get(key);
+  const o = pb.deal;
+  const refuse = pb.status==="Отказ от блогера";
+  return `<div style="margin:-4px 0 10px;padding:8px 10px;border-radius:8px;background:${refuse?"rgba(200,40,50,.16)":"rgba(220,60,70,.08)"};color:var(--bad);font-size:12px">
+    ${refuse?"⛔ От этого блогера отказались":"⚠ Этот блогер отмечен как проблемный"}: ${escapeHtml(o.problemReason)} ${escapeHtml(microProblemReasonLabel(o.problemReason))}${o.problemReason2?` + ${escapeHtml(o.problemReason2)}`:""} · ${escapeHtml(pb.status)}${o.problemNote?` — ${escapeHtml(o.problemNote)}`:""} (интеграция id ${o.id}, ${escapeHtml(o.responsible||"")})
+  </div>`;
+}
 function modalMicroDeal(existing, prefill){
   const isEdit = !!existing;
   const d = existing || Object.assign({
@@ -5791,6 +5987,7 @@ function modalMicroDeal(existing, prefill){
   }, prefill||{});
   openModal(`
     <h3>${isEdit?'Изменить':'Новая'} интеграция · Инфлюенс микро/средние</h3>
+    <div id="mm-problem-warn">${microProblemWarning(d.blogerName, isEdit ? existing.id : null)}</div>
     <div class="form-row">
       <div class="field"><label>Блогер</label><input id="mm-name" placeholder="Имя / название аккаунта" value="${escapeHtml(d.blogerName)}"></div>
       <div class="field"><label>Категория блогера</label><select id="mm-blogger-category"><option value="">—</option>${MICRO_BLOGGER_CATEGORIES.map(c=>`<option ${d.bloggerCategory && c===normalizeBloggerCategory(d.bloggerCategory)?'selected':''}>${c}</option>`).join("")}</select></div>
@@ -5832,6 +6029,11 @@ function modalMicroDeal(existing, prefill){
     <datalist id="product-suggestions">${knownProductNames().map(p=>`<option value="${escapeHtml(p)}">`).join("")}</datalist>
     <div class="login-hint">Если укажешь ШК — вклад в продажи и ROMI будут считаться по нему (надёжнее, чем по названию товара).</div>
     <div class="form-row">
+      <div class="field"><label>Формат</label><select id="mm-format">${MICRO_FORMATS.map(f=>`<option ${microFormatOf(d)===f?'selected':''}>${f}</option>`).join("")}</select></div>
+      <div class="field"><label>Охват сторис (вручную)</label><input id="mm-stories-reach" type="number" value="${d.factReachStories||0}"></div>
+      <div class="field"><label>Клики сторис</label><input id="mm-stories-clicks" type="number" value="${d.storiesClicks||0}"></div>
+    </div>
+    <div class="form-row">
       <div class="field"><label>Ссылка на Reels</label><input id="mm-reels-link" value="${escapeHtml(d.reelsLink||'')}"></div>
       <div class="field"><label>Факт.охват Reels</label><input id="mm-fact-reach-reels" type="number" value="${d.factReachReels||0}"></div>
       <div class="field"><label>Ссылка на видео TikTok</label><input id="mm-tt-link" value="${escapeHtml(d.tiktokVideoLink||'')}"></div>
@@ -5849,6 +6051,10 @@ function modalMicroDeal(existing, prefill){
     </div>
   `);
   document.getElementById("mm-cancel").onclick = closeModal;
+  document.getElementById("mm-name").addEventListener("input", e=>{
+    const w = document.getElementById("mm-problem-warn");
+    if(w) w.innerHTML = microProblemWarning(e.target.value, isEdit ? existing.id : null);
+  });
   document.getElementById("mm-save").onclick = async ()=>{
     const btn = document.getElementById("mm-save");
     const blogerName = document.getElementById("mm-name").value.trim();
@@ -5882,6 +6088,9 @@ function modalMicroDeal(existing, prefill){
       factReachReels: parseInt(document.getElementById("mm-fact-reach-reels").value,10)||0,
       tiktokVideoLink: document.getElementById("mm-tt-link").value.trim(),
       factReachTT: parseInt(document.getElementById("mm-fact-reach-tt").value,10)||0,
+      contentFormat: document.getElementById("mm-format").value==="Reels + TikTok" ? "" : document.getElementById("mm-format").value,
+      factReachStories: parseInt(document.getElementById("mm-stories-reach").value,10)||0,
+      storiesClicks: parseInt(document.getElementById("mm-stories-clicks").value,10)||0,
       plannedDate: document.getElementById("mm-planned-date").value,
       publishDate: document.getElementById("mm-publish-date").value,
       notes: document.getElementById("mm-notes").value.trim(),
@@ -6411,6 +6620,9 @@ function wireDeskTab(){
     document.getElementById("micro-date-to").onchange = e=>{ UI.microFilter.dateTo = e.target.value; renderDeskTab(); };
     document.getElementById("micro-responsible-filter").onchange = e=>{ UI.microFilter.responsible = e.target.value; renderDeskTab(); };
     document.getElementById("micro-sort").onchange = e=>{ UI.microFilter.sort = e.target.value; renderDeskTab(); };
+    const problemFilterEl = document.getElementById("micro-problem-filter");
+    if(problemFilterEl) problemFilterEl.onchange = e=>{ UI.microFilter.problem = e.target.value; renderDeskTab(); };
+    document.querySelectorAll(".micro-problem-btn").forEach(el=>{ el.onclick = ()=> modalMicroProblem(+el.dataset.id); });
     // Сортировка кликом по заголовку колонки ("как в Excel") — см. sortableTh(). Первый клик по
     // колонке ставит "сначала больше", повторный клик по той же колонке — переключает на
     // "сначала меньше"; это тот же UI.microFilter.sort, что и выпадающий список сортировки выше.
@@ -6547,7 +6759,7 @@ function wireDeskTab(){
       // которые реально пушатся в lines.push(...) ниже — иначе заголовок "уезжает" относительно
       // данных (была живая регрессия: сюда забыли добавить "ответственный"/"категория блогера",
       // когда их добавили в сами строки — эти два столбца тихо съезжали на всё, что после блогера).
-      const header = ["id","ответственный","блогер","категория блогера","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий"];
+      const header = ["id","ответственный","блогер","категория блогера","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий","проблема","причина 2","статус проблемы","комментарий проблемы","формат","охват сторис","клики сторис"];
       const lines = [header.map(csvEscape).join(",")];
       // "deals" — переменная из tplMicroInfluencers() (учитывает поиск/фильтр), а этот обработчик
       // живёт в wireDeskTab() — отдельной функции, где такой переменной нет. Раньше это падало
@@ -6565,6 +6777,8 @@ function wireDeskTab(){
           d.productStatus||"", d.videoStatus||"",
           d.reelsLink||"", d.factReachReels||0, d.tiktokVideoLink||"", d.factReachTT||0,
           d.plannedDate||"", d.publishDate||"", d.notes||"",
+          d.problemReason||"", d.problemReason2||"", d.problemReason ? microProblemStatusOf(d) : "", d.problemNote||"",
+          microFormatOf(d), d.factReachStories||0, d.storiesClicks||0,
         ].map(csvEscape).join(","));
       });
       downloadFile("barter-box-micro-influencers-export.csv", "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
@@ -7442,6 +7656,72 @@ async function runSelfTests(){
       UI.microResponsibleMonth = "2026-10";
       if(!tplMicroResponsibleSummary().includes("без всплесков: 25")) throw new Error("подпись «без всплесков» под охватами");
     } finally { DataManager.state.microInfluencerDeals = savedMicro; UI.microResponsibleMonth = savedM; }
+  });
+  TestSuite.test("Проблемные блогеры: колонка «Проблема», подсветка всего блогера, фильтр, предупреждение, сводка по причинам", ()=>{
+    const savedMicro = DataManager.state.microInfluencerDeals, savedF = JSON.stringify(UI.microFilter), savedM = UI.microResponsibleMonth;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:99801, responsible:"Зарина", blogerName:"@asema", publishDate:"2026-10-05", plannedDate:"2026-10-05", videoStatus:"не опубликовано", problemReason:"P06", problemReason2:"P01", problemStatus:"Открыта", problemNote:"не отправляет видео"},
+        {id:99802, responsible:"Зарина", blogerName:"asema бартер", publishDate:"2026-10-09", plannedDate:"2026-10-09", videoStatus:"опубликовано"},
+        {id:99803, responsible:"Надира", blogerName:"@yesh черный список", publishDate:"2026-10-07", plannedDate:"2026-10-07", videoStatus:"опубликовано", problemReason:"P08", problemStatus:"Отказ от блогера"},
+        {id:99804, responsible:"Мадина", blogerName:"@ok_blogger", publishDate:"2026-10-07", plannedDate:"2026-10-07", videoStatus:"опубликовано"},
+        {id:99805, responsible:"Мадина", blogerName:"@solved", publishDate:"2026-10-07", plannedDate:"2026-10-07", videoStatus:"опубликовано", problemReason:"P04", problemStatus:"Решена"},
+      ];
+      const idx = microProblemIndex();
+      if(idx.get(microBloggerKey("asema бартер")).status!=="Открыта") throw new Error("проблема видна по блогеру во всех его интеграциях");
+      if(microProblemActive(DataManager.state.microInfluencerDeals[4])) throw new Error("«Решена» — не активная");
+      UI.microFilter = {search:"", sort:"default", paymentStatus:"", month:"", responsible:"", dateFrom:"", dateTo:"", problem:""};
+      let html = tplMicroInfluencers();
+      if(!html.includes("⚠ P06+P01")) throw new Error("в ячейке «Проблема» коды причин");
+      if(!html.includes("у блогера: P06")) throw new Error("вторая интеграция того же блогера показывает его отметку");
+      if(!html.includes("rgba(220,60,70,.08)")) throw new Error("строки проблемного блогера подсвечены");
+      if(!html.includes("⛔")) throw new Error("отказ от блогера помечен ⛔");
+      UI.microFilter.problem = "active";
+      const tableOf = h => h.slice(h.indexOf('id="micro-check-all"'));
+      html = tableOf(tplMicroInfluencers());
+      if(html.includes("@ok_blogger") || html.includes("@solved</b>")) throw new Error("фильтр «Проблемные» оставляет только нерешённых");
+      if(!html.includes("asema бартер")) throw new Error("фильтр показывает все интеграции проблемного блогера");
+      UI.microFilter.problem = "P08";
+      html = tableOf(tplMicroInfluencers());
+      if(html.includes("asema бартер") || !html.includes("@yesh черный список")) throw new Error("фильтр по причине P08");
+      if(!microProblemWarning("Yesh").includes("⛔ От этого блогера отказались")) throw new Error("предупреждение при новой интеграции с отказным блогером");
+      if(microProblemWarning("@ok_blogger")!=="") throw new Error("у обычного блогера предупреждения нет");
+      const sum = microProblemReasonSummary("2026-10");
+      if(sum.total.total!==3 || sum.rows.find(r=>r.code==="P01").total!==1 || sum.rows.find(r=>r.code==="P04")["Решена"]!==1) throw new Error("сводка по причинам: "+JSON.stringify(sum));
+      if(microResponsibleTotalProblem("2026-10")!==2) throw new Error("проблемных (не решённых) блогеров 2");
+      UI.microResponsibleMonth = "2026-10";
+      const rs = tplMicroResponsibleSummary();
+      if(!rs.includes("⚠ проблемных: 2") || !rs.includes("Проблемные блогеры по причинам")) throw new Error("в сводке по ответственным — проблемные и таблица причин");
+    } finally {
+      DataManager.state.microInfluencerDeals = savedMicro; UI.microFilter = JSON.parse(savedF); UI.microResponsibleMonth = savedM;
+    }
+  });
+  TestSuite.test("Сторис: формат, охват и клики вручную, сторис без ссылки считается вышедшей, охват входит в CPV и сводки", ()=>{
+    const savedMicro = DataManager.state.microInfluencerDeals, savedF = JSON.stringify(UI.microFilter), savedM = UI.microResponsibleMonth;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:99901, responsible:"Камила", blogerName:"@story_girl", publishDate:"2026-10-05", plannedDate:"2026-10-05", videoStatus:"не опубликовано", contentFormat:"Сторис", factReachStories:12400, storiesClicks:85, cost:20000, productCost:0},
+        {id:99902, responsible:"Камила", blogerName:"@mix", publishDate:"2026-10-06", plannedDate:"2026-10-06", videoStatus:"опубликовано", contentFormat:"Сторис + Reels + TikTok", factReachReels:30000, factReachTT:5000, factReachStories:5000, storiesClicks:20, cost:40000, productCost:0, reelsLink:"https://www.instagram.com/reel/abc/"},
+        {id:99903, responsible:"Камила", blogerName:"@reels", publishDate:"2026-10-07", plannedDate:"2026-10-07", videoStatus:"не опубликовано", factReachReels:0, cost:10000},
+      ];
+      const [a,b,c] = DataManager.state.microInfluencerDeals;
+      if(!microDealPublished(a)) throw new Error("сторис с охватом — вышла без ссылки");
+      if(microDealPublished(c)) throw new Error("обычная без статуса и ссылки — не вышла");
+      if(microDealFactReach(b)!==40000) throw new Error("охват = reels + tt + сторис");
+      if(Math.abs(microDealCpv(a) - 20000/12400) > 1e-9) throw new Error("CPV у сторис считается по её охвату");
+      if(microDealFactReachPatch(b, 50000).factReachReels!==40000) throw new Error("правка общего охвата не трогает сторис и TikTok");
+      const st = microStoriesStats(DataManager.state.microInfluencerDeals);
+      if(st.count!==2 || st.reach!==17400 || st.clicks!==105) throw new Error("статистика сторис: "+JSON.stringify(st));
+      UI.microFilter = {search:"", sort:"default", paymentStatus:"", month:"", responsible:"", dateFrom:"", dateTo:"", problem:""};
+      const html = tplMicroInfluencers();
+      if(!html.includes("📱 Сторис</b> · охват") || !html.includes(fmtNum(12400))) throw new Error("в таблице видно сторис с охватом");
+      if(!html.includes("✓ сторис вышла")) throw new Error("подсказка «сторис вышла» у статуса видео");
+      UI.microResponsibleMonth = "2026-10";
+      const r = microResponsibleSummary("2026-10").find(x=>x.responsible==="Камила");
+      if(r.published!==2 || r.totalReach!==52400) throw new Error("сводка по ответственным учитывает сторис: "+r.published+" / "+r.totalReach);
+    } finally {
+      DataManager.state.microInfluencerDeals = savedMicro; UI.microFilter = JSON.parse(savedF); UI.microResponsibleMonth = savedM;
+    }
   });
   TestSuite.test("Уникальные блогеры: «dehnara» и «Dehnara бартер» (и @, ссылка, «(за товар)») — один блогер", ()=>{
     const k = microBloggerKey("dehnara");
@@ -8948,7 +9228,7 @@ async function runSelfTests(){
       UI.microFilter = {search:"", sort:"default", paymentStatus:""};
       const html = tplMicroInfluencers();
       if(!html.includes("Стоимость товара")) throw new Error("должна быть колонка 'Стоимость товара'");
-      if(!html.includes("Ссылка на Reels")) throw new Error("должна быть колонка 'Ссылка на Reels'");
+      if(!html.includes("Ссылка / сторис")) throw new Error("должна быть колонка 'Ссылка / сторис'");
       if(!html.includes('data-field="blogerName"')) throw new Error("имя блогера должно быть inline-editable");
       if(!html.includes('data-field="cost"')) throw new Error("сумма должна быть inline-editable");
       if(!html.includes('data-field="productCost"')) throw new Error("стоимость товара должна быть inline-editable");
