@@ -1678,11 +1678,17 @@ function microLinkStoriesCell(d){
 // «сделала ещё видео»). Бесплатные доп. видео остаются ОТДЕЛЬНЫМИ строками с суммой 0 ₸ (как и заносят) —
 // а под CPV оплаченной строки мелко и автоматически пишется: сколько у этого блогера доп. видео за 0 ₸
 // в том же месяце, их охват и CPV вместе с ними. Основной CPV и сводки не меняются.
+// Одно доп. видео приписывается только ОДНОЙ оплаченной строке: если у блогера в месяце несколько
+// оплаченных интеграций — той, что ближе всего по дате (при равенстве — более ранней).
 function microFreeExtrasFor(d){
   if(!d || microDealTotalCost(d) <= 0) return [];
+  const all = DataManager.state.microInfluencerDeals||[];
   const key = microBloggerKey(d.blogerName), month = microDealDate(d).slice(0,7);
-  return (DataManager.state.microInfluencerDeals||[]).filter(x=> x.id!==d.id && microDealTotalCost(x) <= 0
-    && microBloggerKey(x.blogerName)===key && (!month || microDealDate(x).slice(0,7)===month));
+  const sameBlogger = all.filter(x=> microBloggerKey(x.blogerName)===key && (!month || microDealDate(x).slice(0,7)===month));
+  const paid = sameBlogger.filter(x=> microDealTotalCost(x) > 0);
+  const dayNum = x => { const t = Date.parse((microDealDate(x)||"") + "T00:00:00Z"); return isFinite(t) ? t/864e5 : 0; };
+  const ownerOf = x => paid.slice().sort((p,q)=> (Math.abs(dayNum(p)-dayNum(x)) - Math.abs(dayNum(q)-dayNum(x))) || (dayNum(p)-dayNum(q)) || (p.id-q.id))[0];
+  return sameBlogger.filter(x=> x.id!==d.id && microDealTotalCost(x) <= 0 && ownerOf(x) === d);
 }
 function microDealCpvWithExtras(d){
   const ex = microFreeExtrasFor(d);
@@ -7881,6 +7887,10 @@ async function runSelfTests(){
       const cell = microCpvCell(d, microDealCpv(d));
       if(!cell.includes("+ 1 доп. за 0 ₸") || !cell.includes("вместе 2.000 ₸") || !cell.includes("📝 сделает сторис") || !cell.includes("Мадина, 16.10")) throw new Error("ячейка CPV: "+cell);
       if(microFreeExtrasFor(DataManager.state.microInfluencerDeals[1]).length) throw new Error("у строки за 0 ₸ своих «доп.» нет");
+      // Две оплаченные строки одного блогера в месяце: доп. видео — только ближайшей по дате.
+      DataManager.state.microInfluencerDeals.push({id:99953, blogerName:"karakoz", publishDate:"2026-10-20", cost:50000, factReachReels:1000});
+      const near = microFreeExtrasFor(DataManager.state.microInfluencerDeals[0]).length, far = microFreeExtrasFor(DataManager.state.microInfluencerDeals[3]).length;
+      if(near!==1 || far!==0) throw new Error("одно доп. видео не должно попадать в две строки: "+near+" / "+far);
     } finally { DataManager.state.microInfluencerDeals = savedMicro; }
   });
   TestSuite.test("Уникальные блогеры: «dehnara» и «Dehnara бартер» (и @, ссылка, «(за товар)») — один блогер", ()=>{
