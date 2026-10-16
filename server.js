@@ -555,7 +555,7 @@ function buildPlacementRows(){
       cost_kzt: safeInt(d.cost) || 0, product_cost_kzt: safeInt(d.productCost) || 0,
       planned_date: safeDate(d.plannedDate),
       published_at: safeDate(d.publishDate), published_date: safeDate(d.publishDate),
-      video_url: safeText(d.reelsLink) || safeText(d.tiktokVideoLink), reach,
+      video_url: safeText(d.reelsLink) || safeText(d.tiktokVideoLink) || safeText(d.storiesLink), reach,
       status: microDealStatus(d),
       notes: [safeText(d.notes), d.paymentStatus ? ("оплата: "+d.paymentStatus) : null, extraNote].filter(Boolean).join(" / ") || null,
       created_at: now, updated_at: now,
@@ -657,7 +657,7 @@ function requireReadonlyKey(req, res, next){
 }
 function pickFields(o, keys){ const r = {}; keys.forEach(k=>{ if(o[k] !== undefined) r[k] = o[k]; }); return r; }
 const RO_LARGE_FIELDS = ["id","blogerLogin","platform","product","barcode","responsible","bloggerCategory","status","plannedDate","publishedDate","plannedReach","reach","plannedClicks","clicks","plannedCost","cost","plannedContribution","autoContributionKzt","autoContributionStatus","likes","comments","saves"];
-const RO_MICRO_FIELDS = ["id","responsible","blogerName","instagramAccount","tiktokAccount","followers","product","productCategory","barcode","bloggerCategory","plannedDate","publishDate","videoStatus","paymentStatus","cost","productCost","reelsLink","tiktokVideoLink","factReachReels","factReachTT","contentFormat","factReachStories","storiesClicks","autoContributionKzt","autoContributionStatus","problemReason","problemReason2","problemStatus","problemNote"];
+const RO_MICRO_FIELDS = ["id","responsible","blogerName","instagramAccount","tiktokAccount","followers","product","productCategory","barcode","bloggerCategory","plannedDate","publishDate","videoStatus","paymentStatus","cost","productCost","reelsLink","tiktokVideoLink","factReachReels","factReachTT","contentFormat","factReachStories","storiesClicks","storiesLink","autoContributionKzt","autoContributionStatus","problemReason","problemReason2","problemStatus","problemNote"];
 app.get("/api/readonly/deals", requireReadonlyKey, (req,res)=>{
   const orderById = new Map(state.orders.map(o=>[o.id, o]));
   const campById = new Map(state.campaigns.map(c=>[c.id, c]));
@@ -1211,6 +1211,7 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
     reelsLink: normalizeLinkUrl(b.reelsLink || ""), factReachReels: b.factReachReels || 0,
     tiktokVideoLink: b.tiktokVideoLink || "", factReachTT: b.factReachTT || 0,
     contentFormat: b.contentFormat || "", factReachStories: b.factReachStories || 0, storiesClicks: b.storiesClicks || 0,
+    storiesLink: normalizeLinkUrl(b.storiesLink || ""),
     plannedDate: b.plannedDate || "", publishDate: b.publishDate || "", notes: b.notes || "",
   };
   state.microInfluencerDeals.push(deal);
@@ -1224,6 +1225,7 @@ app.patch("/api/micro-influencer-deals/:id", requireAuth, (req,res)=>{
   if("instagramAccount" in body) body.instagramAccount = normalizeInstagramUrl(body.instagramAccount);
   if("reelsLink" in body) body.reelsLink = normalizeLinkUrl(body.reelsLink);
   if("tiktokVideoLink" in body) body.tiktokVideoLink = normalizeLinkUrl(body.tiktokVideoLink);
+  if("storiesLink" in body) body.storiesLink = normalizeLinkUrl(body.storiesLink);
   delete body.socialViewsAuto; delete body.reachAutoSet; // просмотры по ссылке (Apify) ведёт только сервер
   Object.assign(d, body);
   persist();
@@ -1296,6 +1298,7 @@ app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
     if(has("формат")) fields.contentFormat = ["Сторис","Сторис + Reels + TikTok"].includes(String(r["формат"]||"").trim()) ? String(r["формат"]).trim() : "";
     if(has("охват сторис")) fields.factReachStories = parseInt(r["охват сторис"] || 0, 10) || 0;
     if(has("клики сторис")) fields.storiesClicks = parseInt(r["клики сторис"] || 0, 10) || 0;
+    if(has("ссылка на сторис")) fields.storiesLink = normalizeLinkUrl(r["ссылка на сторис"] || "");
     if(has("проблема")){
       const code = String(r["проблема"]||"").trim().toUpperCase().slice(0,3);
       fields.problemReason = /^P(0[1-9]|10)$/.test(code) ? code : "";
