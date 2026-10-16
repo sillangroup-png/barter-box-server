@@ -282,6 +282,54 @@ function seedState(){
 
 let state = loadState();
 
+// ---------- Проблемные блогеры (микро): разовая разметка по заметкам менеджеров (16.10.2026) ----------
+// Причины P01–P10 (справочник — MICRO_PROBLEM_REASONS во фронтенде), статус, короткий комментарий.
+// Ставится один раз (флаг в state.seeds) и только если у интеграции ещё нет своей отметки;
+// дальше менеджеры правят сами в колонке «Проблема». Сверяем id И логин — если id занят другим
+// блогером, строку пропускаем.
+function applyMicroProblemSeed(){
+  const FLAG = "microProblems20261016";
+  state.seeds = state.seeds && typeof state.seeds === "object" ? state.seeds : {};
+  if(state.seeds[FLAG]) return;
+  const S = (id, who, r1, r2, note, status) => ({id, who, r1, r2, note, status: status || "Открыта"});
+  const SEED = [
+    S(189, "_asylaiym", "P01", "", "Не отвечает, пропала"),
+    S(191, "adilkhanovva_asemma", "P06", "P01", "Не отправляет видео и не возвращает оплату"),
+    S(442, "sailaybaevva", "P02", "P07", "Задерживает видео с 10.09, на звонки отвечает через раз; беременность, токсикоз; материал не отдаёт на монтаж"),
+    S(467, "adema.tursinbekkyzy", "P03", "", "Отказывалась вносить правки и снимать по ТЗ"),
+    S(499, "lasshyyyn", "P01", "", "После оплаты игнорировала"),
+    S(528, "xxaamiixx", "P04", "", "Долго вносила правки"),
+    S(585, "lesaeo", "P05", "P01", "Долго не отвечала, выложила видео без согласования"),
+    S(619, "nurays.be", "P03", "", "Не хочет вносить правки"),
+    S(644, "aknur.ihsan", "P01", "", "Читает и не отвечает"),
+    S(671, "zhumagaali.a", "P02", "", "Затянула сроки"),
+    S(703, "adiletkyzy.ayaulym", "P01", "P02", "Неделю не отвечает, переносит дату видео"),
+    S(720, "mmahito_", "P07", "", "Беременна, в оздоровительном центре, не знает, когда сможет снять"),
+    S(725, "aaliyah.tursun", "P07", "", "Лечит кожу, пока не может снять"),
+    S(735, "ergallikyzym", "P04", "", "Долго отправляет на согласование"),
+    S(759, "kamedenova", "P05", "", "Выложила без согласования"),
+    S(778, "aidana.nrk", "P09", "", "Видео, видимо, ушло в бан"),
+    S(894, "asemaa___s", "P02", "", "Затянула сроки"),
+    S(915, "alina_serikovvnaa", "P03", "", "Не захотела вносить правки"),
+    S(972, "allumia.star", "P06", "", "Потратила деньги, отправленные на товар"),
+    S(992, "zhanayovna", "P08", "", "Негативные комментарии под постами в Threads, черный список", "Отказ от блогера"),
+    S(1001, "aiym.ballet", "P08", "", "Скандальная из Threads, черный список", "Отказ от блогера"),
+    S(1002, "yeshetayeva", "P08", "", "Скандальная из Threads, черный список", "Отказ от блогера"),
+    S(1003, "yessalievnaaa", "P08", "", "Скандальная из Threads, черный список", "Отказ от блогера"),
+  ];
+  let applied = 0;
+  SEED.forEach(x=>{
+    const d = (state.microInfluencerDeals || []).find(z=>z.id===x.id);
+    if(!d || d.problemReason) return;
+    if(!String(d.blogerName||"").toLowerCase().includes(x.who)) return;
+    Object.assign(d, {problemReason: x.r1, problemReason2: x.r2, problemStatus: x.status, problemNote: x.note, problemAt: "2026-10-16"});
+    applied++;
+  });
+  state.seeds[FLAG] = new Date().toISOString();
+  console.log(`[problems] разметка проблемных блогеров по заметкам: ${applied} из ${SEED.length}`);
+  persist();
+}
+
 function loadState(){
   try{
     if(fs.existsSync(STATE_PATH)){
@@ -470,8 +518,12 @@ async function upsertOneRow(client, r){
   }
 }
 
+// Сторис (16.10.2026): формат «Сторис» / «Сторис + Reels + TikTok», охват и клики сторис вводятся
+// вручную (ссылки у сторис нет, Apify их не считает). Сторис с охватом = вышла, даже без ссылки.
+function microHasStories(d){ return /сторис/i.test(String(d.contentFormat||"")) || (safeInt(d.factReachStories)||0) > 0; }
 function microDealStatus(d){
   if(d.videoStatus === "опубликовано") return "published";
+  if(microHasStories(d) && (safeInt(d.factReachStories)||0) > 0) return "published";
   if(d.paymentStatus === "оплачено") return "paid";
   if(d.productStatus === "товар доставлен" || d.productStatus === "товар заказан") return "product_sent";
   return "planned";
@@ -486,9 +538,12 @@ function buildPlacementRows(){
   const now = new Date().toISOString();
   (state.microInfluencerDeals || []).forEach(d=>{
     const hasIg = !!d.instagramAccount, hasTt = !!d.tiktokAccount;
-    const platform = hasIg && hasTt ? "Instagram Reels + TikTok" : hasIg ? "Instagram Reels" : hasTt ? "TikTok" : "unknown";
+    const storiesOnly = String(d.contentFormat||"").trim() === "Сторис";
+    let platform = hasIg && hasTt ? "Instagram Reels + TikTok" : hasIg ? "Instagram Reels" : hasTt ? "TikTok" : "unknown";
+    if(storiesOnly) platform = "Instagram Stories";
+    else if(microHasStories(d)) platform = (platform === "unknown" ? "Instagram" : platform) + " + Stories";
     const followers = (safeInt(d.followers)||0) + (safeInt(d.followersTT)||0) || null;
-    const reach = (safeInt(d.factReachReels)||0) + (safeInt(d.factReachTT)||0) || null;
+    const reach = (safeInt(d.factReachReels)||0) + (safeInt(d.factReachTT)||0) + (safeInt(d.factReachStories)||0) || null;
     const extraNote = (hasIg && hasTt && d.tiktokVideoLink) ? ("TikTok: "+d.tiktokVideoLink) : null;
     rows.push({
       source: "barter_box_micro", source_deal_id: String(d.id),
@@ -602,7 +657,7 @@ function requireReadonlyKey(req, res, next){
 }
 function pickFields(o, keys){ const r = {}; keys.forEach(k=>{ if(o[k] !== undefined) r[k] = o[k]; }); return r; }
 const RO_LARGE_FIELDS = ["id","blogerLogin","platform","product","barcode","responsible","bloggerCategory","status","plannedDate","publishedDate","plannedReach","reach","plannedClicks","clicks","plannedCost","cost","plannedContribution","autoContributionKzt","autoContributionStatus","likes","comments","saves"];
-const RO_MICRO_FIELDS = ["id","responsible","blogerName","instagramAccount","tiktokAccount","followers","product","productCategory","barcode","bloggerCategory","plannedDate","publishDate","videoStatus","paymentStatus","cost","productCost","reelsLink","tiktokVideoLink","factReachReels","factReachTT","autoContributionKzt","autoContributionStatus"];
+const RO_MICRO_FIELDS = ["id","responsible","blogerName","instagramAccount","tiktokAccount","followers","product","productCategory","barcode","bloggerCategory","plannedDate","publishDate","videoStatus","paymentStatus","cost","productCost","reelsLink","tiktokVideoLink","factReachReels","factReachTT","contentFormat","factReachStories","storiesClicks","autoContributionKzt","autoContributionStatus","problemReason","problemReason2","problemStatus","problemNote"];
 app.get("/api/readonly/deals", requireReadonlyKey, (req,res)=>{
   const orderById = new Map(state.orders.map(o=>[o.id, o]));
   const campById = new Map(state.campaigns.map(c=>[c.id, c]));
@@ -1155,6 +1210,7 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
     productStatus: b.productStatus || "", videoStatus: b.videoStatus || "",
     reelsLink: normalizeLinkUrl(b.reelsLink || ""), factReachReels: b.factReachReels || 0,
     tiktokVideoLink: b.tiktokVideoLink || "", factReachTT: b.factReachTT || 0,
+    contentFormat: b.contentFormat || "", factReachStories: b.factReachStories || 0, storiesClicks: b.storiesClicks || 0,
     plannedDate: b.plannedDate || "", publishDate: b.publishDate || "", notes: b.notes || "",
   };
   state.microInfluencerDeals.push(deal);
@@ -1235,6 +1291,21 @@ app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
       publishDate: r["дата выкладки"] || r["publish_date"] || "",
       notes: r["комментарий"] || r["notes"] || "",
     };
+    // Проблемный блогер и сторис — только если колонки есть в файле (старые CSV их не стирают).
+    const has = k => Object.prototype.hasOwnProperty.call(r, k);
+    if(has("формат")) fields.contentFormat = ["Сторис","Сторис + Reels + TikTok"].includes(String(r["формат"]||"").trim()) ? String(r["формат"]).trim() : "";
+    if(has("охват сторис")) fields.factReachStories = parseInt(r["охват сторис"] || 0, 10) || 0;
+    if(has("клики сторис")) fields.storiesClicks = parseInt(r["клики сторис"] || 0, 10) || 0;
+    if(has("проблема")){
+      const code = String(r["проблема"]||"").trim().toUpperCase().slice(0,3);
+      fields.problemReason = /^P(0[1-9]|10)$/.test(code) ? code : "";
+      const code2 = String(r["причина 2"]||"").trim().toUpperCase().slice(0,3);
+      fields.problemReason2 = fields.problemReason && /^P(0[1-9]|10)$/.test(code2) && code2!==fields.problemReason ? code2 : "";
+      const st = String(r["статус проблемы"]||"").trim();
+      fields.problemStatus = fields.problemReason ? (["Открыта","В работе","Решена","Отказ от блогера"].includes(st) ? st : "Открыта") : "";
+      fields.problemNote = fields.problemReason ? String(r["комментарий проблемы"]||"").trim() : "";
+      if(fields.problemReason && !(existing && existing.problemAt)) fields.problemAt = new Date().toISOString().slice(0,10);
+    }
     if(existing){
       Object.assign(existing, fields);
       updated++;
@@ -1552,6 +1623,7 @@ placementsTick("старт");
 setInterval(()=> placementsTick("интервал"), 3*60*1000);
 
 const PORT = process.env.PORT || 3001;
+applyMicroProblemSeed(); // разовая разметка проблемных блогеров (см. выше), до старта сервера
 app.listen(PORT, ()=>{
   console.log(`Barter Box сервер запущен: http://localhost:${PORT}`);
   console.log(`Заказов в базе: ${state.orders.length}`);
