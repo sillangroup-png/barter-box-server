@@ -2912,7 +2912,7 @@ const UI = {
   reportPeriod: {from:"", to:""}, // период (по дате публикации) для сводки "Сколько выложили" в верхней части "Сводного отчёта" — см. reportPeriodSummary()
   reportOnlyWaiting: false, // фильтр "Сводного отчёта": показывать только доставленные, но ещё не выложенные (чтобы обзванивать блогеров)
   inflFilter: {search:"", sort:"default", month:"", dateFrom:"", dateTo:"", responsible:"", category:"", status:""},
-  microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:"", dateFrom:"", dateTo:"", problem:"", video:""},
+  microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:"", dateFrom:"", dateTo:"", problem:"", video:"", format:"", category:""},
   microPage: 1,          // страница таблицы микро (по 50 строк) — чтобы не рисовать 1000+ строк разом
   microPageSig: "",      // при смене фильтров/сортировки страница сбрасывается на первую
   microProblemReasonsOpen: false, // таблица «Проблемные блогеры по причинам» свёрнута по умолчанию
@@ -4696,6 +4696,9 @@ function tplMicroInfluencers(){
   if(mf.responsible){
     deals = deals.filter(d=> d.responsible===mf.responsible);
   }
+  // Формат (Reels + TikTok / Сторис / Reels + Сторис / Сторис + Reels + TikTok) и категория блогера.
+  if(mf.format) deals = deals.filter(d=> microFormatOf(d)===mf.format);
+  if(mf.category) deals = deals.filter(d=> (d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "Не указана")===mf.category);
   // Статус видео: «опубликовано» = вышла (в т.ч. сторис с охватом без ссылки), см. microDealPublished.
   if(mf.video==="published") deals = deals.filter(microDealPublished);
   else if(mf.video==="notpublished") deals = deals.filter(d=>!microDealPublished(d));
@@ -4835,6 +4838,14 @@ function tplMicroInfluencers(){
         <select id="micro-responsible-filter">
           <option value="">Все ответственные</option>
           ${availableResponsibles.map(r=>`<option value="${escapeHtml(r)}" ${mf.responsible===r?'selected':''}>${escapeHtml(r)}</option>`).join("")}
+        </select>
+        <select id="micro-format-filter" title="Формат">
+          <option value="">Все форматы</option>
+          ${MICRO_FORMATS.map(f=>`<option value="${escapeHtml(f)}" ${mf.format===f?'selected':''}>${escapeHtml(f)}</option>`).join("")}
+        </select>
+        <select id="micro-category-filter" title="Категория блогера">
+          <option value="">Все категории</option>
+          ${[...MICRO_BLOGGER_CATEGORIES, "Не указана"].map(c=>`<option value="${escapeHtml(c)}" ${mf.category===c?'selected':''}>${escapeHtml(c)}</option>`).join("")}
         </select>
         <select id="micro-video-filter" title="Статус видео">
           <option value="">Все статусы видео</option>
@@ -6658,6 +6669,10 @@ function wireDeskTab(){
     document.getElementById("micro-sort").onchange = e=>{ UI.microFilter.sort = e.target.value; renderDeskTab(); };
     const problemFilterEl = document.getElementById("micro-problem-filter");
     if(problemFilterEl) problemFilterEl.onchange = e=>{ UI.microFilter.problem = e.target.value; renderDeskTab(); };
+    const formatFilterEl = document.getElementById("micro-format-filter");
+    if(formatFilterEl) formatFilterEl.onchange = e=>{ UI.microFilter.format = e.target.value; renderDeskTab(); };
+    const categoryFilterEl = document.getElementById("micro-category-filter");
+    if(categoryFilterEl) categoryFilterEl.onchange = e=>{ UI.microFilter.category = e.target.value; renderDeskTab(); };
     const videoFilterEl = document.getElementById("micro-video-filter");
     if(videoFilterEl) videoFilterEl.onchange = e=>{ UI.microFilter.video = e.target.value; renderDeskTab(); };
     document.querySelectorAll(".micro-page-btn").forEach(b=>{ b.onclick = ()=>{ UI.microPage = +b.dataset.page; renderDeskTab(); const t = document.getElementById("micro-table-top"); if(t && t.scrollIntoView) t.scrollIntoView({block:"start"}); }; });
@@ -7783,6 +7798,11 @@ async function runSelfTests(){
       if(UI.microPage!==1) throw new Error("при смене фильтра — на первую страницу");
       if(rowsOf(html)!==31) throw new Error("опубликовано: 30 + сторис с охватом = 31, а не "+rowsOf(html));
       if(!html.includes("🔗 сторис") || !html.includes("https://drive.google.com/x")) throw new Error("ссылка на сторис видна");
+      UI.microFilter.video = ""; UI.microFilter.format = "Сторис"; html = tplMicroInfluencers();
+      if(rowsOf(html)!==1) throw new Error("фильтр по формату «Сторис» — 1 строка, а не "+rowsOf(html));
+      UI.microFilter.format = ""; DataManager.state.microInfluencerDeals[5].bloggerCategory = "Бартер"; UI.microFilter.category = "За товар"; html = tplMicroInfluencers();
+      if(rowsOf(html)!==1) throw new Error("фильтр по категории (старое «Бартер» = «За товар») — 1 строка, а не "+rowsOf(html));
+      UI.microFilter.category = "";
       UI.microResponsibleMonth = "2026-10"; UI.microProblemReasonsOpen = false;
       let rs = tplMicroResponsibleSummary();
       if(!rs.includes("micro-problem-reasons-toggle") || rs.includes("<th>Причина</th>")) throw new Error("таблица причин свёрнута по умолчанию");
