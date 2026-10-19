@@ -1630,6 +1630,30 @@ app.post("/api/attribution/recalc", requireAuth, async (req,res)=>{
 app.post("/api/social-views/sync", requireAuth, (req,res)=>{
   res.status(403).json(Object.assign({error:"Охваты обновляются автоматически раз в 3 дня — вручную не нужно"}, state.socialViewsSync || {}));
 });
+// Принудительное обновление охватов (19.10.2026) — только для Нины, по секретной ссылке из браузера:
+//   https://<сайт>/api/social-views/force?key=<SOCIAL_VIEWS_ADMIN_KEY>
+// Ключ задаётся только в Render (env), кнопки в интерфейсе нет. Обновляет все ролики ТЕКУЩЕГО месяца
+// (кроме проверенных за последний час), не чаще раза в час. Автообновление раз в 3 дня работает как раньше.
+let lastForcedViewsAt = 0;
+app.get("/api/social-views/force", (req,res)=>{
+  const say = (code, text) => res.status(code).type("text/plain; charset=utf-8").send(text);
+  const key = String(process.env.SOCIAL_VIEWS_ADMIN_KEY || "");
+  if(key.length < 12) return say(503, "Ключ SOCIAL_VIEWS_ADMIN_KEY не задан в Render — принудительное обновление выключено.");
+  const given = Buffer.from(String(req.query.key || "")), want = Buffer.from(key);
+  if(given.length !== want.length || !require("crypto").timingSafeEqual(given, want)) return say(401, "Неверный ключ.");
+  const last = state.socialViewsSync || {};
+  const lastInfo = last.lastRunAt ? `Последнее обновление: ${new Date(last.lastRunAt).toLocaleString("ru-RU", {timeZone:"Asia/Almaty"})} — проверено ${last.checked||0}, обновлено ${last.updated||0}${last.error?`, ошибка: ${last.error}`:""}.` : "";
+  if(socialRunning) return say(200, "Обновление уже идёт. Подождите 5–10 минут и обновите страницу Barter Box.\n" + lastInfo);
+  const HOUR = 60*60*1000;
+  if(Date.now() - lastForcedViewsAt < HOUR){
+    const next = new Date(lastForcedViewsAt + HOUR).toLocaleTimeString("ru-RU", {timeZone:"Asia/Almaty", hour:"2-digit", minute:"2-digit"});
+    return say(429, `Принудительно обновляли меньше часа назад. Следующий раз можно после ${next}.\n` + lastInfo);
+  }
+  lastForcedViewsAt = Date.now();
+  const month = new Date(Date.now() + 5*3600*1000).toISOString().slice(0,7);
+  maybeSyncSocialViews(true, {month});
+  say(200, `Запущено обновление охватов всех роликов за ${month} (Instagram и TikTok по ссылкам).\nЧерез 5–10 минут обновите страницу Barter Box.\n` + lastInfo);
+});
 app.post("/api/drive-folders/sync", requireAuth, async (req,res)=>{
   try{ await maybeSyncDriveFolders(true); res.json(state.driveSync || {}); }
   catch(e){ res.status(500).json({error:e.message}); }
