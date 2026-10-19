@@ -659,6 +659,26 @@ function requireReadonlyKey(req, res, next){
 function pickFields(o, keys){ const r = {}; keys.forEach(k=>{ if(o[k] !== undefined) r[k] = o[k]; }); return r; }
 const RO_LARGE_FIELDS = ["id","blogerLogin","platform","product","barcode","responsible","bloggerCategory","status","plannedDate","publishedDate","plannedReach","reach","plannedClicks","clicks","plannedCost","cost","plannedContribution","autoContributionKzt","autoContributionStatus","likes","comments","saves"];
 const RO_MICRO_FIELDS = ["id","responsible","blogerName","instagramAccount","tiktokAccount","followers","product","productCategory","barcode","bloggerCategory","plannedDate","publishDate","videoStatus","paymentStatus","cost","productCost","reelsLink","tiktokVideoLink","factReachReels","factReachTT","contentFormat","factReachStories","storiesClicks","storiesLink","autoContributionKzt","autoContributionStatus","problemReason","problemReason2","problemStatus","problemNote"];
+const RO_DROP_KEYS = new Set(["iin"]);
+const RO_KEEP_DIGITS_KEYS = new Set(["phone","barcode","kaspiCode","kaspi_code","sku","code","autoContributionNote"]);
+function readonlyScrub(v, key){
+  if(Array.isArray(v)) return v.map(x=>readonlyScrub(x, key));
+  if(v && typeof v === "object"){
+    const o = {};
+    for(const k of Object.keys(v)){ if(!RO_DROP_KEYS.has(k)) o[k] = readonlyScrub(v[k], k); }
+    return o;
+  }
+  if(typeof v === "string" && !RO_KEEP_DIGITS_KEYS.has(key)) return v.replace(/\d(?:[\s-]?\d){11,}/g, "[скрыто]");
+  return v;
+}
+function readonlyFullState(){
+  const out = {};
+  for(const k of Object.keys(state)){
+    if(k === "seeds") continue;
+    out[k] = readonlyScrub(state[k], k);
+  }
+  return out;
+}
 app.get("/api/readonly/deals", requireReadonlyKey, (req,res)=>{
   const orderById = new Map(state.orders.map(o=>[o.id, o]));
   const campById = new Map(state.campaigns.map(c=>[c.id, c]));
@@ -667,11 +687,60 @@ app.get("/api/readonly/deals", requireReadonlyKey, (req,res)=>{
     const c = campById.get(o.campaignId) || {};
     return Object.assign(pickFields(p, ["id","platform","link","publishedAt","tier","promoCode","paidAmount","measurements"]), {blogger: o.blogger || "", campaign: c.name || ""});
   });
+  // Бартер и доставки (19.10.2026) — то же, что видит «Менеджер / логист» на дашборде, но без
+  // персональных данных: нет телефонов, адресов, фото, комментариев водителя, имён/телефонов водителей.
+  const ORDER_STATUS_LABEL = {created:"Создана", assigned:"Назначена водителю", accepted:"Принята водителем", in_route:"В маршруте",
+    delivered:"Доставлено", no_answer:"Не дозвонился", addr_bad:"Адрес неактуален", absent:"Получатель отсутствует",
+    reschedule:"Перенос доставки", returned:"Возврат в офис", cancelled:"Отменена"};
+  const PROBLEM = new Set(["no_answer","addr_bad","absent","reschedule","returned"]);
+  const pubOrderIds = new Set(state.publications.map(p=>p.orderId));
+  const orders = state.orders.map(o=>({
+    id: o.id, campaignId: o.campaignId || null, campaign: (campById.get(o.campaignId)||{}).name || "",
+    blogger: o.blogger || "", city: o.city || "", box: o.box || "", followers: o.followers || 0,
+    status: o.status, statusLabel: ORDER_STATUS_LABEL[o.status] || o.status, needsAttention: PROBLEM.has(o.status),
+    closureType: o.closureType || null, logisticsCost: o.logisticsCost || 0,
+    assignedAt: o.assignedAt || null, deliveredAt: o.deliveredAt || null,
+    driverCode: o.driverCode || null, hasPhoto: !!o.photo, published: pubOrderIds.has(o.id),
+  }));
+  const campaigns = state.campaigns.map(c=>{
+    const own = state.orders.filter(o=>o.campaignId===c.id);
+    const boxesCost = (c.costPerBox||0) * own.length;
+    const logisticsCost = own.reduce((a,o)=>a+(o.logisticsCost||0), 0);
+    return {
+      id: c.id, name: c.name, city: c.city, period: c.period, responsible: c.responsible, boxType: c.boxType,
+      plannedCount: c.plannedCount || 0, stage: c.stage, budget: c.budget || 0, costPerBox: c.costPerBox || 0,
+      ordersCount: own.length, deliveredCount: own.filter(o=>o.status==="delivered").length,
+      boxesCost, logisticsCost, totalExpense: boxesCost + logisticsCost,
+    };
+  });
+  const returns = (state.returns||[]).map(r=>({id:r.id, campaignId:r.campaignId||null, campaign:(campById.get(r.campaignId)||{}).name||"", item:r.item||"", qty:r.qty||0, status:r.status||""}));
+  const drivers = (state.drivers||[]).map(d=>({code:d.code, city:d.city||"", type:d.type||"", active:d.active!==false,
+    orders: state.orders.filter(o=>o.driverCode===d.code).length,
+    delivered: state.orders.filter(o=>o.driverCode===d.code && o.status==="delivered").length,
+    needsAttention: state.orders.filter(o=>o.driverCode===d.code && PROBLEM.has(o.status)).length}));
+  const sum = (arr, k) => arr.reduce((a,x)=>a+(x[k]||0), 0);
   res.json({
     generatedAt: new Date().toISOString(),
     largeDeals: state.influencerDeals.map(d=>pickFields(d, RO_LARGE_FIELDS)),
     microDeals: state.microInfluencerDeals.map(d=>pickFields(d, RO_MICRO_FIELDS)),
     publications,
+    barter: {
+      summary: {
+        totalDeliveries: orders.length,
+        delivered: orders.filter(o=>o.status==="delivered").length,
+        needsAttention: orders.filter(o=>o.needsAttention).length,
+        unassigned: orders.filter(o=>!o.driverCode).length,
+        deliveredWithoutPhoto: orders.filter(o=>o.status==="delivered" && !o.hasPhoto).length,
+        totalExpense: sum(campaigns, "totalExpense"), logisticsCost: sum(campaigns, "logisticsCost"), boxesCost: sum(campaigns, "boxesCost"),
+      },
+      campaigns, orders, returns, drivers,
+    },
+    // ВСЕ данные сайта по вкладкам (19.10.2026, по просьбе: «всё, чтобы было») — полная копия базы
+    // как есть: доставки с телефонами и адресами, водители, проекты, остатки, публикации с замерами,
+    // крупные/микро интеграции, продажи по дням, планы, события товаров. Убрано только: ИИН (поле iin)
+    // и в любом тексте — номера из 12+ цифр подряд (ИИН, номера карт в комментариях) → «[скрыто]».
+    // Фото доставки — путь /uploads/… на этом же сервере.
+    all: readonlyFullState(),
   });
 });
 
