@@ -700,7 +700,7 @@ app.get("/api/readonly/deals", requireReadonlyKey, (req,res)=>{
     status: o.status, statusLabel: ORDER_STATUS_LABEL[o.status] || o.status, needsAttention: PROBLEM.has(o.status),
     closureType: o.closureType || null, logisticsCost: o.logisticsCost || 0,
     assignedAt: o.assignedAt || null, deliveredAt: o.deliveredAt || null,
-    driverCode: o.driverCode || null, hasPhoto: !!o.photo, published: pubOrderIds.has(o.id),
+    driverCode: o.driverCode || null, hasPhoto: !!o.photo, closedWithoutPhoto: !!o.closedWithoutPhoto, published: pubOrderIds.has(o.id),
   }));
   const campaigns = state.campaigns.map(c=>{
     const own = state.orders.filter(o=>o.campaignId===c.id);
@@ -730,7 +730,7 @@ app.get("/api/readonly/deals", requireReadonlyKey, (req,res)=>{
         delivered: orders.filter(o=>o.status==="delivered").length,
         needsAttention: orders.filter(o=>o.needsAttention).length,
         unassigned: orders.filter(o=>!o.driverCode).length,
-        deliveredWithoutPhoto: orders.filter(o=>o.status==="delivered" && !o.hasPhoto).length,
+        deliveredWithoutPhoto: state.orders.filter(o=>o.status==="delivered" && !o.photo && !o.closedWithoutPhoto).length,
         totalExpense: sum(campaigns, "totalExpense"), logisticsCost: sum(campaigns, "logisticsCost"), boxesCost: sum(campaigns, "boxesCost"),
       },
       campaigns, orders, returns, drivers,
@@ -961,6 +961,26 @@ app.post("/api/orders/bulk-assign", requireAuth, (req,res)=>{
   });
   persist();
   res.json({ok:true, count});
+});
+// Массовое закрытие доставок без фото (20.10.2026): для проектов, где фото от водителя не нужно
+// (например, раздали в офисе). Уже доставленные не трогаем; помечаем closedWithoutPhoto, чтобы
+// такие доставки не попадали в «Доставлено без фото» как проблема.
+app.post("/api/orders/bulk-deliver", requireAuth, (req,res)=>{
+  const {ids, closureType} = req.body || {};
+  if(!Array.isArray(ids) || !ids.length) return res.status(400).json({error:"ids[] обязателен"});
+  const closure = ["sale","writeoff"].includes(closureType) ? closureType : "sale";
+  const now = new Date().toLocaleString("ru-RU");
+  const idSet = new Set(ids.map(Number));
+  let count = 0, skipped = 0;
+  state.orders.forEach(o=>{
+    if(!idSet.has(o.id)) return;
+    if(o.status === "delivered"){ skipped++; return; }
+    o.status = "delivered"; o.deliveredAt = now; o.closureType = closure;
+    o.closedWithoutPhoto = true; o.bitrixSynced = false;
+    count++;
+  });
+  persist();
+  res.json({ok:true, count, skipped});
 });
 app.post("/api/orders/bulk-delete", requireAuth, (req,res)=>{
   const {ids} = req.body || {};
