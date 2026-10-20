@@ -405,6 +405,7 @@ const Api = {
   problemOrder: (id, statusCode, comment)=> apiFetch("/api/orders/"+id+"/problem", {method:"POST", headers:jsonHeaders, body:JSON.stringify({statusCode, comment})}),
   syncBitrix: (id)=> apiFetch("/api/orders/"+id+"/sync-bitrix", {method:"POST"}),
   bulkAssign: (ids, driverCode)=> apiFetch("/api/orders/bulk-assign", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids, driverCode})}),
+  bulkDeliver: (ids, closureType)=> apiFetch("/api/orders/bulk-deliver", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids, closureType})}),
   bulkDelete: (ids)=> apiFetch("/api/orders/bulk-delete", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids})}),
   importOrders: (rows, campaignId)=> apiFetch("/api/orders/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows, campaignId})}),
   geocode: (address, city)=> apiFetch("/api/geocode", {method:"POST", headers:jsonHeaders, body:JSON.stringify({address, city})}),
@@ -3317,7 +3318,7 @@ function tplDashboard(){
   const total = orders.length;
   const delivered = orders.filter(o=>o.status==="delivered").length;
   const problem = orders.filter(o=>(STATUS_META[o.status]||{}).group==="problem").length;
-  const noPhoto = orders.filter(o=>o.status==="delivered" && !o.photo).length;
+  const noPhoto = orders.filter(o=>o.status==="delivered" && !o.photo && !o.closedWithoutPhoto).length;
   const unassigned = orders.filter(o=>!o.driverCode).length;
   const ms = marketingSummary();
 
@@ -3530,7 +3531,7 @@ function tplDeliveries(){
     if(f.city && o.city!==f.city) return false;
     if(f.status){
       if(f.status==="__problem__" && (STATUS_META[o.status]||{}).group!=="problem") return false;
-      else if(f.status==="__no_photo__" && !(o.status==="delivered" && !o.photo)) return false;
+      else if(f.status==="__no_photo__" && !(o.status==="delivered" && !o.photo && !o.closedWithoutPhoto)) return false;
       else if(f.status!=="__problem__" && f.status!=="__no_photo__" && o.status!==f.status) return false;
     }
     if(f.search){
@@ -3587,6 +3588,9 @@ function tplDeliveries(){
         <span>${UI.selectedOrderIds.size} выбрано</span>
         <select id="bulk-driver-select"><option value="">Назначить водителя…</option>${drivers.filter(d=>d.active).map(d=>`<option value="${d.code}">${escapeHtml(d.name)}</option>`).join("")}</select>
         <button class="btn btn-primary btn-sm" id="bulk-assign-btn">Назначить</button>
+        <span style="width:12px"></span>
+        <select id="bulk-closure-select" title="Как закрыть">${Object.entries(CLOSURE_TYPES).map(([k,l])=>`<option value="${k}" ${k==="sale"?'selected':''}>${l}</option>`).join("")}</select>
+        <button class="btn btn-primary btn-sm" id="bulk-deliver-btn" title="Отметить выбранные доставки как доставленные без фото (для проектов, где фото не нужно)">✓ Закрыть как доставлено (без фото)</button>
         <button class="btn btn-danger btn-sm" id="bulk-delete-btn">Удалить выбранные</button>
       </div>
 
@@ -3617,7 +3621,7 @@ function tplDeliveries(){
               </td>
               <td>${statusBadge(o.status)}</td>
               <td>${escapeHtml(o.deliveredAt || o.assignedAt || "—")}</td>
-              <td>${o.photo ? `<button class="btn btn-ghost btn-sm view-photo-btn" data-id="${o.id}">Фото</button>` : (o.status==="delivered" ? '<span style="color:var(--bad)">нет</span>' : "—")}</td>
+              <td>${o.photo ? `<button class="btn btn-ghost btn-sm view-photo-btn" data-id="${o.id}">Фото</button>` : (o.status==="delivered" ? (o.closedWithoutPhoto ? '<span style="color:var(--ink-mute);font-size:11px" title="Закрыто массово без фото">закрыто без фото</span>' : '<span style="color:var(--bad)">нет</span>') : "—")}</td>
               <td>
                 ${o.status==="delivered" ? `
                 <select class="order-closure-select" data-id="${o.id}">
@@ -6338,6 +6342,17 @@ function wireDeskTab(){
         await DataManager.refresh(); render();
       }catch(e){ toast(e.message, true); }
     };
+    const bulkDeliver = document.getElementById("bulk-deliver-btn");
+    if(bulkDeliver) bulkDeliver.onclick = async ()=>{
+      const closureType = document.getElementById("bulk-closure-select").value || "sale";
+      if(!confirm(`Закрыть ${UI.selectedOrderIds.size} доставок как «Доставлено» без фото (${CLOSURE_TYPES[closureType]})? Уже доставленные не изменятся.`)) return;
+      try{
+        const res = await withBusy(bulkDeliver, ()=> Api.bulkDeliver([...UI.selectedOrderIds], closureType));
+        toast(`Закрыто ${res.count} доставок${res.skipped?` (уже были доставлены: ${res.skipped})`:""}`);
+        UI.selectedOrderIds.clear();
+        await DataManager.refresh(); render();
+      }catch(e){ toast(e.message, true); }
+    };
     const bulkDelete = document.getElementById("bulk-delete-btn");
     if(bulkDelete) bulkDelete.onclick = async ()=>{
       if(!confirm(`Удалить ${UI.selectedOrderIds.size} доставок?`)) return;
@@ -7892,6 +7907,24 @@ async function runSelfTests(){
       const near = microFreeExtrasFor(DataManager.state.microInfluencerDeals[0]).length, far = microFreeExtrasFor(DataManager.state.microInfluencerDeals[3]).length;
       if(near!==1 || far!==0) throw new Error("одно доп. видео не должно попадать в две строки: "+near+" / "+far);
     } finally { DataManager.state.microInfluencerDeals = savedMicro; }
+  });
+  TestSuite.test("Отправка блогерам: массовое закрытие без фото — кнопка в панели выбранных, «закрыто без фото» не считается проблемой", ()=>{
+    const savedO = DataManager.state.orders, savedSel = new Set(UI.selectedOrderIds), savedF = JSON.stringify(UI.filters);
+    try{
+      DataManager.state.orders = [
+        {id:9701, blogger:"@a", city:"Алматы", address:"x", phone:"1", box:"Кокос", status:"delivered", photo:null, closedWithoutPhoto:true, closureType:"sale", deliveredAt:"20.10.2026"},
+        {id:9702, blogger:"@b", city:"Алматы", address:"y", phone:"2", box:"Кокос", status:"delivered", photo:null, deliveredAt:"20.10.2026"},
+        {id:9703, blogger:"@c", city:"Алматы", address:"z", phone:"3", box:"Кокос", status:"assigned", driverCode:"X"},
+      ];
+      UI.selectedOrderIds = new Set([9703]);
+      UI.filters = Object.assign({}, JSON.parse(savedF), {status:""});
+      const html = tplDeliveries();
+      if(!html.includes('id="bulk-deliver-btn"') || !html.includes("Закрыть как доставлено (без фото)")) throw new Error("кнопка массового закрытия в панели выбранных");
+      if(!html.includes("закрыто без фото")) throw new Error("у закрытых массово — серая пометка, а не красное «нет»");
+      UI.filters.status = "__no_photo__";
+      const h2 = tplDeliveries();
+      if(h2.includes("@a</td>") || !h2.includes("@b</td>")) throw new Error("фильтр «Доставлено без фото» не включает закрытые массово");
+    } finally { DataManager.state.orders = savedO; UI.selectedOrderIds = savedSel; UI.filters = JSON.parse(savedF); }
   });
   TestSuite.test("Уникальные блогеры: «dehnara» и «Dehnara бартер» (и @, ссылка, «(за товар)») — один блогер", ()=>{
     const k = microBloggerKey("dehnara");
