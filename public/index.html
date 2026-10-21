@@ -3487,14 +3487,7 @@ function tplMarketerDashboard(){
 
     ${tplMicroInfluencerDashboardBlock(f.from, f.to)}
 
-    ${ms.gap.length ? `
-    <div class="panel">
-      <div class="panel-title">⚠️ Доставлены, но ещё не опубликовали</div>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Блогер</th><th>Проект</th><th>Доставлено</th></tr></thead>
-        <tbody>${ms.gap.map(o=>`<tr><td>${escapeHtml(o.blogger)}</td><td>${escapeHtml(campaignName(o.campaignId))}</td><td>${escapeHtml(o.deliveredAt||"")}</td></tr>`).join("")}</tbody>
-      </table></div>
-    </div>` : ""}
+    ${""/* список «Доставлены, но ещё не опубликовали» убран с главной (21.10.2026) — число осталось в плашке выше */}
   `;
 }
 
