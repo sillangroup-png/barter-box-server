@@ -767,6 +767,65 @@ function telLink(phone){
 // который помнит id записи, поле и СЫРОЕ значение (rawValue — без форматирования, именно то,
 // что нужно подставить в input при начале редактирования). type — "text"/"number"/"date"/"select";
 // для "select" options — массив вариантов (как в <select> в модалках).
+// Справочник ШК/SKU по основным позициям (20.10.2026) — коды проверены по заказам Kaspi (по ним
+// идут продажи). Нужен, чтобы девочки выбирали ШК из списка, а не искали/вбивали руками.
+const MICRO_SKU_CATALOG = [
+  {group:"Декор", name:"Тональный флюид Velvet 01 Natural", code:"4620400203526"},
+  {group:"Декор", name:"Тональный флюид Velvet 02 Soft Sand", code:"4620400203533"},
+  {group:"Декор", name:"Палетка / скульптор 3в1, 01", code:"SKUA000582900"},
+  {group:"Декор", name:"Палетка / скульптор 3в1, 02", code:"SKUA000583000"},
+  {group:"Декор", name:"Стик-контур (скульптор) Perfectrix 01", code:"4620400204318"},
+  {group:"Декор", name:"Стик-контур (скульптор) Perfectrix 02", code:"4620400204370"},
+  {group:"Декор", name:"Стик-румяна Perfectrix 01", code:"4620400204387"},
+  {group:"Декор", name:"Стик-румяна Perfectrix 02", code:"4620400204394"},
+  {group:"Декор", name:"Тушь LashLust Volume Max", code:"SKUA000932200"},
+  {group:"Декор", name:"Минеральная пудра (Mineral Powder)", code:"4650358450284"},
+  {group:"Декор", name:"Спрей-фиксатор макияжа", code:"4650358457429"},
+  {group:"Декор", name:"Масло-бальзам для губ «Вишнёвая кола» (блеск черри)", code:"4620400204820"},
+  {group:"Декор", name:"Бальзам для губ Лабубу", code:"4620400203649"},
+  {group:"Декор", name:"SPF-стик 50", code:"4620400206466"},
+  {group:"Уход", name:"Набор Collagen + Biotin (шампунь + бальзам)", code:"2000000034256"},
+  {group:"Уход", name:"Набор Коллаген и аминокислоты (шампунь + кондиционер)", code:"2000000034263"},
+  {group:"Уход", name:"Маска ламинирующая Collagen & Keratin (маска-слайм)", code:"4680607211953"},
+  {group:"Уход", name:"Набор спикулы (сыворотка + крем-бустер)", code:"2000000041551"},
+  {group:"Уход", name:"Сыворотка со спикулами (Spicule Face Serum)", code:"SKUA000833900"},
+  {group:"Уход", name:"Крем-бустер со спикулами", code:"SKUA000834000"},
+  {group:"Уход", name:"Энзимная пудра Vitamin C", code:"SKUA000677600"},
+  {group:"Уход", name:"Крем Vitamin C Face Cream", code:"4650358455579"},
+  {group:"Уход", name:"Набор Vitamin C", code:"4650358457580"},
+  {group:"Уход", name:"Пенка-суфле White Rice (рисовая пенка)", code:"SKUA000677400"},
+  {group:"Уход", name:"Гидрофильное масло Mango", code:"SKU0014304000"},
+  {group:"Уход", name:"Мицеллярная вода Every Day", code:"4650358455999"},
+  {group:"Уход", name:"Набор Coconut Combo (баттер, скраб, мист)", code:"2000000041285"},
+  {group:"Атопик", name:"Масло-гель для душа для атопичной кожи 0+", code:"4620400203465"},
+  {group:"Атопик", name:"Крем для лица и тела для атопичной кожи 0+", code:"SKUA000935800"},
+  {group:"Атопик", name:"Гель для умывания для атопичной кожи", code:"4620400204301"},
+];
+function microSkuDatalist(){
+  return `<datalist id="micro-sku-datalist">${MICRO_SKU_CATALOG.map(x=>`<option value="${escapeHtml(x.code)}" label="${escapeHtml(x.name)}">${escapeHtml(x.name)}</option>`).join("")}</datalist>`;
+}
+function tplMicroSkuCatalog(){
+  const open = !!UI.microSkuCatalogOpen;
+  return `
+    <div class="panel" style="margin-bottom:12px">
+      <div class="panel-title">
+        📋 Справочник ШК / SKU
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">${MICRO_SKU_CATALOG.length} основных позиций — по этим кодам идут продажи в Kaspi</span>
+        <button class="btn btn-ghost btn-sm" id="micro-sku-catalog-toggle">${open?"Скрыть ▴":"Показать ▾"}</button>
+      </div>
+      ${open ? `
+      <div class="toolbar" style="margin-bottom:8px"><input type="search" class="fill" id="micro-sku-search" placeholder="Поиск: флюид, тушь, пудра, 02…"></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Группа</th><th>Товар</th><th>ШК / SKU</th><th></th></tr></thead>
+        <tbody>
+          ${MICRO_SKU_CATALOG.map(x=>`<tr class="micro-sku-row" data-q="${escapeHtml((x.group+" "+x.name+" "+x.code).toLowerCase())}">
+            <td style="color:var(--ink-mute)">${escapeHtml(x.group)}</td><td>${escapeHtml(x.name)}</td><td><b style="font-family:monospace">${escapeHtml(x.code)}</b></td>
+            <td><button class="btn btn-ghost btn-sm micro-sku-copy" data-code="${escapeHtml(x.code)}">Копировать</button></td></tr>`).join("")}
+        </tbody>
+      </table></div>
+      <div class="login-hint" style="margin-top:8px">В таблице ниже при клике на ШК появляется подсказка: начните вводить название или код и выберите из списка. В карточке интеграции (✎) — поле «Подобрать товар» добавляет код к уже вписанным.</div>` : ""}
+    </div>`;
+}
 function inlineEditSpan(displayHtml, id, field, rawValue, type, options){
   const optAttr = options ? ` data-options="${escapeHtml(JSON.stringify(options))}"` : "";
   return `<span class="inline-edit" data-id="${id}" data-field="${field}" data-type="${type||'text'}" data-value="${escapeHtml(String(rawValue==null?'':rawValue))}"${optAttr}>${displayHtml}</span>`;
@@ -798,6 +857,8 @@ function wireInlineEdit(container, onSave){
         input = document.createElement("input");
         input.type = type==="number" ? "number" : (type==="date" ? "date" : "text");
         input.value = rawValue;
+        // ШК — с подсказкой из справочника основных позиций (если он есть на странице)
+        if(field==="barcode" && document.getElementById("micro-sku-datalist")){ input.setAttribute("list", "micro-sku-datalist"); input.style.minWidth = "220px"; }
       }
       input.className = "inline-edit-input";
       el.innerHTML = "";
@@ -2974,7 +3035,8 @@ const UI = {
   microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:"", dateFrom:"", dateTo:"", problem:"", video:"", format:"", category:""},
   microPage: 1,          // страница таблицы микро (по 50 строк) — чтобы не рисовать 1000+ строк разом
   microPageSig: "",      // при смене фильтров/сортировки страница сбрасывается на первую
-  microProblemReasonsOpen: false, // таблица «Проблемные блогеры по причинам» свёрнута по умолчанию
+  microProblemReasonsOpen: false,
+  microSkuCatalogOpen: false, // справочник ШК/SKU над таблицей микро — свёрнут по умолчанию // таблица «Проблемные блогеры по причинам» свёрнута по умолчанию
   // ЕДИНЫЙ месяц на всю вкладку. Раньше на каждой вкладке было 3-4 независимых фильтра месяца
   // (дашборд / сводка по блогерам / сводка по ответственным / таблица интеграций), и месяц
   // приходилось выбирать в каждом блоке отдельно — цифры на одном экране легко оказывались за
@@ -3521,10 +3583,10 @@ function tplCampaigns(){
 }
 
 /* ---------- Отправка блогерам (доставки) ---------- */
-function tplDeliveries(){
-  const {orders, drivers, campaigns} = DataManager.state;
+// Доставки по текущим фильтрам вкладки «Отправка блогерам» — и для таблицы, и для выгрузки логисту.
+function filteredDeliveries(){
+  const {orders} = DataManager.state;
   const f = UI.filters;
-  const cities = [...new Set(orders.map(o=>o.city))];
   let rows = orders.filter(o=>{
     if(f.campaign && String(o.campaignId)!==f.campaign) return false;
     if(f.driver){ if(f.driver==="__none__" ? o.driverCode : o.driverCode!==f.driver) return false; }
@@ -3546,6 +3608,13 @@ function tplDeliveries(){
   if(f.driver && f.driver!=="__none__" && rows.some(o=>o.routeOrder)){
     rows = rows.slice().sort((a,b)=>(a.routeOrder||9999)-(b.routeOrder||9999));
   }
+  return rows;
+}
+function tplDeliveries(){
+  const {orders, drivers, campaigns} = DataManager.state;
+  const f = UI.filters;
+  const cities = [...new Set(orders.map(o=>o.city))];
+  const rows = filteredDeliveries();
 
   return `
     <div class="panel">
@@ -3556,6 +3625,7 @@ function tplDeliveries(){
           <button class="btn btn-ghost btn-sm" id="import-csv-btn">Импорт CSV</button>
           <input type="file" id="import-csv-input" accept=".csv" class="hide">
           <button class="btn btn-ghost btn-sm" id="export-csv-btn">Экспорт отчёта</button>
+          <button class="btn btn-ghost btn-sm" id="export-logist-btn" title="Только блогер, адрес и телефон — по текущим фильтрам (например, проект + «Назначена водителю»)">📋 Для логиста</button>
           ${f.driver && f.driver!=="__none__" ? `<button class="btn btn-ghost btn-sm" id="build-route-btn">🗺️ Построить маршрут</button>` : ""}
           <button class="btn btn-primary btn-sm" id="new-delivery-btn">+ Доставка вручную</button>
         </div>
@@ -4827,6 +4897,8 @@ function tplMicroInfluencers(){
     ${tplMicroResponsibleSummary()}
     ${tplMicroPlanProducts(UI.microMonth)}
     ${tplMicroCategorySummary()}
+    ${tplMicroSkuCatalog()}
+    ${microSkuDatalist()}
 
     <div class="toolbar" style="margin-bottom:8px;align-items:center;flex-wrap:wrap">
       <span style="color:var(--ink-mute);font-size:12px">Метрики ниже — за ${summaryMonth?monthLabel(summaryMonth):'весь период'}:</span>
@@ -6127,6 +6199,7 @@ function modalMicroDeal(existing, prefill){
     <div class="form-row">
       <div class="field"><label>Товар</label><input id="mm-product" list="product-suggestions" placeholder="Название товара как в 1С" value="${escapeHtml(d.product||'')}"></div>
       <div class="field"><label>Штрихкод (ШК) товара</label><input id="mm-barcode" placeholder="необязательно, но надёжнее" value="${escapeHtml(d.barcode||'')}"></div>
+      <div class="field"><label>Подобрать товар (добавит ШК)</label><input id="mm-sku-pick" list="mm-sku-pick-list" placeholder="начните: флюид, тушь, пудра…"><datalist id="mm-sku-pick-list">${MICRO_SKU_CATALOG.map(x=>`<option value="${escapeHtml(x.name+" — "+x.code)}"></option>`).join("")}</datalist></div>
       <div class="field"><label>Категория товара</label><input id="mm-product-category" value="${escapeHtml(d.productCategory||'')}"></div>
       <div class="field"><label>Статус товара</label><select id="mm-product-status">${MICRO_PRODUCT_STATUSES.map(st=>`<option ${st===d.productStatus?'selected':''}>${st}</option>`).join("")}</select></div>
     </div>
@@ -6159,6 +6232,16 @@ function modalMicroDeal(existing, prefill){
     </div>
   `);
   document.getElementById("mm-cancel").onclick = closeModal;
+  const skuPick = document.getElementById("mm-sku-pick");
+  if(skuPick) skuPick.addEventListener("change", ()=>{
+    const hit = MICRO_SKU_CATALOG.find(x=> skuPick.value === x.name+" — "+x.code || skuPick.value.trim() === x.code);
+    if(!hit) return;
+    const bc = document.getElementById("mm-barcode");
+    const cur = bc.value.split(/[,;\s]+/).map(c=>c.trim()).filter(Boolean);
+    if(!cur.includes(hit.code)) cur.push(hit.code);
+    bc.value = cur.join(",");
+    skuPick.value = "";
+  });
   document.getElementById("mm-name").addEventListener("input", e=>{
     const w = document.getElementById("mm-problem-warn");
     if(w) w.innerHTML = microProblemWarning(e.target.value, isEdit ? existing.id : null);
@@ -6411,6 +6494,17 @@ function wireDeskTab(){
       };
     });
 
+    const exportLogist = document.getElementById("export-logist-btn");
+    if(exportLogist) exportLogist.onclick = ()=>{
+      // Для логиста: только блогер, адрес, телефон — те доставки, что сейчас видны по фильтрам.
+      const rows = filteredDeliveries();
+      if(!rows.length){ toast("Нет доставок по выбранным фильтрам", true); return; }
+      const lines = [["Блогер","Адрес","Телефон"].map(csvEscape).join(",")]
+        .concat(rows.map(o=>[o.blogger||"", o.address||"", o.phone||""].map(csvEscape).join(",")));
+      const st = UI.filters.status && STATUS_META[UI.filters.status] ? "-"+STATUS_META[UI.filters.status].label.replace(/[^а-яА-Яa-zA-Z0-9]+/g,"_") : "";
+      downloadFile(`dostavki-dlya-logista${st}-${new Date().toISOString().slice(0,10)}.csv`, "\ufeff" + lines.join("\n"), "text/csv;charset=utf-8");
+      toast(`Выгружено ${rows.length} доставок`);
+    };
     document.getElementById("export-csv-btn").onclick = ()=>{
       const header = ["ID","Блогер","Подписчики","Город","Адрес","Телефон","Бокс","Водитель","Статус","Дата","Закрытие","Bitrix","Комментарий водителя"];
       const lines = [header.map(csvEscape).join(",")];
@@ -6746,6 +6840,17 @@ function wireDeskTab(){
     if(formatFilterEl) formatFilterEl.onchange = e=>{ UI.microFilter.format = e.target.value; renderDeskTab(); };
     const categoryFilterEl = document.getElementById("micro-category-filter");
     if(categoryFilterEl) categoryFilterEl.onchange = e=>{ UI.microFilter.category = e.target.value; renderDeskTab(); };
+    const skuToggle = document.getElementById("micro-sku-catalog-toggle");
+    if(skuToggle) skuToggle.onclick = ()=>{ UI.microSkuCatalogOpen = !UI.microSkuCatalogOpen; renderDeskTab(); };
+    const skuSearch = document.getElementById("micro-sku-search");
+    if(skuSearch) skuSearch.oninput = ()=>{
+      const q = skuSearch.value.trim().toLowerCase();
+      document.querySelectorAll(".micro-sku-row").forEach(tr=>{ tr.style.display = !q || q.split(/\s+/).every(w=>tr.dataset.q.includes(w)) ? "" : "none"; });
+    };
+    document.querySelectorAll(".micro-sku-copy").forEach(b=>{ b.onclick = async ()=>{
+      try{ await navigator.clipboard.writeText(b.dataset.code); toast("Скопировано: "+b.dataset.code); }
+      catch(e){ toast("Не удалось скопировать — выделите код вручную", true); }
+    }; });
     const videoFilterEl = document.getElementById("micro-video-filter");
     if(videoFilterEl) videoFilterEl.onchange = e=>{ UI.microFilter.video = e.target.value; renderDeskTab(); };
     document.querySelectorAll(".micro-page-btn").forEach(b=>{ b.onclick = ()=>{ UI.microPage = +b.dataset.page; renderDeskTab(); const t = document.getElementById("micro-table-top"); if(t && t.scrollIntoView) t.scrollIntoView({block:"start"}); }; });
@@ -7925,6 +8030,32 @@ async function runSelfTests(){
       const h2 = tplDeliveries();
       if(h2.includes("@a</td>") || !h2.includes("@b</td>")) throw new Error("фильтр «Доставлено без фото» не включает закрытые массово");
     } finally { DataManager.state.orders = savedO; UI.selectedOrderIds = savedSel; UI.filters = JSON.parse(savedF); }
+  });
+  TestSuite.test("Справочник ШК: панель над таблицей микро (свёрнута/раскрыта), подсказка ШК в таблице и подбор в карточке", ()=>{
+    const savedO = UI.microSkuCatalogOpen;
+    try{
+      UI.microSkuCatalogOpen = false;
+      let html = tplMicroSkuCatalog();
+      if(!html.includes("Справочник ШК") || html.includes("SKUA000932200")) throw new Error("свёрнутая панель — только заголовок");
+      UI.microSkuCatalogOpen = true; html = tplMicroSkuCatalog();
+      if(!html.includes("Тушь LashLust") || !html.includes("SKUA000932200") || !html.includes("4650358450284")) throw new Error("в справочнике тушь и пудра с кодами");
+      if(!microSkuDatalist().includes('value="4620400203526"')) throw new Error("подсказка ШК для таблицы");
+      if(MICRO_SKU_CATALOG.some(x=>!x.code || !x.name)) throw new Error("у каждой позиции есть название и код");
+    } finally { UI.microSkuCatalogOpen = savedO; }
+  });
+  TestSuite.test("Отправка блогерам: «Для логиста» — по текущим фильтрам, только блогер/адрес/телефон", ()=>{
+    const savedO = DataManager.state.orders, savedF = JSON.stringify(UI.filters);
+    try{
+      DataManager.state.orders = [
+        {id:9801, campaignId:5, blogger:"@a", city:"Алматы", address:"Абая 1", phone:"+7 701 000 00 01", box:"Декор", status:"assigned", driverCode:"X"},
+        {id:9802, campaignId:5, blogger:"@b", city:"Алматы", address:"Абая 2", phone:"+7 701 000 00 02", box:"Декор", status:"delivered", driverCode:"X"},
+        {id:9803, campaignId:6, blogger:"@c", city:"Астана", address:"Кабанбай 3", phone:"+7 701 000 00 03", box:"Кокос", status:"assigned", driverCode:"Y"},
+      ];
+      UI.filters = Object.assign({}, JSON.parse(savedF), {search:"", campaign:"5", driver:"", city:"", status:"assigned", dateFrom:"", dateTo:""});
+      const rows = filteredDeliveries();
+      if(rows.length!==1 || rows[0].id!==9801) throw new Error("проект 5 + «Назначена водителю» = 1 доставка: "+rows.map(r=>r.id));
+      if(!tplDeliveries().includes('id="export-logist-btn"')) throw new Error("кнопка «Для логиста»");
+    } finally { DataManager.state.orders = savedO; UI.filters = JSON.parse(savedF); }
   });
   TestSuite.test("Уникальные блогеры: «dehnara» и «Dehnara бартер» (и @, ссылка, «(за товар)») — один блогер", ()=>{
     const k = microBloggerKey("dehnara");
