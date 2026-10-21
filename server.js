@@ -649,12 +649,16 @@ const upload = multer({
 // сессию и не подходит к requireAuth: работает только на одном GET-маршруте ниже, который
 // отдаёт сделки и публикации по белому списку полей — без телефонов, ИИН, адресов и фото.
 const READONLY_API_KEY = process.env.READONLY_API_KEY || "bbro_aaeceac9fe013c32f47b4b08197e36ca8c89d106016403fbee6e29334bb1559c";
+// Второй ключ — для ботов (Grok и т.п., 20.10.2026): READONLY_BOT_KEY в Render. Тот же адрес, те же данные,
+// но БЕЗ раздела all (там телефоны, адреса, имена водителей). Меняется/отключается отдельно от основного.
+const READONLY_BOT_KEY = String(process.env.READONLY_BOT_KEY || "");
 function requireReadonlyKey(req, res, next){
-  if(READONLY_API_KEY.length < 24) return res.status(503).json({error:"read-only ключ не настроен на сервере"});
   const given = getToken(req) || String(req.headers["x-api-key"] || "");
-  const a = Buffer.from(given), b = Buffer.from(READONLY_API_KEY);
-  if(a.length !== b.length || !require("crypto").timingSafeEqual(a, b)) return res.status(401).json({error:"неверный ключ"});
-  next();
+  const same = (k) => { const a = Buffer.from(given), b = Buffer.from(k); return k.length >= 24 && a.length === b.length && require("crypto").timingSafeEqual(a, b); };
+  if(same(READONLY_API_KEY)){ req.readonlyScope = "full"; return next(); }
+  if(same(READONLY_BOT_KEY)){ req.readonlyScope = "bot"; return next(); }
+  if(READONLY_API_KEY.length < 24 && READONLY_BOT_KEY.length < 24) return res.status(503).json({error:"read-only ключ не настроен на сервере"});
+  return res.status(401).json({error:"неверный ключ"});
 }
 function pickFields(o, keys){ const r = {}; keys.forEach(k=>{ if(o[k] !== undefined) r[k] = o[k]; }); return r; }
 const RO_LARGE_FIELDS = ["id","blogerLogin","platform","product","barcode","responsible","bloggerCategory","status","plannedDate","publishedDate","plannedReach","reach","plannedClicks","clicks","plannedCost","cost","plannedContribution","autoContributionKzt","autoContributionStatus","likes","comments","saves"];
@@ -740,7 +744,7 @@ app.get("/api/readonly/deals", requireReadonlyKey, (req,res)=>{
     // крупные/микро интеграции, продажи по дням, планы, события товаров. Убрано только: ИИН (поле iin)
     // и в любом тексте — номера из 12+ цифр подряд (ИИН, номера карт в комментариях) → «[скрыто]».
     // Фото доставки — путь /uploads/… на этом же сервере.
-    all: readonlyFullState(),
+    all: req.readonlyScope === "full" ? readonlyFullState() : undefined,
   });
 });
 
@@ -981,6 +985,35 @@ app.post("/api/orders/bulk-deliver", requireAuth, (req,res)=>{
   });
   persist();
   res.json({ok:true, count, skipped});
+});
+// Массовая смена статуса доставок (21.10.2026): любой статус из списка. «Доставлено» без фото —
+// как массовое закрытие (closedWithoutPhoto); уход из «Доставлено» — дата доставки и отметка
+// «закрыто без фото» снимаются (фото, если было, остаётся), Bitrix — заново «не синхронизировано».
+const ORDER_STATUS_KEYS = ["created","assigned","accepted","in_route","delivered","no_answer","addr_bad","absent","reschedule","returned","cancelled"];
+app.post("/api/orders/bulk-status", requireAuth, (req,res)=>{
+  const {ids, status} = req.body || {};
+  if(!Array.isArray(ids) || !ids.length) return res.status(400).json({error:"ids[] обязателен"});
+  if(!ORDER_STATUS_KEYS.includes(status)) return res.status(400).json({error:"неизвестный статус"});
+  const now = new Date().toLocaleString("ru-RU");
+  const idSet = new Set(ids.map(Number));
+  let count = 0;
+  state.orders.forEach(o=>{
+    if(!idSet.has(o.id) || o.status === status) return;
+    const wasDelivered = o.status === "delivered";
+    o.status = status;
+    if(status === "delivered"){
+      o.deliveredAt = o.deliveredAt || now;
+      if(!o.photo) o.closedWithoutPhoto = true;
+      if(!o.closureType) o.closureType = "sale";
+      o.bitrixSynced = false;
+    } else if(wasDelivered){
+      o.deliveredAt = null; o.closedWithoutPhoto = false; o.bitrixSynced = false;
+    }
+    if(status === "assigned" && !o.assignedAt) o.assignedAt = now;
+    count++;
+  });
+  persist();
+  res.json({ok:true, count});
 });
 app.post("/api/orders/bulk-delete", requireAuth, (req,res)=>{
   const {ids} = req.body || {};
