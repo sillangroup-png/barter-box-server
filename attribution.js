@@ -33,13 +33,17 @@
 //    один раз (строка крупных), вторая duplicate. Отменённые (cancelled) не считаются.
 // ============================================================================
 
-const PARAMS_VERSION = "attrib-v10.0-2026-10-21";
+const PARAMS_VERSION = "attrib-v11.0-2026-10-21";
 // v10 (21.10.2026, решение Нины): окно у крупных — только день выхода и следующий (у них часто сторис,
 // продажи в первые сутки); у мелких — как в v9, до 7 дней. В общий день прирост делится между крупными
 // и мелкими только при заметном пересечении: если охват одной стороны в этот день меньше 20% охвата
 // другой — весь прирост дня идёт другой стороне (крупный 500 тыс. + мелкий 20 тыс. → всё крупному;
 // мелкие 700 тыс. + крупный 500 тыс. → делят по охвату).
 const LARGE_WINDOW_DAYS = 2;
+// v11 (21.10.2026): шлейф — 50% подъёма над уровнем до кампании, не попавшего в пики.
+const TAIL_SHARE = 0.5;
+const TAIL_DAYS_MICRO = 14, TAIL_HALF_LIFE_MICRO = 3;
+const TAIL_DAYS_LARGE = 2, TAIL_HALF_LIFE_LARGE = 1;
 const OVERLAP_MIN_SHARE = 0.2;
 
 const ASSUMED_POST_HOUR = { barter_box_deals: 12, barter_box_micro: 16 };
@@ -111,7 +115,7 @@ function median(xs) {
 }
 function makeTag(o) {
   const parts = ["v8"];
-  for (const k of ["t", "d0", "tl", "c", "bt", "r2", "re", "g"]) if (o[k] != null) parts.push(`${k}=${o[k]}`);
+  for (const k of ["t", "d0", "tl", "sl", "c", "bt", "r2", "re", "g"]) if (o[k] != null) parts.push(`${k}=${o[k]}`);
   return `⟦${parts.join(";")}⟧`;
 }
 function parseTag(note) {
@@ -390,8 +394,11 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
       if (lr < OVERLAP_MIN_SHARE * mr) return { pool: M, note: "у крупных в этот день охват меньше 20% от мелких — прирост дня мелким" };
       return { pool: ms, note: null };
     };
+    // 1) Пик (как в v10).
+    const spike = new Map(); // id → {u0,k0,uT,kT,parts,minShare}
+    const assignedByDay = new Map(); // d → шт, уже отданные пиком
     for (const w of win.values()) {
-      const { m, bl, rows } = w;
+      const { m, rows } = w;
       let u0 = 0, k0 = 0, uT = 0, kT = 0, minShare = 1;
       const parts = [];
       for (const r of rows) {
@@ -401,16 +408,66 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
         minShare = Math.min(minShare, sh);
         const u = r.ex * sh, kz = u * r.price;
         if (r.d === m.d0) { u0 += u; k0 += kz; } else { uT += u; kT += kz; }
+        assignedByDay.set(r.d, (assignedByDay.get(r.d) || 0) + u);
         parts.push({ ...r, sh, poolNote: note, others: ms.filter((x) => x !== m).map((x) => x.blogger_handle || x.id) });
       }
-      let units = u0 + uT, capped = false;
+      spike.set(m.id, { u0, k0, uT, kT, parts, minShare });
+    }
+    // 2) Шлейф (v11): подъём продаж над уровнем ДО КАМПАНИИ, который не попал в пики, — TAIL_SHARE (50%)
+    //    делится между выходами, чей шлейф накрывает день: вес = √охвата × формат × затухание (у охвата в 4 раза
+    //    больше — доля в 2 раза больше: один вирусный ролик не забирает весь шлейф).
+    //    Мелкие — до 14 дней, вдвое за 3 дня; крупные (сторис висят 24 ч) — только день выхода и следующий.
+    //    Уровень до кампании — среднее за дни, когда о товаре 14 дней до этого никто не выходил (до 30 последних
+    //    таких дней), с пересчётом на цену дня; нужно ≥3 таких дней, иначе шлейфа нет.
+    const postDaysSorted = [...new Set(members.map((m) => m.d0))].sort();
+    const quietDays = days.filter((d) => !postDaysSorted.some((p) => p <= d && daysBetween(p, d) < TAIL_DAYS_MICRO));
+    const preBaseOf = (d) => {
+      const pd = dayPrice.get(d);
+      const cand = quietDays.filter((x) => x < d).slice(-30);
+      const vals = [];
+      for (const x of cand) { const f = priceFactor(dayPrice.get(x), pd); if (f != null) vals.push(rec(code, x).qty * f); }
+      return vals.length >= 3 ? vals.reduce((a, v) => a + v, 0) / vals.length : null;
+    };
+    const tail = new Map(); // id → {u, k, days, pre}
+    const tailMembers = members.filter((m) => win.has(m.id));
+    const firstTailDay = tailMembers.length ? tailMembers.map((m) => m.d0).sort()[0] : null;
+    if (firstTailDay) for (const d of days) {
+      if (d < firstTailDay) continue;
+      const cover = [];
+      for (const m of tailMembers) {
+        const k = daysBetween(m.d0, d);
+        const isLarge = m.source === "barter_box_deals";
+        const len = isLarge ? TAIL_DAYS_LARGE : TAIL_DAYS_MICRO, hl = isLarge ? TAIL_HALF_LIFE_LARGE : TAIL_HALF_LIFE_MICRO;
+        if (k < 0 || k >= len) continue;
+        cover.push({ m, wgt: Math.sqrt(m.reachUsed) * m.format.coef * Math.pow(0.5, k / hl) });
+      }
+      if (!cover.length) continue;
+      const pb = preBaseOf(d);
+      if (pb == null) continue;
+      const resid = rec(code, d).qty - pb - (assignedByDay.get(d) || 0);
+      if (!(resid > 0)) continue;
+      const pool = resid * TAIL_SHARE, W = cover.reduce((a, c) => a + c.wgt, 0);
+      for (const c of cover) {
+        const u = pool * c.wgt / W;
+        const t = tail.get(c.m.id) || { u: 0, k: 0, days: 0, pre: [] };
+        t.u += u; t.k += u * dayPrice.get(d); t.days++; t.pre.push(pb);
+        tail.set(c.m.id, t);
+      }
+    }
+    for (const w of win.values()) {
+      const { m, bl } = w;
+      let { u0, k0, uT, kT, parts, minShare } = spike.get(m.id);
+      const tl = tail.get(m.id) || { u: 0, k: 0, days: 0, pre: [] };
+      let uS = tl.u, kS = tl.k;
+      let units = u0 + uT + uS, capped = false;
       if (!m.reachEstimated && units > 0 && units > m.reachUsed * MAX_PURCHASES_PER_VIEW) {
         const k = (m.reachUsed * MAX_PURCHASES_PER_VIEW) / units;
-        u0 *= k; uT *= k; k0 *= k; kT *= k; units *= k; capped = true;
+        u0 *= k; uT *= k; k0 *= k; kT *= k; uS *= k; kS *= k; units *= k; capped = true;
       }
       const conf = m.reachEstimated || bl.step === 4 ? "L" : (bl.step === 3 || minShare < 0.5 || w.priceGap ? "M" : "H");
-      push(m.id, { code, status: k0 + kT >= 1 ? "ok" : "zero", k0: Math.floor(k0), kT: Math.floor(kT), units, conf, bl, parts, capped, growing: w.open, priceGap: w.priceGap,
-        q0: rec(code, m.d0).qty, price0: dayPrice.get(m.d0) });
+      const preLevel = tl.pre.length ? tl.pre.reduce((a, v) => a + v, 0) / tl.pre.length : null;
+      push(m.id, { code, status: k0 + kT + kS >= 1 ? "ok" : "zero", k0: Math.floor(k0), kT: Math.floor(kT), kS: Math.floor(kS), uS, tailDays: tl.days, preLevel,
+        units, conf, bl, parts, capped, growing: w.open, priceGap: w.priceGap, q0: rec(code, m.d0).qty, price0: dayPrice.get(m.d0) });
     }
   }
 
@@ -424,32 +481,33 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
       setNo(p.id, "baseline_uncertain", `${bad.map((x) => `SKU ${x.code} — ${x.reason}`).join("; ")}. Суммы нет («недостаточно данных»).${replNote}`);
       continue;
     }
-    let k0 = 0, kT = 0, units = 0, conf = "H", growing = false;
+    let k0 = 0, kT = 0, kS = 0, units = 0, conf = "H", growing = false;
     for (const q of good) {
-      k0 += q.k0; kT += q.kT; units += q.units; growing = growing || q.growing;
+      k0 += q.k0; kT += q.kT; kS += q.kS || 0; units += q.units; growing = growing || q.growing;
       if (CONF_RANK[q.conf] < CONF_RANK[conf]) conf = q.conf;
     }
     if (bad.length || p.reachEstimated) conf = "L";
-    const t = k0 + kT;
+    const t = k0 + kT + kS;
     const txt = good.map((q) => {
       const base = `SKU ${q.code}: обычный уровень ${fmtQ(q.bl.B)} шт/день при цене ${fmt(q.bl.p0)} ₸ (${q.bl.how}, ${q.bl.n} дн.)`;
-      if (!q.parts.length) return `${base}; в день выхода ${fmtQ(q.q0)} шт — всплеска над обычным уровнем нет, вклад 0` + (q.priceGap ? " (в дни с другой ценой влияние цены по истории не определить — не считали)" : "");
+      const tailTxt = q.kS >= 1 ? `; шлейф ${fmt(q.kS)} ₸ (≈${fmtQ(q.uS)} шт за ${q.tailDays} дн.: 50% подъёма над уровнем до кампании ≈${fmtQ(q.preLevel)} шт/день, поделено по охвату и затуханию)` : "";
+      if (!q.parts.length) return `${base}; в день выхода ${fmtQ(q.q0)} шт — пика над обычным уровнем нет` + (q.priceGap ? " (в дни с другой ценой влияние цены по истории не определить — не считали)" : "") + tailTxt;
       const ds = q.parts.map((r) => `${ddmmD(r.d)}: ${fmtQ(r.q)} шт при ожидаемых ${fmtQ(r.exp)}${Math.abs(r.price / q.bl.p0 - 1) > PRICE_DRIFT_TOLERANCE ? ` (цена ${fmt(r.price)} ₸ — ожидание с учётом цены)` : ""} → +${fmtQ(r.ex)}` +
         (r.sh < 0.999 ? `, доля по охвату ${Math.round(r.sh * 100)}% (в этот день также ${r.others.slice(0, 3).join(", ")}${r.others.length > 3 ? "…" : ""})` : "") +
         (r.poolNote ? ` [${r.poolNote}]` : ""));
-      return `${base}; ${ds.join("; ")}` + (q.capped ? "; срезано до 1 покупки на 100 просмотров" : "");
+      return `${base}; ${ds.join("; ")}` + tailTxt + (q.capped ? "; срезано до 1 покупки на 100 просмотров" : "");
     });
-    const head = `Итого ${fmt(t)} ₸ (≈${fmtQ(units)} шт) = день выхода ${fmt(k0)} ₸ + следующие дни ${fmt(kT)} ₸. Уверенность: ${CONF_LABEL[conf]}.` +
+    const head = `Итого ${fmt(t)} ₸ (≈${fmtQ(units)} шт) = день выхода ${fmt(k0)} ₸ + следующие дни ${fmt(kT)} ₸ + шлейф ${fmt(kS)} ₸. Уверенность: ${CONF_LABEL[conf]}.` +
       (growing ? " Всплеск ещё идёт — сумма может вырасти." : "");
     const badNote = bad.length ? ` Не посчитано: ${bad.map((x) => `SKU ${x.code} — ${x.reason}`).join("; ")}.` : "";
     const dupNote = p.duplicates.length ? ` Та же интеграция есть в строке id ${p.duplicates.map((d) => d.id).join(", ")} — сумма записана только здесь.` : "";
     const reachNote = p.reachEstimated ? ` Для деления с другими: ${p.reachEstimated}.` : "";
-    const tag = makeTag({ t, d0: k0, tl: kT, c: conf, re: p.reachEstimated ? 1 : null, g: growing ? 1 : null });
+    const tag = makeTag({ t, d0: k0, tl: kT, sl: kS || null, c: conf, re: p.reachEstimated ? 1 : null, g: growing ? 1 : null });
     results.set(p.id, {
       status: t >= 1 ? "ok" : "zero",
       units: Math.round(units * 100) / 100,
       kzt: t,
-      breakdown: { dayZeroKzt: k0, tailKzt: kT, confidence: conf },
+      breakdown: { dayZeroKzt: k0, tailKzt: kT, trailKzt: kS, confidence: conf },
       note: `${tag} ${head} ${txt.join(" | ")}.${reachNote}${badNote}${replNote}${dupNote}${V}`,
     });
   }
