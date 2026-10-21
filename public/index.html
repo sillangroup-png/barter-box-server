@@ -3583,6 +3583,31 @@ function tplCampaigns(){
 }
 
 /* ---------- Отправка блогерам (доставки) ---------- */
+// PDF для логиста: печатная страница (Блогер / Адрес / Телефон) — в окне печати «Сохранить как PDF».
+// В заголовке — проект, статус, водитель, город по текущим фильтрам, дата и количество.
+function logistPrintHtml(rows){
+  const f = UI.filters, {campaigns, drivers} = DataManager.state;
+  const parts = [];
+  if(f.campaign){ const c = campaigns.find(c=>String(c.id)===String(f.campaign)); if(c) parts.push(c.name); }
+  if(f.status && STATUS_META[f.status]) parts.push(STATUS_META[f.status].label.replace(/^[^А-Яа-яA-Za-z]+/,""));
+  if(f.driver && f.driver!=="__none__"){ const d = drivers.find(d=>d.code===f.driver); parts.push("водитель: "+(d?d.name:f.driver)); }
+  if(f.city) parts.push(f.city);
+  const today = new Date().toLocaleDateString("ru-RU");
+  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Доставки для логиста ${escapeHtml(today)}</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#111;margin:24px}
+  h1{font-size:16px;margin:0 0 4px} .sub{color:#555;margin-bottom:14px}
+  table{width:100%;border-collapse:collapse} th,td{border:1px solid #bbb;padding:6px 8px;text-align:left;vertical-align:top}
+  th{background:#f2f2f2} td.n{width:28px;color:#777} td.ph{white-space:nowrap;width:150px}
+  @page{size:A4;margin:12mm}
+</style></head><body>
+  <h1>Доставки для логиста</h1>
+  <div class="sub">${escapeHtml(parts.join(" · ") || "все доставки")} — ${escapeHtml(today)}, всего ${rows.length}</div>
+  <table><thead><tr><th>№</th><th>Блогер</th><th>Адрес</th><th>Телефон</th></tr></thead><tbody>
+  ${rows.map((o,i)=>`<tr><td class="n">${i+1}</td><td>${escapeHtml(o.blogger||"")}</td><td>${escapeHtml(o.address||"")}</td><td class="ph">${escapeHtml(o.phone||"")}</td></tr>`).join("")}
+  </tbody></table>
+</body></html>`;
+}
 // Доставки по текущим фильтрам вкладки «Отправка блогерам» — и для таблицы, и для выгрузки логисту.
 function filteredDeliveries(){
   const {orders} = DataManager.state;
@@ -3625,7 +3650,8 @@ function tplDeliveries(){
           <button class="btn btn-ghost btn-sm" id="import-csv-btn">Импорт CSV</button>
           <input type="file" id="import-csv-input" accept=".csv" class="hide">
           <button class="btn btn-ghost btn-sm" id="export-csv-btn">Экспорт отчёта</button>
-          <button class="btn btn-ghost btn-sm" id="export-logist-btn" title="Только блогер, адрес и телефон — по текущим фильтрам (например, проект + «Назначена водителю»)">📋 Для логиста</button>
+          <button class="btn btn-ghost btn-sm" id="export-logist-btn" title="Только блогер, адрес и телефон — по текущим фильтрам (например, проект + «Назначена водителю»)">📋 Для логиста (Excel)</button>
+          <button class="btn btn-ghost btn-sm" id="export-logist-pdf-btn" title="То же самое в PDF: откроется окно печати — выберите «Сохранить как PDF»">📄 Для логиста (PDF)</button>
           ${f.driver && f.driver!=="__none__" ? `<button class="btn btn-ghost btn-sm" id="build-route-btn">🗺️ Построить маршрут</button>` : ""}
           <button class="btn btn-primary btn-sm" id="new-delivery-btn">+ Доставка вручную</button>
         </div>
@@ -6505,6 +6531,17 @@ function wireDeskTab(){
       downloadFile(`dostavki-dlya-logista${st}-${new Date().toISOString().slice(0,10)}.csv`, "\ufeff" + lines.join("\n"), "text/csv;charset=utf-8");
       toast(`Выгружено ${rows.length} доставок`);
     };
+    const exportLogistPdf = document.getElementById("export-logist-pdf-btn");
+    if(exportLogistPdf) exportLogistPdf.onclick = ()=>{
+      const rows = filteredDeliveries();
+      if(!rows.length){ toast("Нет доставок по выбранным фильтрам", true); return; }
+      const html = logistPrintHtml(rows);
+      const w = window.open("", "_blank");
+      if(!w){ toast("Браузер заблокировал окно — разрешите всплывающие окна для этого сайта", true); return; }
+      w.document.open(); w.document.write(html); w.document.close();
+      w.focus();
+      setTimeout(()=>{ try{ w.print(); }catch(e){} }, 300);
+    };
     document.getElementById("export-csv-btn").onclick = ()=>{
       const header = ["ID","Блогер","Подписчики","Город","Адрес","Телефон","Бокс","Водитель","Статус","Дата","Закрытие","Bitrix","Комментарий водителя"];
       const lines = [header.map(csvEscape).join(",")];
@@ -8054,7 +8091,9 @@ async function runSelfTests(){
       UI.filters = Object.assign({}, JSON.parse(savedF), {search:"", campaign:"5", driver:"", city:"", status:"assigned", dateFrom:"", dateTo:""});
       const rows = filteredDeliveries();
       if(rows.length!==1 || rows[0].id!==9801) throw new Error("проект 5 + «Назначена водителю» = 1 доставка: "+rows.map(r=>r.id));
-      if(!tplDeliveries().includes('id="export-logist-btn"')) throw new Error("кнопка «Для логиста»");
+      if(!tplDeliveries().includes('id="export-logist-btn"') || !tplDeliveries().includes('id="export-logist-pdf-btn"')) throw new Error("кнопки «Для логиста» Excel и PDF");
+      const ph = logistPrintHtml(rows);
+      if(!ph.includes("Абая 1") || !ph.includes("+7 701 000 00 01") || ph.includes("Абая 2") || !ph.includes("Назначена водителю") || !ph.includes("всего 1")) throw new Error("печатная форма для PDF: "+ph.slice(0,300));
     } finally { DataManager.state.orders = savedO; UI.filters = JSON.parse(savedF); }
   });
   TestSuite.test("Уникальные блогеры: «dehnara» и «Dehnara бартер» (и @, ссылка, «(за товар)») — один блогер", ()=>{
