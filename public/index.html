@@ -2439,7 +2439,9 @@ const MICRO_PLAN_PER_RESPONSIBLE = 50;
 // интеграций в месяц). Новый менеджер, которого нет в списке, получает 40. Поменять цифры —
 // здесь; разовую правку на конкретный месяц можно поставить кликом по ячейке «План».
 const MICRO_PLAN_V2_FROM_MONTH = "2026-10";
-const MICRO_PLAN_BY_MANAGER = {"Сая":20, "Нина":15, "Анастасия":20, "Камила":40, "Зарина":40, "Марина":40, "Мадина":40, "Сабрина":40, "Надира":40, "Анеля":40, "Менеджер 1":40, "Менеджер 2":40};
+// 21.10.2026: Анастасия и Сабрина перешли в группу Саи, Анастасии план 40; в группу Саи добавлена Оксана
+// (план 50) вместо «Менеджер 1»; «Менеджер 2» оставлен отдельной строкой, вне групп. Общий план команды (426 / 790) не меняется.
+const MICRO_PLAN_BY_MANAGER = {"Сая":20, "Нина":15, "Анастасия":40, "Камила":40, "Зарина":40, "Марина":40, "Мадина":40, "Сабрина":40, "Надира":40, "Анеля":40, "Оксана":50, "Менеджер 2":40};
 const MICRO_PLAN_NEW_MANAGER = 40;
 const MICRO_TEAM_PLAN_BLOGGERS = 426;
 const MICRO_TEAM_PLAN_INTEGRATIONS = 790;
@@ -2614,8 +2616,7 @@ function microResponsibleTotalUniqueBloggers(month){
 // ушедшие в прошлых месяцах) остаются отдельными строками, как раньше.
 const MICRO_RESPONSIBLE_GROUPS = [
   {lead:"Нина",      members:["Мадина","Марина","Зарина","Камила"]},
-  {lead:"Сая",       members:["Надира","Анеля"]},
-  {lead:"Анастасия", members:["Сабрина","Менеджер 1","Менеджер 2"]},
+  {lead:"Сая",       members:["Надира","Анеля","Анастасия","Сабрина","Оксана"]},
 ];
 // Общий подсчёт по группе: уникальные блогеры считаются по всей группе (один блогер у двух
 // менеджеров группы — один раз), план — сумма личных планов участниц, остальное — суммы.
@@ -2695,7 +2696,7 @@ function tplMicroResponsibleSummary(){
              личные планы по блогерам — в колонке «План» (новому менеджеру — ${MICRO_PLAN_NEW_MANAGER}).`
           : `План с ${escapeHtml(monthLabel(MICRO_PLAN_FROM_MONTH))}: <b>${MICRO_PLAN_PER_RESPONSIBLE} уникальных блогеров на каждого менеджера в месяц</b>.`}
         Блогер считается один раз, сколько бы интеграций с ним ни было. Менеджеры без интеграций за месяц тоже показаны — с нулём.
-        Сверху — общий подсчёт по группам (Нина, Сая, Анастасия); нажмите ▸, чтобы увидеть менеджеров группы.
+        Сверху — общий подсчёт по группам (Нина, Сая); нажмите ▸, чтобы увидеть менеджеров группы.
       </div>` : ""}
       <div class="table-wrap"><table>
         <thead><tr>
@@ -7899,8 +7900,9 @@ async function runSelfTests(){
       const by = Object.fromEntries(rows.map(r=>[r.responsible, r]));
       if(by["Алтынай"] || by["Эльмира"]) throw new Error("в октябре не должно быть Алтынай и Эльмиры");
       if(!by["Нина"] || by["Нина"].plan!==15) throw new Error("Нина — план 15 (с нулём интеграций)");
-      if(by["Сая"].plan!==20 || by["Анастасия"].plan!==20 || by["Камила"].plan!==40 || by["Надира"].plan!==40) throw new Error("личные планы не те");
-      if(by["Анастасия"].uniqueBloggerCount!==2 || by["Анастасия"].planLeft!==18) throw new Error("Анастасия: 2 блогера, осталось 18");
+      if(by["Сая"].plan!==20 || by["Анастасия"].plan!==40 || by["Камила"].plan!==40 || by["Надира"].plan!==40 || !by["Оксана"] || by["Оксана"].plan!==50) throw new Error("личные планы не те (Анастасия 40, Оксана 50 с 21.10)");
+      if(by["Менеджер 1"]) throw new Error("«Менеджер 1» убран");
+      if(by["Анастасия"].uniqueBloggerCount!==2 || by["Анастасия"].planLeft!==38) throw new Error("Анастасия: 2 блогера, осталось 38");
       if(!by["Новенькая"] || by["Новенькая"].plan!==40) throw new Error("новый менеджер — план 40");
       const sept = Object.fromEntries(microResponsibleSummary("2026-09").map(r=>[r.responsible, r]));
       if(!sept["Алтынай"] || sept["Алтынай"].plan!==50) throw new Error("сентябрь не трогаем: там по-прежнему 50 и все менеджеры");
@@ -8137,7 +8139,7 @@ async function runSelfTests(){
       DataManager.state.microInfluencerDeals = savedMicro; UI.microResponsibleMonth = savedM;
     }
   });
-  TestSuite.test("Сводка по ответственным: группы Нина (Мадина, Марина, Зарина, Камила), Сая (Надира), Анастасия (Сабрина) — общий подсчёт и раскрытие", ()=>{
+  TestSuite.test("Сводка по ответственным: группы Нина (Мадина, Марина, Зарина, Камила), Сая (Надира, Анеля, Анастасия, Сабрина, Оксана); Менеджер 2 — отдельно", ()=>{
     const savedMicro = DataManager.state.microInfluencerDeals, savedPlans = DataManager.state.plans, savedM = UI.microResponsibleMonth;
     const savedG = new Set(UI.expandedResponsibleGroups), savedTab = UI.tab;
     try{
@@ -8152,13 +8154,12 @@ async function runSelfTests(){
       const rows = microResponsibleSummary("2026-10");
       const {groups, ungrouped} = microResponsibleGroupRows("2026-10", rows);
       const g = Object.fromEntries(groups.map(x=>[x.lead,x]));
-      if(Object.keys(g).join(",")!=="Нина,Сая,Анастасия") throw new Error("порядок групп: Нина, Сая, Анастасия — "+Object.keys(g));
+      if(Object.keys(g).join(",")!=="Нина,Сая") throw new Error("две группы: Нина, Сая — "+Object.keys(g));
       if(g["Нина"].uniqueBloggerCount!==2) throw new Error("у группы Нины 2 уникальных блогера (b1 считается один раз): "+g["Нина"].uniqueBloggerCount);
       if(g["Нина"].plan!==15+40*4) throw new Error("план группы Нины = 15 + 4×40 = 175: "+g["Нина"].plan);
       if(g["Нина"].dealsCount!==3) throw new Error("интеграций у группы Нины 3");
-      if(g["Сая"].plan!==100 || g["Сая"].published!==1) throw new Error("группа Саи: план 20+40+40 (Надира, Анеля), 1 опубликовано");
-      if(g["Анастасия"].plan!==140) throw new Error("группа Анастасии: план 20+40×3 (Сабрина, Менеджер 1, Менеджер 2)");
-      if(ungrouped.map(r=>r.responsible).join(",")!=="Новенькая") throw new Error("менеджер не из групп — отдельной строкой: "+ungrouped.map(r=>r.responsible));
+      if(g["Сая"].plan!==20+40+40+40+40+50 || g["Сая"].published!==1) throw new Error("группа Саи: 20 + Надира 40 + Анеля 40 + Анастасия 40 + Сабрина 40 + Оксана 50 = 230, 1 опубликовано: "+g["Сая"].plan);
+      if(ungrouped.map(r=>r.responsible).sort().join(",")!==["Новенькая","Менеджер 2"].sort().join(",")) throw new Error("Менеджер 2 и новый менеджер — отдельными строками вне групп: "+ungrouped.map(r=>r.responsible));
       UI.microResponsibleMonth = "2026-10";
       UI.expandedResponsibleGroups = new Set();
       let html = tplMicroResponsibleSummary();
