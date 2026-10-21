@@ -18,8 +18,8 @@
 // 3. ЦЕНА: влияние цены — по прошлым сменам цены этого товара (устойчивая регрессия по всей истории:
 //    продажи = a + b·реклама рядом + c·ln цены, c < 0). Если в день окна цена другая (скидка) —
 //    ожидаемые продажи = обычный уровень × эффект цены: скидка сама по себе не идёт блогеру.
-// 4. ОКНО: с дня выхода (или со следующего, если выход вечером), пока продажи выше ожидаемых; не
-//    больше 7 дней. Начало — выше на 2×√ожидаемого, продолжение — на 1×√ (обычный разброс не всплеск).
+// 4. ОКНО: с дня выхода (или со следующего, если выход вечером), пока продажи выше ожидаемых; у мелких не
+//    больше 7 дней, у крупных — только день выхода и следующий (v10). Начало — выше на 2×√ожидаемого, продолжение — на 1×√ (обычный разброс не всплеск).
 //    Всплеска нет → вклад 0.
 // 5. ДЕЛЁЖ: если в этот день всплеск относится к нескольким выходам этого товара — по охвату × формат
 //    (Stories ×2); выход один — весь прирост ему. Потолок: не больше 1 покупки на 100 просмотров.
@@ -33,7 +33,14 @@
 //    один раз (строка крупных), вторая duplicate. Отменённые (cancelled) не считаются.
 // ============================================================================
 
-const PARAMS_VERSION = "attrib-v9.0-2026-10-15";
+const PARAMS_VERSION = "attrib-v10.0-2026-10-21";
+// v10 (21.10.2026, решение Нины): окно у крупных — только день выхода и следующий (у них часто сторис,
+// продажи в первые сутки); у мелких — как в v9, до 7 дней. В общий день прирост делится между крупными
+// и мелкими только при заметном пересечении: если охват одной стороны в этот день меньше 20% охвата
+// другой — весь прирост дня идёт другой стороне (крупный 500 тыс. + мелкий 20 тыс. → всё крупному;
+// мелкие 700 тыс. + крупный 500 тыс. → делят по охвату).
+const LARGE_WINDOW_DAYS = 2;
+const OVERLAP_MIN_SHARE = 0.2;
 
 const ASSUMED_POST_HOUR = { barter_box_deals: 12, barter_box_micro: 16 };
 const KERNEL_DAYS = 7;
@@ -355,7 +362,8 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
       const bl = baselineFor(m);
       if (!bl) { push(m.id, { code, status: "baseline_uncertain", reason: "нет хотя бы 3 дней рядом с выходом, чтобы определить обычный уровень продаж" }); continue; }
       const rows = []; let started = false, open = false, priceGap = false;
-      for (let k = 0; k < KERNEL_DAYS; k++) {
+      const maxDays = m.source === "barter_box_deals" ? LARGE_WINDOW_DAYS : KERNEL_DAYS;
+      for (let k = 0; k < maxDays; k++) {
         const d = addDaysStr(m.d0, k);
         if (d > lastCompleteDay) { open = started || k <= 1; break; }
         const f = priceFactor(bl.p0, dayPrice.get(d));
@@ -365,7 +373,7 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
         const spike = ex > Math.max(1, (started ? 1 : 2) * sd);
         if (spike) { started = true; rows.push({ d, q, exp, ex, price: dayPrice.get(d) }); }
         else if (started || k >= 1) break;
-        if (k === KERNEL_DAYS - 1) open = false;
+        if (k === maxDays - 1) open = false;
       }
       win.set(m.id, { m, bl, rows, open, priceGap });
     }
@@ -373,17 +381,27 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
     const dayMembers = new Map();
     for (const w of win.values()) for (const r of w.rows) { if (!dayMembers.has(r.d)) dayMembers.set(r.d, []); dayMembers.get(r.d).push(w.m); }
     const vw = (m) => m.reachUsed * m.format.coef;
+    // Кто делит прирост дня: крупные и мелкие вместе — только при заметном пересечении (см. OVERLAP_MIN_SHARE).
+    const poolOf = (ms) => {
+      const L = ms.filter((x) => x.source === "barter_box_deals"), M = ms.filter((x) => x.source !== "barter_box_deals");
+      if (!L.length || !M.length) return { pool: ms, note: null };
+      const lr = L.reduce((a, x) => a + vw(x), 0), mr = M.reduce((a, x) => a + vw(x), 0);
+      if (mr < OVERLAP_MIN_SHARE * lr) return { pool: L, note: "у мелких в этот день охват меньше 20% от крупных — прирост дня крупным" };
+      if (lr < OVERLAP_MIN_SHARE * mr) return { pool: M, note: "у крупных в этот день охват меньше 20% от мелких — прирост дня мелким" };
+      return { pool: ms, note: null };
+    };
     for (const w of win.values()) {
       const { m, bl, rows } = w;
       let u0 = 0, k0 = 0, uT = 0, kT = 0, minShare = 1;
       const parts = [];
       for (const r of rows) {
         const ms = dayMembers.get(r.d);
-        const sh = vw(m) / ms.reduce((a, x) => a + vw(x), 0);
+        const { pool, note } = poolOf(ms);
+        const sh = pool.includes(m) ? vw(m) / pool.reduce((a, x) => a + vw(x), 0) : 0;
         minShare = Math.min(minShare, sh);
         const u = r.ex * sh, kz = u * r.price;
         if (r.d === m.d0) { u0 += u; k0 += kz; } else { uT += u; kT += kz; }
-        parts.push({ ...r, sh, others: ms.filter((x) => x !== m).map((x) => x.blogger_handle || x.id) });
+        parts.push({ ...r, sh, poolNote: note, others: ms.filter((x) => x !== m).map((x) => x.blogger_handle || x.id) });
       }
       let units = u0 + uT, capped = false;
       if (!m.reachEstimated && units > 0 && units > m.reachUsed * MAX_PURCHASES_PER_VIEW) {
@@ -417,7 +435,8 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
       const base = `SKU ${q.code}: обычный уровень ${fmtQ(q.bl.B)} шт/день при цене ${fmt(q.bl.p0)} ₸ (${q.bl.how}, ${q.bl.n} дн.)`;
       if (!q.parts.length) return `${base}; в день выхода ${fmtQ(q.q0)} шт — всплеска над обычным уровнем нет, вклад 0` + (q.priceGap ? " (в дни с другой ценой влияние цены по истории не определить — не считали)" : "");
       const ds = q.parts.map((r) => `${ddmmD(r.d)}: ${fmtQ(r.q)} шт при ожидаемых ${fmtQ(r.exp)}${Math.abs(r.price / q.bl.p0 - 1) > PRICE_DRIFT_TOLERANCE ? ` (цена ${fmt(r.price)} ₸ — ожидание с учётом цены)` : ""} → +${fmtQ(r.ex)}` +
-        (r.sh < 0.999 ? `, доля по охвату ${Math.round(r.sh * 100)}% (в этот день также ${r.others.slice(0, 3).join(", ")}${r.others.length > 3 ? "…" : ""})` : ""));
+        (r.sh < 0.999 ? `, доля по охвату ${Math.round(r.sh * 100)}% (в этот день также ${r.others.slice(0, 3).join(", ")}${r.others.length > 3 ? "…" : ""})` : "") +
+        (r.poolNote ? ` [${r.poolNote}]` : ""));
       return `${base}; ${ds.join("; ")}` + (q.capped ? "; срезано до 1 покупки на 100 просмотров" : "");
     });
     const head = `Итого ${fmt(t)} ₸ (≈${fmtQ(units)} шт) = день выхода ${fmt(k0)} ₸ + следующие дни ${fmt(kT)} ₸. Уверенность: ${CONF_LABEL[conf]}.` +
