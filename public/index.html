@@ -405,6 +405,7 @@ const Api = {
   problemOrder: (id, statusCode, comment)=> apiFetch("/api/orders/"+id+"/problem", {method:"POST", headers:jsonHeaders, body:JSON.stringify({statusCode, comment})}),
   syncBitrix: (id)=> apiFetch("/api/orders/"+id+"/sync-bitrix", {method:"POST"}),
   bulkAssign: (ids, driverCode)=> apiFetch("/api/orders/bulk-assign", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids, driverCode})}),
+  bulkStatus: (ids, status)=> apiFetch("/api/orders/bulk-status", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids, status})}),
   bulkDeliver: (ids, closureType)=> apiFetch("/api/orders/bulk-deliver", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids, closureType})}),
   bulkDelete: (ids)=> apiFetch("/api/orders/bulk-delete", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids})}),
   importOrders: (rows, campaignId)=> apiFetch("/api/orders/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows, campaignId})}),
@@ -3679,6 +3680,9 @@ function tplDeliveries(){
         <select id="bulk-driver-select"><option value="">Назначить водителя…</option>${drivers.filter(d=>d.active).map(d=>`<option value="${d.code}">${escapeHtml(d.name)}</option>`).join("")}</select>
         <button class="btn btn-primary btn-sm" id="bulk-assign-btn">Назначить</button>
         <span style="width:12px"></span>
+        <select id="bulk-status-select"><option value="">Сменить статус…</option>${Object.entries(STATUS_META).map(([k,m])=>`<option value="${k}">${escapeHtml(m.label.replace(/^[^А-Яа-яA-Za-z]+/,""))}</option>`).join("")}</select>
+        <button class="btn btn-primary btn-sm" id="bulk-status-btn">Применить</button>
+        <span style="width:12px"></span>
         <select id="bulk-closure-select" title="Как закрыть">${Object.entries(CLOSURE_TYPES).map(([k,l])=>`<option value="${k}" ${k==="sale"?'selected':''}>${l}</option>`).join("")}</select>
         <button class="btn btn-primary btn-sm" id="bulk-deliver-btn" title="Отметить выбранные доставки как доставленные без фото (для проектов, где фото не нужно)">✓ Закрыть как доставлено (без фото)</button>
         <button class="btn btn-danger btn-sm" id="bulk-delete-btn">Удалить выбранные</button>
@@ -6445,6 +6449,19 @@ function wireDeskTab(){
         await DataManager.refresh(); render();
       }catch(e){ toast(e.message, true); }
     };
+    const bulkStatusBtn = document.getElementById("bulk-status-btn");
+    if(bulkStatusBtn) bulkStatusBtn.onclick = async ()=>{
+      const status = document.getElementById("bulk-status-select").value;
+      if(!status){ toast("Выберите статус", true); return; }
+      const label = (STATUS_META[status]||{}).label || status;
+      if(!confirm(`Поставить ${UI.selectedOrderIds.size} доставкам статус «${label.replace(/^[^А-Яа-яA-Za-z]+/,"")}»?`)) return;
+      try{
+        const res = await withBusy(bulkStatusBtn, ()=> Api.bulkStatus([...UI.selectedOrderIds], status));
+        toast(`Статус изменён у ${res.count} доставок`);
+        UI.selectedOrderIds.clear();
+        await DataManager.refresh(); render();
+      }catch(e){ toast(e.message, true); }
+    };
     const bulkDeliver = document.getElementById("bulk-deliver-btn");
     if(bulkDeliver) bulkDeliver.onclick = async ()=>{
       const closureType = document.getElementById("bulk-closure-select").value || "sale";
@@ -8057,6 +8074,7 @@ async function runSelfTests(){
       UI.filters = Object.assign({}, JSON.parse(savedF), {status:""});
       const html = tplDeliveries();
       if(!html.includes('id="bulk-deliver-btn"') || !html.includes("Закрыть как доставлено (без фото)")) throw new Error("кнопка массового закрытия в панели выбранных");
+      if(!html.includes('id="bulk-status-select"') || !html.includes('<option value="assigned">Назначена водителю</option>')) throw new Error("массовая смена статуса в панели выбранных");
       if(!html.includes("закрыто без фото")) throw new Error("у закрытых массово — серая пометка, а не красное «нет»");
       UI.filters.status = "__no_photo__";
       const h2 = tplDeliveries();
