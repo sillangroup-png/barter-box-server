@@ -345,7 +345,43 @@ function loadState(){
 }
 
 let persistScheduled = false;
+/* ---------- История просмотров (22.10.2026) ----------
+   Каждый раз, когда меняется охват/просмотры интеграции (авто по ссылке или вручную), сервер
+   запоминает снимок за день (по Алматы): {d, r: Reels/IG, t: TikTok, s: сторис} у микро и {d, r} у крупных.
+   Одна запись на день (последняя цифра дня), новая — только если цифры изменились. Видно, сколько
+   прибавилось и когда, даже если позже число перезапишется. Клиент историю не присылает и не меняет. */
+const VIEWS_HISTORY_MAX = 200;
+function almatyDateStr(){ return new Date(Date.now() + 5*3600*1000).toISOString().slice(0,10); }
+function viewsSnapshotOf(d, kind){
+  const e = { r: Number(kind === "micro" ? d.factReachReels : d.reach) || 0 };
+  if(kind === "micro"){
+    const t = Number(d.factReachTT) || 0, s = Number(d.factReachStories) || 0;
+    if(t) e.t = t;
+    if(s) e.s = s;
+  }
+  return e;
+}
+function recordViewsHistory(){
+  const today = almatyDateStr();
+  let n = 0;
+  for(const [kind, list] of [["micro", state.microInfluencerDeals || []], ["large", state.influencerDeals || []]]){
+    for(const d of list){
+      const snap = viewsSnapshotOf(d, kind);
+      const h = Array.isArray(d.viewsHistory) ? d.viewsHistory : null;
+      if(!snap.r && !snap.t && !snap.s && !(h && h.length)) continue;
+      const last = h && h[h.length-1];
+      if(last && (last.r||0) === snap.r && (last.t||0) === (snap.t||0) && (last.s||0) === (snap.s||0)) continue;
+      const hist = h || (d.viewsHistory = []);
+      const entry = Object.assign({ d: today }, snap);
+      if(last && last.d === today) hist[hist.length-1] = entry; else hist.push(entry);
+      if(hist.length > VIEWS_HISTORY_MAX) hist.splice(0, hist.length - VIEWS_HISTORY_MAX);
+      n++;
+    }
+  }
+  return n;
+}
 function persist(){
+  try{ recordViewsHistory(); }catch(e){ console.error("История просмотров:", e.message); }
   // асинхронная запись, чтобы не блокировать event loop под нагрузкой от 20 пользователей;
   // in-memory state уже обновлён синхронно к этому моменту, так что читатели всегда видят
   // свежие данные независимо от того, успела ли запись на диск закончиться.
@@ -1243,7 +1279,7 @@ app.patch("/api/influencer-deals/:id", requireAuth, (req,res)=>{
   if("instagramLink" in body) body.instagramLink = normalizeInstagramUrl(body.instagramLink);
   if("driveFolderLink" in body) body.driveFolderLink = normalizeLinkUrl(body.driveFolderLink);
   delete body.driveFolderAuto; // автоподбор ведёт только сервер
-  delete body.socialViewsAuto; delete body.reachAutoSet; // просмотры по ссылке (Apify) ведёт только сервер
+  delete body.socialViewsAuto; delete body.reachAutoSet; delete body.viewsHistory; // просмотры по ссылке (Apify) и их историю ведёт только сервер
   if("reelsLink" in body) body.reelsLink = normalizeLinkUrl(body.reelsLink);
   Object.assign(d, body);
   persist();
@@ -1354,7 +1390,7 @@ app.patch("/api/micro-influencer-deals/:id", requireAuth, (req,res)=>{
     body.cpvNoteAt = body.cpvNote ? new Date().toISOString().slice(0,10) : "";
     body.cpvNoteBy = body.cpvNote ? ((req.session && req.session.name) || d.responsible || "") : "";
   }
-  delete body.socialViewsAuto; delete body.reachAutoSet; // просмотры по ссылке (Apify) ведёт только сервер
+  delete body.socialViewsAuto; delete body.reachAutoSet; delete body.viewsHistory; // просмотры по ссылке (Apify) и их историю ведёт только сервер
   Object.assign(d, body);
   persist();
   res.json(d);
@@ -1681,13 +1717,47 @@ app.post("/api/attribution/recalc", requireAuth, async (req,res)=>{
 // Ручного запуска больше нет (15.10.2026): просмотры обновляет только сам сервер — ролики текущего месяца,
 // каждый раз в 3 дня. Маршрут оставлен, чтобы старая страница получила понятный ответ.
 app.post("/api/social-views/sync", requireAuth, (req,res)=>{
-  res.status(403).json(Object.assign({error:"Охваты обновляются автоматически раз в 3 дня — вручную не нужно"}, state.socialViewsSync || {}));
+  res.status(403).json(Object.assign({error:"Охваты обновляются только по секретной ссылке администратора"}, state.socialViewsSync || {}));
 });
 // Принудительное обновление охватов (19.10.2026) — только для Нины, по секретной ссылке из браузера:
 //   https://<сайт>/api/social-views/force?key=<SOCIAL_VIEWS_ADMIN_KEY>
 // Ключ задаётся только в Render (env), кнопки в интерфейсе нет. Обновляет все ролики ТЕКУЩЕГО месяца
 // (кроме проверенных за последний час), не чаще раза в час. Автообновление раз в 3 дня работает как раньше.
 let lastForcedViewsAt = 0;
+/* ---------- Справочник товаров для подбора ШК (22.10.2026) ----------
+   Все товары, которые продавались в Kaspi за последние 90 дней: код (по нему идут продажи и считается
+   вклад), название из public.products (если есть) и сколько продано. Кэш 6 часов. Для поиска в модалке
+   микро-интеграции и в «Справочнике ШК» — кроме основных позиций там теперь есть уход, праймеры, салфетки и т.д. */
+let skuCatalogCache = { at: 0, items: null, error: null };
+async function loadSkuCatalog(){
+  const { rows } = await pgPool.query(`
+    WITH s AS (
+      SELECT e.offer_code AS code, sum(e.quantity)::float8 AS qty, sum(e.total_price)::float8 AS kzt, max(e.order_date)::date::text AS last
+      FROM analytics.kaspi_live_order_entries e
+      WHERE e.order_date >= (now() - interval '90 days') AND NOT (COALESCE(e.order_status,'') = ANY($1::text[])) AND e.offer_code IS NOT NULL
+      GROUP BY 1
+    ), n AS (
+      SELECT DISTINCT ON (p.kaspi_code) p.kaspi_code AS code,
+             COALESCE(to_jsonb(p)->>'name', to_jsonb(p)->>'title', to_jsonb(p)->>'product_name') AS name
+      FROM public.products p WHERE p.kaspi_code IS NOT NULL
+      ORDER BY p.kaspi_code
+    )
+    SELECT s.code, n.name, s.qty, s.kzt, s.last FROM s LEFT JOIN n ON n.code = s.code
+    ORDER BY s.kzt DESC NULLS LAST LIMIT 600`, [["CANCELLED", "CANCELLING"]]);
+  return rows.map(r=>({ code: String(r.code), name: r.name ? String(r.name).trim() : "", qty: Math.round(Number(r.qty)||0), kzt: Math.round(Number(r.kzt)||0), last: r.last || "" }));
+}
+app.get("/api/sku-catalog", requireAuth, async (req,res)=>{
+  const fresh = skuCatalogCache.items && Date.now() - skuCatalogCache.at < 6*3600*1000;
+  if(!fresh){
+    try{ skuCatalogCache = { at: Date.now(), items: await loadSkuCatalog(), error: null }; }
+    catch(e){
+      console.error("Справочник ШК:", e.message);
+      skuCatalogCache.error = e.message;
+      if(!skuCatalogCache.items) return res.status(503).json({ error: "Не удалось загрузить товары из Kaspi: " + e.message, items: [] });
+    }
+  }
+  res.json({ items: skuCatalogCache.items, at: new Date(skuCatalogCache.at).toISOString() });
+});
 app.get("/api/social-views/force", (req,res)=>{
   const say = (code, text) => res.status(code).type("text/plain; charset=utf-8").send(text);
   const key = String(process.env.SOCIAL_VIEWS_ADMIN_KEY || "");
@@ -1704,8 +1774,8 @@ app.get("/api/social-views/force", (req,res)=>{
   }
   lastForcedViewsAt = Date.now();
   const month = new Date(Date.now() + 5*3600*1000).toISOString().slice(0,7);
-  maybeSyncSocialViews(true, {month});
-  say(200, `Запущено обновление охватов всех роликов за ${month} (Instagram и TikTok по ссылкам).\nЧерез 5–10 минут обновите страницу Barter Box.\n` + lastInfo);
+  maybeSyncSocialViews(true, {month, recentDays: 7});
+  say(200, `Запущено обновление охватов всех роликов за ${month} и вышедших за последние 7 дней (Instagram и TikTok по ссылкам).\nЧерез 10–15 минут обновите страницу Barter Box.\n` + lastInfo);
 });
 app.post("/api/drive-folders/sync", requireAuth, async (req,res)=>{
   try{ await maybeSyncDriveFolders(true); res.json(state.driveSync || {}); }
@@ -1749,7 +1819,7 @@ async function maybeSyncDriveFolders(force){
 }
 
 /* ---------- Просмотры роликов Instagram/TikTok через Apify (social-views.js) ----------
-   Раз в 30 мин проверяет, каким роликам текущего месяца пора обновить просмотры (раз в 3 дня), и пишет их в
+   С 22.10.2026 сам НЕ обновляет — только по секретной ссылке /api/social-views/force (все ролики месяца). Пишет просмотры в
    пустые поля охвата (ручная цифра главнее). Работает в фоне, тик не ждёт. Без APIFY_TOKEN — ничего. */
 const { syncSocialViews } = require("./social-views.js");
 const SOCIAL_EVERY_MS = 30*60*1000;
@@ -1773,7 +1843,8 @@ async function placementsTick(label){
   await maybeRunDailyAttribution().catch(e=> console.error(`Attribution (${label}):`, e.message));
   await pullAttributionFact().catch(e=> console.error(`Pull-fact (${label}):`, e.message));
   await maybeSyncDriveFolders().catch(e=> console.error(`Drive (${label}):`, e.message));
-  maybeSyncSocialViews();
+  // Просмотры по ссылкам (Apify) сами больше НЕ обновляются (22.10.2026, решение Нины) —
+  // только вручную по секретной ссылке /api/social-views/force.
 }
 placementsTick("старт");
 setInterval(()=> placementsTick("интервал"), 3*60*1000);
