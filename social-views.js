@@ -187,7 +187,7 @@ function reconcileStored(state) {
 let running = false;
 // month ("YYYY-MM") + kind ("micro"|"large") — кнопка «Обновить охваты» на открытой вкладке:
 // обновляем ВСЕ ролики этой вкладки за этот месяц (кроме проверенных меньше часа назад), остальное не трогаем.
-async function syncSocialViews(state, { force = false, month = null, kind: onlyKind = null, log = console.log } = {}) {
+async function syncSocialViews(state, { force = false, month = null, kind: onlyKind = null, recentDays = 0, log = console.log } = {}) {
   const token = process.env.APIFY_TOKEN;
   if (!token) { state.socialViewsSync = { lastRunAt: new Date().toISOString(), error: "APIFY_TOKEN не задан в Render", updated: 0 }; return false; }
   if (running) return false;
@@ -206,7 +206,8 @@ async function syncSocialViews(state, { force = false, month = null, kind: onlyK
       for (const d of list) for (const t of targetsOf(d, kind)) {
         if (monthOk) {
           const pd = pubDateOf(d, kind);
-          if (!pd || pd.slice(0, 7) !== month) continue;
+          const recent = recentDays > 0 && pd && daysBetween(pd, today) >= 0 && daysBetween(pd, today) <= recentDays;
+          if (!pd || (pd.slice(0, 7) !== month && !recent)) continue;
           const prev = d.socialViewsAuto && d.socialViewsAuto[t.net];
           const fresh = prev && prev.url === t.url && prev.fetchedAt && started - Date.parse(prev.fetchedAt) < H;
           if (!fresh) jobs.push({ d, kind, t });
@@ -217,22 +218,28 @@ async function syncSocialViews(state, { force = false, month = null, kind: onlyK
     }
     // Сначала самые свежие выходы.
     jobs.sort((a, b) => String(pubDateOf(b.d, b.kind)).localeCompare(String(pubDateOf(a.d, a.kind))));
-    const ig = jobs.filter((j) => j.t.net === "ig").slice(0, MAX_PER_RUN);
-    const tt = jobs.filter((j) => j.t.net === "tt").slice(0, MAX_PER_RUN);
-    let changed = false;
+    // Ручное обновление по секретной ссылке (month задан) — ВСЕ ролики пачками по MAX_PER_RUN подряд;
+    // иначе — одна пачка за запуск.
+    const allIg = jobs.filter((j) => j.t.net === "ig"), allTt = jobs.filter((j) => j.t.net === "tt");
+    const maxBatches = monthOk ? Infinity : 1;
+    let changed = false, doneIg = 0, doneTt = 0;
 
-    if (ig.length) {
+    for (let b = 0; doneIg < allIg.length && b < maxBatches; b++) {
+      const ig = allIg.slice(doneIg, doneIg + MAX_PER_RUN);
+      doneIg += ig.length;
       const codes = [...new Set(ig.map((j) => igShortcode(j.t.url)))];
-      summary.igRequested = codes.length;
+      summary.igRequested += codes.length;
       try {
         const items = await runActor(IG_ACTOR, { directUrls: codes.map(igPostUrl), resultsType: "posts", resultsLimit: 1, addParentData: false }, token);
         const by = parseIg(items);
         for (const j of ig) { const r = by.get(igShortcode(j.t.url)); if (!r) summary.notFound++; if (applyResult(j.d, j.t, r, nowIso)) changed = true; summary.checked++; if (r && r.views && j.d.reachAutoSet && j.d.reachAutoSet[j.t.field] === r.views) summary.updated++; }
       } catch (e) { summary.error = (summary.error ? summary.error + "; " : "") + "Instagram: " + e.message; }
     }
-    if (tt.length) {
+    for (let b = 0; doneTt < allTt.length && b < maxBatches; b++) {
+      const tt = allTt.slice(doneTt, doneTt + MAX_PER_RUN);
+      doneTt += tt.length;
       const urls = [...new Set(tt.map((j) => j.t.url))];
-      summary.ttRequested = urls.length;
+      summary.ttRequested += urls.length;
       try {
         const items = await runActor(TT_ACTOR, { postURLs: urls, resultsPerPage: 1, shouldDownloadVideos: false, shouldDownloadCovers: false, shouldDownloadAvatars: false, shouldDownloadSubtitles: false, shouldDownloadSlideshowImages: false }, token);
         const by = parseTt(items);
@@ -240,7 +247,7 @@ async function syncSocialViews(state, { force = false, month = null, kind: onlyK
       } catch (e) { summary.error = (summary.error ? summary.error + "; " : "") + "TikTok: " + e.message; }
     }
     summary.durationMs = Date.now() - started;
-    summary.pending = Math.max(0, jobs.filter((j) => j.t.net === "ig").length - ig.length) + Math.max(0, jobs.filter((j) => j.t.net === "tt").length - tt.length);
+    summary.pending = (allIg.length - doneIg) + (allTt.length - doneTt);
     state.socialViewsSync = summary;
     log(`[social-views] подставлено из уже полученных ${summary.replacedFromStored}; проверено ${summary.checked} (IG ${summary.igRequested}, TT ${summary.ttRequested}), охват обновлён ${summary.updated}, не найдено ${summary.notFound}, в очереди ${summary.pending}${summary.error ? ", ошибка: " + summary.error : ""}`);
     return changed || true;
