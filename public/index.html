@@ -578,7 +578,7 @@ function tplAttributionRecalcBar(){
     <span>Вклад (Kaspi): ${info}.</span>
     ${UI.readOnly ? "" : `<button class="btn btn-ghost btn-sm attr-recalc-btn">Пересчитать вклад сейчас</button>`}
     <span style="flex-basis:100%;height:0"></span>
-    <span title="Просмотры роликов по ссылке на Reels/TikTok (Apify). Заменяют охват в поле (и в общем охвате) с пометкой «авто», ручная цифра тоже заменяется; где ссылки на ролик нет или просмотры не получены — остаётся ручная. Обновляет сам сервер, вручную не нужно: только ролики текущего месяца (и вышедшие за последние 7 дней) — новая ссылка при ближайшей проверке, дальше каждый ролик раз в 3 дня. Прошлые месяцы не пересчитываются. Сторис публично не видны — их охват вручную.">👁 Просмотры по ссылкам (авто-охват): ${svInfo}.</span>
+    <span title="Просмотры роликов по ссылке на Reels/TikTok (Apify). Заменяют охват в поле (и в общем охвате) с пометкой «авто», ручная цифра тоже заменяется; где ссылки на ролик нет или просмотры не получены — остаётся ручная. Обновляются только по команде администратора (не чаще раза в час): все ролики текущего месяца и вышедшие за последние 7 дней. Каждое обновление запоминается в истории просмотров (строка под цифрой в «Факт.охват»). Прошлые месяцы не пересчитываются. Сторис публично не видны — их охват вручную.">👁 Просмотры по ссылкам (авто-охват): ${svInfo}.</span>
 
   </div>`;
 }
@@ -802,8 +802,27 @@ const MICRO_SKU_CATALOG = [
   {group:"Атопик", name:"Крем для лица и тела для атопичной кожи 0+", code:"SKUA000935800"},
   {group:"Атопик", name:"Гель для умывания для атопичной кожи", code:"4620400204301"},
 ];
+// Все товары с продажами в Kaspi за 90 дней (22.10.2026) — с сервера (/api/sku-catalog), кроме основных позиций выше:
+// уход, праймеры, матирующие салфетки и т.д. Основные позиции — первыми, остальные — по выручке.
+let SKU_CATALOG_REMOTE = null, skuCatalogLoading = false;
+function microSkuAll(){
+  const seen = new Set(MICRO_SKU_CATALOG.map(x=>x.code));
+  const extra = (SKU_CATALOG_REMOTE||[]).filter(x=> x.code && !seen.has(x.code)).map(x=>({
+    group:"Kaspi", name: x.name || "(название не найдено в базе)", code: x.code, qty: x.qty, extra: true }));
+  return MICRO_SKU_CATALOG.concat(extra);
+}
+function ensureSkuCatalogLoaded(){
+  if(SKU_CATALOG_REMOTE || skuCatalogLoading || typeof apiFetch !== "function" || !(typeof UI !== "undefined" && UI.authToken)) return;
+  skuCatalogLoading = true;
+  apiFetch("/api/sku-catalog").then(r=>{
+    SKU_CATALOG_REMOTE = (r && Array.isArray(r.items)) ? r.items : [];
+    const dl = document.getElementById("micro-sku-datalist");
+    if(dl) dl.outerHTML = microSkuDatalist();
+    if(UI.microSkuCatalogOpen && typeof renderDeskTab === "function") renderDeskTab();
+  }).catch(()=>{}).finally(()=>{ skuCatalogLoading = false; });
+}
 function microSkuDatalist(){
-  return `<datalist id="micro-sku-datalist">${MICRO_SKU_CATALOG.map(x=>`<option value="${escapeHtml(x.code)}" label="${escapeHtml(x.name)}">${escapeHtml(x.name)}</option>`).join("")}</datalist>`;
+  return `<datalist id="micro-sku-datalist">${microSkuAll().map(x=>`<option value="${escapeHtml(x.code)}" label="${escapeHtml(x.name)}">${escapeHtml(x.name)}</option>`).join("")}</datalist>`;
 }
 function tplMicroSkuCatalog(){
   const open = !!UI.microSkuCatalogOpen;
@@ -811,16 +830,16 @@ function tplMicroSkuCatalog(){
     <div class="panel" style="margin-bottom:12px">
       <div class="panel-title">
         📋 Справочник ШК / SKU
-        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">${MICRO_SKU_CATALOG.length} основных позиций — по этим кодам идут продажи в Kaspi</span>
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">${MICRO_SKU_CATALOG.length} основных позиций${SKU_CATALOG_REMOTE ? ` + ${microSkuAll().length - MICRO_SKU_CATALOG.length} других товаров с продажами в Kaspi за 90 дней (видны при поиске)` : (skuCatalogLoading ? " · загружаю остальные товары Kaspi…" : "")} — по этим кодам идут продажи в Kaspi</span>
         <button class="btn btn-ghost btn-sm" id="micro-sku-catalog-toggle">${open?"Скрыть ▴":"Показать ▾"}</button>
       </div>
       ${open ? `
-      <div class="toolbar" style="margin-bottom:8px"><input type="search" class="fill" id="micro-sku-search" placeholder="Поиск: флюид, тушь, пудра, 02…"></div>
+      <div class="toolbar" style="margin-bottom:8px"><input type="search" class="fill" id="micro-sku-search" placeholder="Поиск: флюид, праймер, салфетки, 02…"></div>
       <div class="table-wrap"><table>
         <thead><tr><th>Группа</th><th>Товар</th><th>ШК / SKU</th><th></th></tr></thead>
         <tbody>
-          ${MICRO_SKU_CATALOG.map(x=>`<tr class="micro-sku-row" data-q="${escapeHtml((x.group+" "+x.name+" "+x.code).toLowerCase())}">
-            <td style="color:var(--ink-mute)">${escapeHtml(x.group)}</td><td>${escapeHtml(x.name)}</td><td><b style="font-family:monospace">${escapeHtml(x.code)}</b></td>
+          ${microSkuAll().map(x=>`<tr class="micro-sku-row" data-extra="${x.extra?1:0}" data-q="${escapeHtml((x.group+" "+x.name+" "+x.code).toLowerCase())}"${x.extra?' style="display:none"':''}>
+            <td style="color:var(--ink-mute)">${escapeHtml(x.extra?"Kaspi":x.group)}</td><td>${escapeHtml(x.name)}${x.extra && x.qty ? ` <span style="color:var(--ink-mute);font-size:11px">· ${fmtNum(x.qty)} шт за 90 дн.</span>` : ""}</td><td><b style="font-family:monospace">${escapeHtml(x.code)}</b></td>
             <td><button class="btn btn-ghost btn-sm micro-sku-copy" data-code="${escapeHtml(x.code)}">Копировать</button></td></tr>`).join("")}
         </tbody>
       </table></div>
@@ -1723,6 +1742,12 @@ function microLinkStoriesCell(d){
   const link = storiesOnly ? "" : (d.reelsLink
     ? `<a href="${escapeHtml(normalizeLinkUrl(d.reelsLink))}" target="_blank" rel="noopener">${escapeHtml(d.reelsLink)}</a> ${inlineEditSpan("✎", d.id, 'reelsLink', d.reelsLink, 'text')}`
     : inlineEditSpan("—", d.id, 'reelsLink', '', 'text'));
+  // Ссылка на видео TikTok (22.10.2026) — у форматов с TikTok (или если ссылка уже вписана).
+  const showTT = !storiesOnly && (/TikTok/.test(microFormatOf(d)) || String(d.tiktokVideoLink||"").trim());
+  const tl = String(d.tiktokVideoLink||"").trim();
+  const ttLink = !showTT ? "" : (tl
+    ? `<span style="font-size:10.5px;color:var(--ink-mute)">TikTok:</span> <a href="${escapeHtml(normalizeLinkUrl(tl))}" target="_blank" rel="noopener">${escapeHtml(tl)}</a> ${inlineEditSpan("✎", d.id, 'tiktokVideoLink', tl, 'text')}`
+    : inlineEditSpan('<span style="font-size:10.5px;color:var(--ink-mute);text-decoration:underline dotted">+ ссылка TikTok</span>', d.id, 'tiktokVideoLink', '', 'text'));
   let stories = "";
   if(microHasStories(d)){
     const reach = d.factReachStories||0, clicks = d.storiesClicks||0;
@@ -1735,7 +1760,28 @@ function microLinkStoriesCell(d){
       <b>📱 Сторис</b> · охват ${inlineEditSpan(reach ? fmtNum(reach) : '<span style="color:var(--bad)">впишите</span>', d.id, 'factReachStories', reach, 'number')}
       · клики ${inlineEditSpan(clicks ? fmtNum(clicks) : "—", d.id, 'storiesClicks', clicks, 'number')}${ctr}<br>${storiesLinkHtml}</div>`;
   }
-  return `${fmtSel}${link?`<br>${link}`:""}${stories}`;
+  return `${fmtSel}${link?`<br>${link}`:""}${ttLink?`<br>${ttLink}`:""}${stories}`;
+}
+// История просмотров (22.10.2026): сервер сам запоминает охват/просмотры интеграции по дням, когда
+// они меняются (авто по ссылке или вручную) — d.viewsHistory = [{d, r, t, s}]. Здесь: последняя цифра,
+// сколько прибавилось с прошлого замера, и при наведении — вся история по дням.
+function microViewsTotal(e){ return (Number(e.r)||0) + (Number(e.t)||0) + (Number(e.s)||0); }
+function viewsDdmm(x){ return String(x||"").slice(8,10)+"."+String(x||"").slice(5,7); }
+function microViewsHistoryHtml(d){
+  const h = Array.isArray(d && d.viewsHistory) ? d.viewsHistory.filter(e=>e && e.d) : [];
+  if(!h.length) return "";
+  const last = h[h.length-1], prev = h.length > 1 ? h[h.length-2] : null;
+  const delta = prev ? microViewsTotal(last) - microViewsTotal(prev) : null;
+  const lines = h.slice().reverse().slice(0, 40).map((e, i, arr)=>{
+    const before = arr[i+1];
+    const dd = before ? microViewsTotal(e) - microViewsTotal(before) : null;
+    const parts = [e.r ? `Reels ${fmtNum(e.r)}` : "", e.t ? `TT ${fmtNum(e.t)}` : "", e.s ? `сторис ${fmtNum(e.s)}` : ""].filter(Boolean).join(", ");
+    return `${viewsDdmm(e.d)}: ${fmtNum(microViewsTotal(e))}${parts ? ` (${parts})` : ""}${dd != null ? ` ${dd >= 0 ? "+" : ""}${fmtNum(dd)}` : ""}`;
+  });
+  const title = "История просмотров (запоминается при каждом обновлении):\n" + lines.join("\n");
+  const txt = delta == null ? `история с ${viewsDdmm(last.d)}`
+    : `<span style="color:${delta > 0 ? "var(--ok, #2e7d32)" : "inherit"}">${delta >= 0 ? "+" : ""}${fmtNum(delta)}</span> с ${viewsDdmm(prev.d)}`;
+  return `<span class="micro-views-hist" title="${escapeHtml(title)}" style="font-size:10.5px;color:var(--ink-mute);white-space:nowrap;cursor:help;text-decoration:underline dotted">${txt}</span>`;
 }
 // CPV в работе (16.10.2026): по дорогому CPV менеджер оставляет комментарий («доснимет сторис»,
 // «сделала ещё видео»). Бесплатные доп. видео остаются ОТДЕЛЬНЫМИ строками с суммой 0 ₸ (как и заносят) —
@@ -5086,7 +5132,7 @@ function tplMicroInfluencers(){
               <td>${inlineEditSpan(fmtNum(d.cost||0)+" ₸", d.id, 'cost', d.cost||0, 'number')}</td>
               <td>${inlineEditSpan(fmtNum(d.productCost||0)+" ₸", d.id, 'productCost', d.productCost||0, 'number')}</td>
               <td>${inlineEditSpan(escapeHtml(d.paymentStatus||"—"), d.id, 'paymentStatus', d.paymentStatus||'', 'select', MICRO_PAYMENT_STATUSES)}</td>
-              <td>${inlineEditSpan(fmtNum(factReach), d.id, 'factReachTotal', factReach, 'number')}${socialViewsBadge(d,["factReachReels","factReachTT"])}${(d.factReachStories||0)>0 ? `<br><span style="font-size:10.5px;color:var(--ink-mute)">в т.ч. сторис ${fmtNum(d.factReachStories)}</span>` : ""}</td>
+              <td>${inlineEditSpan(fmtNum(factReach), d.id, 'factReachTotal', factReach, 'number')}${socialViewsBadge(d,["factReachReels","factReachTT"])}${(()=>{ const hh = microViewsHistoryHtml(d); return hh ? `<br>${hh}` : ""; })()}${(d.factReachStories||0)>0 ? `<br><span style="font-size:10.5px;color:var(--ink-mute)">в т.ч. сторис ${fmtNum(d.factReachStories)}</span>` : ""}</td>
               <td>${microCpvCell(d, cpv)}</td>
               <td>
                 ${(()=>{
@@ -6223,7 +6269,7 @@ function modalMicroDeal(existing, prefill){
     <div class="form-row">
       <div class="field"><label>Товар</label><input id="mm-product" list="product-suggestions" placeholder="Название товара как в 1С" value="${escapeHtml(d.product||'')}"></div>
       <div class="field"><label>Штрихкод (ШК) товара</label><input id="mm-barcode" placeholder="необязательно, но надёжнее" value="${escapeHtml(d.barcode||'')}"></div>
-      <div class="field"><label>Подобрать товар (добавит ШК)</label><input id="mm-sku-pick" list="mm-sku-pick-list" placeholder="начните: флюид, тушь, пудра…"><datalist id="mm-sku-pick-list">${MICRO_SKU_CATALOG.map(x=>`<option value="${escapeHtml(x.name+" — "+x.code)}"></option>`).join("")}</datalist></div>
+      <div class="field"><label>Подобрать товар (добавит ШК)</label><input id="mm-sku-pick" list="mm-sku-pick-list" placeholder="начните: флюид, праймер, салфетки…"><datalist id="mm-sku-pick-list">${microSkuAll().map(x=>`<option value="${escapeHtml(x.name+" — "+x.code)}"></option>`).join("")}</datalist></div>
       <div class="field"><label>Категория товара</label><input id="mm-product-category" value="${escapeHtml(d.productCategory||'')}"></div>
       <div class="field"><label>Статус товара</label><select id="mm-product-status">${MICRO_PRODUCT_STATUSES.map(st=>`<option ${st===d.productStatus?'selected':''}>${st}</option>`).join("")}</select></div>
     </div>
@@ -6258,7 +6304,7 @@ function modalMicroDeal(existing, prefill){
   document.getElementById("mm-cancel").onclick = closeModal;
   const skuPick = document.getElementById("mm-sku-pick");
   if(skuPick) skuPick.addEventListener("change", ()=>{
-    const hit = MICRO_SKU_CATALOG.find(x=> skuPick.value === x.name+" — "+x.code || skuPick.value.trim() === x.code);
+    const hit = microSkuAll().find(x=> skuPick.value === x.name+" — "+x.code || skuPick.value.trim() === x.code);
     if(!hit) return;
     const bc = document.getElementById("mm-barcode");
     const cur = bc.value.split(/[,;\s]+/).map(c=>c.trim()).filter(Boolean);
@@ -6888,12 +6934,13 @@ function wireDeskTab(){
     if(formatFilterEl) formatFilterEl.onchange = e=>{ UI.microFilter.format = e.target.value; renderDeskTab(); };
     const categoryFilterEl = document.getElementById("micro-category-filter");
     if(categoryFilterEl) categoryFilterEl.onchange = e=>{ UI.microFilter.category = e.target.value; renderDeskTab(); };
+    ensureSkuCatalogLoaded();
     const skuToggle = document.getElementById("micro-sku-catalog-toggle");
     if(skuToggle) skuToggle.onclick = ()=>{ UI.microSkuCatalogOpen = !UI.microSkuCatalogOpen; renderDeskTab(); };
     const skuSearch = document.getElementById("micro-sku-search");
     if(skuSearch) skuSearch.oninput = ()=>{
       const q = skuSearch.value.trim().toLowerCase();
-      document.querySelectorAll(".micro-sku-row").forEach(tr=>{ tr.style.display = !q || q.split(/\s+/).every(w=>tr.dataset.q.includes(w)) ? "" : "none"; });
+      document.querySelectorAll(".micro-sku-row").forEach(tr=>{ tr.style.display = (q ? q.split(/\s+/).every(w=>tr.dataset.q.includes(w)) : tr.dataset.extra !== "1") ? "" : "none"; });
     };
     document.querySelectorAll(".micro-sku-copy").forEach(b=>{ b.onclick = async ()=>{
       try{ await navigator.clipboard.writeText(b.dataset.code); toast("Скопировано: "+b.dataset.code); }
@@ -8080,6 +8127,27 @@ async function runSelfTests(){
       const h2 = tplDeliveries();
       if(h2.includes("@a</td>") || !h2.includes("@b</td>")) throw new Error("фильтр «Доставлено без фото» не включает закрытые массово");
     } finally { DataManager.state.orders = savedO; UI.selectedOrderIds = savedSel; UI.filters = JSON.parse(savedF); }
+  });
+  TestSuite.test("Ссылка TikTok и история просмотров в ячейке «Ссылка / сторис»; справочник ШК включает товары Kaspi с сервера", ()=>{
+    const savedR = SKU_CATALOG_REMOTE;
+    try{
+      const d = {id:1, contentFormat:"Reels + TikTok", reelsLink:"https://www.instagram.com/reel/X/", tiktokVideoLink:"https://www.tiktok.com/@a/video/123456789",
+        viewsHistory:[{d:"2026-10-20", r:1000, t:500}, {d:"2026-10-22", r:1800, t:700}]};
+      const h = microLinkStoriesCell(d);
+      if(!h.includes("tiktok.com/@a/video/123456789") || !h.includes("data-field=\"tiktokVideoLink\"")) throw new Error("ссылка TikTok");
+      const vh = microViewsHistoryHtml(d);
+      if(!vh.includes("+1") || !vh.includes("с 20.10") || !vh.includes("20.10: ")) throw new Error("прирост просмотров с прошлого замера: "+vh);
+      if(microViewsHistoryHtml({id:2}) !== "") throw new Error("без истории — пусто");
+      const h2 = microLinkStoriesCell({id:2, contentFormat:"Reels + TikTok"});
+      if(!h2.includes("+ ссылка TikTok")) throw new Error("пустая ссылка TikTok");
+      const h3 = microLinkStoriesCell({id:3, contentFormat:"Сторис"});
+      if(h3.includes("ссылка TikTok")) throw new Error("у сторис TikTok не нужен");
+      SKU_CATALOG_REMOTE = [{code:"4620400203526", name:"дубль"}, {code:"SKUTEST1", name:"Джелли праймер", qty:12}];
+      const all = microSkuAll();
+      if(all.filter(x=>x.code==="4620400203526").length !== 1) throw new Error("основные позиции не дублируются");
+      if(!all.some(x=>x.code==="SKUTEST1" && x.extra)) throw new Error("товары Kaspi с сервера в справочнике");
+      if(!microSkuDatalist().includes("SKUTEST1")) throw new Error("подсказка ШК в таблице — тоже со всеми товарами");
+    } finally { SKU_CATALOG_REMOTE = savedR; }
   });
   TestSuite.test("Справочник ШК: панель над таблицей микро (свёрнута/раскрыта), подсказка ШК в таблице и подбор в карточке", ()=>{
     const savedO = UI.microSkuCatalogOpen;
