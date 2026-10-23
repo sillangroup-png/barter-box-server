@@ -784,6 +784,10 @@ app.get("/api/readonly/deals", requireReadonlyKey, (req,res)=>{
   });
 });
 
+// ---------- Коннектор для Claude (MCP), 23.10.2026 — см. mcp.js ----------
+// Адрес: https://<сайт>/mcp/<MCP_KEY>. Только чтение: данные Barter Box + SELECT-запросы к Supabase.
+require("./mcp.js")(app, { getState: ()=> state, pgPool, readonlyScrub });
+
 // ---------- state & health ----------
 // /api/state отдаёт ВСЮ базу (заказы, телефоны, адреса, выручку, ROMI) — без
 // requireAuth это было бы публично доступно кому угодно по прямой ссылке.
