@@ -381,6 +381,25 @@ async function apiFetch(url, options){
 }
 const jsonHeaders = {"Content-Type":"application/json"};
 
+// Фото доставки (27.10.2026): перед отправкой уменьшаем до 1600 px по большей стороне (JPEG ~0.82) —
+// фото с телефона по 5–15 МБ на мобильном интернете часто не доходили. Если браузер не умеет открыть
+// формат (например HEIC) — отправляем как есть (сервер принимает до 25 МБ).
+async function shrinkPhoto(file){
+  try{
+    if(!file || !/^image\//.test(file.type||"") || /heic|heif/i.test(file.type||"") || file.size < 400*1024) return file;
+    const url = URL.createObjectURL(file);
+    const img = await new Promise((ok, bad)=>{ const i = new Image(); i.onload = ()=>ok(i); i.onerror = bad; i.src = url; });
+    const MAX = 1600, k = Math.min(1, MAX / Math.max(img.naturalWidth||1, img.naturalHeight||1));
+    const c = document.createElement("canvas");
+    c.width = Math.round((img.naturalWidth||1)*k); c.height = Math.round((img.naturalHeight||1)*k);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    URL.revokeObjectURL(url);
+    const blob = await new Promise(ok=> c.toBlob(ok, "image/jpeg", 0.82));
+    if(!blob || blob.size >= file.size) return file;
+    return new File([blob], (String(file.name||"photo").replace(/\.[^.]+$/,"")||"photo")+".jpg", {type:"image/jpeg"});
+  }catch(e){ return file; }
+}
+
 const Api = {
   getState: ()=> apiFetch("/api/state"),
   health: ()=> apiFetch("/api/health"),
@@ -396,9 +415,10 @@ const Api = {
   createOrder: (o)=> apiFetch("/api/orders", {method:"POST", headers:jsonHeaders, body:JSON.stringify(o)}),
   updateOrder: (id, changes)=> apiFetch("/api/orders/"+id, {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
   deleteOrder: (id)=> apiFetch("/api/orders/"+id, {method:"DELETE"}),
-  deliverOrder: (id, file, comment)=>{
+  deliverOrder: async (id, file, comment)=>{
+    const small = await shrinkPhoto(file);
     const fd = new FormData();
-    fd.append("photo", file);
+    fd.append("photo", small, small.name || file.name || "photo.jpg");
     fd.append("comment", comment || "");
     return apiFetch("/api/orders/"+id+"/deliver", {method:"POST", body: fd});
   },
@@ -3761,7 +3781,7 @@ function tplDeliveries(){
               </td>
               <td>${statusBadge(o.status)}</td>
               <td>${escapeHtml(o.deliveredAt || o.assignedAt || "—")}</td>
-              <td>${o.photo ? `<button class="btn btn-ghost btn-sm view-photo-btn" data-id="${o.id}">Фото</button>` : (o.status==="delivered" ? (o.closedWithoutPhoto ? '<span style="color:var(--ink-mute);font-size:11px" title="Закрыто массово без фото">закрыто без фото</span>' : '<span style="color:var(--bad)">нет</span>') : "—")}</td>
+              <td>${o.photo ? `<button class="btn btn-ghost btn-sm view-photo-btn" data-id="${o.id}">Фото</button>` : (o.status==="delivered" ? (o.closedWithoutPhoto ? '<span style="color:var(--ink-mute);font-size:11px" title="Закрыто массово без фото">закрыто без фото</span>' : '<span style="color:var(--bad)">нет</span>') : "—")}${UI.readOnly || o.status==="cancelled" ? "" : ` <button class="btn btn-ghost btn-sm mgr-photo-btn" data-id="${o.id}" title="Прикрепить фото и поставить «Доставлено»">📷 ${o.photo ? "Заменить" : "Добавить фото"}</button>`}</td>
               <td>
                 ${o.status==="delivered" ? `
                 <select class="order-closure-select" data-id="${o.id}">
@@ -5675,6 +5695,38 @@ function modalNewReturn(){
   };
 }
 
+// Логист/менеджер сам прикрепляет фото и ставит «Доставлено» (27.10.2026) — если водитель не смог.
+function modalManagerDeliverPhoto(o){
+  if(!o) return;
+  openModal(`
+    <h3>Доставка #${o.id} · ${escapeHtml(o.blogger||"")}</h3>
+    <p style="color:var(--ink-soft);margin-bottom:8px">Фото подтверждения — статус станет «Доставлено»${o.photo ? " (старое фото заменится)" : ""}.</p>
+    <div class="field"><label>Фото</label><input type="file" id="mgr-photo-input" accept="image/*"></div>
+    <img id="mgr-photo-preview" class="photo-preview hide">
+    <div class="field"><label>Комментарий (необязательно)</label><textarea id="mgr-photo-comment">${escapeHtml(o.driverComment||"")}</textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="mgr-photo-cancel">Отмена</button>
+      <button class="btn btn-primary" id="mgr-photo-save" disabled>Сохранить: Доставлено</button>
+    </div>`);
+  let file = null;
+  document.getElementById("mgr-photo-cancel").onclick = closeModal;
+  document.getElementById("mgr-photo-input").onchange = (e)=>{
+    file = e.target.files[0] || null;
+    document.getElementById("mgr-photo-save").disabled = !file;
+    if(!file) return;
+    const img = document.getElementById("mgr-photo-preview");
+    img.src = URL.createObjectURL(file); img.classList.remove("hide");
+  };
+  document.getElementById("mgr-photo-save").onclick = async ()=>{
+    if(!file){ toast("Выберите фото", true); return; }
+    const btn = document.getElementById("mgr-photo-save");
+    try{
+      await withBusy(btn, ()=> Api.deliverOrder(o.id, file, document.getElementById("mgr-photo-comment").value.trim()));
+      closeModal(); toast("Фото прикреплено, статус «Доставлено» ✅");
+      await DataManager.refresh(); render();
+    }catch(e){ toast(e.message, true); }
+  };
+}
 function modalViewPhoto(order){
   openModal(`
     <h3>Подтверждение доставки #${order.id}</h3>
@@ -6570,6 +6622,9 @@ function wireDeskTab(){
     document.querySelectorAll(".view-photo-btn").forEach(btn=>{
       btn.onclick = ()=> modalViewPhoto(DataManager.find("orders", parseInt(btn.dataset.id,10)));
     });
+    document.querySelectorAll(".mgr-photo-btn").forEach(btn=>{
+      btn.onclick = ()=> modalManagerDeliverPhoto(DataManager.find("orders", parseInt(btn.dataset.id,10)));
+    });
     document.querySelectorAll(".del-order-btn").forEach(btn=>{
       btn.onclick = async ()=>{
         try{ await Api.deleteOrder(parseInt(btn.dataset.id,10)); await DataManager.refresh(); render(); }
@@ -7448,7 +7503,7 @@ function renderDriverOrderModal(){
       <h3>Доставка #${o.id}</h3>
       <p style="color:var(--ink-soft);margin-bottom:8px">Без фото доставка не закрывается.</p>
       <div class="field"><label>Фото подтверждения</label>
-        <input type="file" id="photo-input" accept="image/*" capture="environment">
+        <input type="file" id="photo-input" accept="image/*">
       </div>
       <img id="photo-preview" class="photo-preview hide">
       <div class="field"><label>Комментарий (необязательно)</label><textarea id="d-comment" placeholder="Получил лично / оставил на ресепшене…"></textarea></div>
@@ -7462,6 +7517,7 @@ function renderDriverOrderModal(){
       const file = e.target.files[0];
       if(!file) return;
       photoFile = file;
+      document.getElementById("m-confirm-photo").disabled = false;
       const reader = new FileReader();
       reader.onload = ()=>{
         const img = document.getElementById("photo-preview");
@@ -10742,6 +10798,21 @@ async function runSelfTests(){
       UI.role = savedRole;
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
+  });
+  TestSuite.test("Доставки: у логиста кнопка 📷 (прикрепить фото → Доставлено), модалка открывается; у водителя фото можно и из галереи", ()=>{
+    const savedO = DataManager.state.orders, savedF = JSON.stringify(UI.filters||{}), savedRO = UI.readOnly;
+    try{
+      DataManager.state.orders = [{id:9951, blogger:"@ph", city:"Алматы", address:"x", phone:"1", box:"Б", status:"assigned", photo:null}];
+      UI.filters = {campaign:"", driver:"", city:"", status:"", search:"", dateFrom:"", dateTo:""};
+      UI.readOnly = false;
+      const html = tplDeliveries();
+      if(!html.includes('mgr-photo-btn') || !html.includes('data-id="9951"')) throw new Error("кнопка 📷 у логиста");
+      modalManagerDeliverPhoto(DataManager.state.orders[0]);
+      if(!document.getElementById("mgr-photo-input") || !document.getElementById("mgr-photo-save").disabled) throw new Error("модалка фото логиста");
+      closeModal();
+      if(/capture="environment"/.test(renderDriverOrderModal.toString())) throw new Error("у водителя не должно быть только камеры");
+      if(typeof shrinkPhoto !== "function") throw new Error("сжатие фото");
+    } finally { DataManager.state.orders = savedO; UI.filters = JSON.parse(savedF); UI.readOnly = savedRO; }
   });
   TestSuite.test("tplDeliveries: фильтр '__no_photo__' показывает только доставленные заказы без фото", ()=>{
     const savedOrders = DataManager.state.orders, savedDrivers = DataManager.state.drivers, savedCampaigns = DataManager.state.campaigns;
