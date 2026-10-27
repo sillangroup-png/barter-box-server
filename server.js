@@ -677,8 +677,16 @@ const upload = multer({
       cb(null, `order-${req.params.id}-${Date.now()}-${Math.round(Math.random()*1e6)}${ext}`);
     },
   }),
-  limits: {fileSize: 8*1024*1024},
+  limits: {fileSize: 25*1024*1024},
 });
+// Фото доставки: ошибку загрузки (слишком большой файл и т.п.) отдаём понятным текстом, а не HTML-страницей 500.
+function uploadPhoto(req, res, next){
+  upload.single("photo")(req, res, (err)=>{
+    if(!err) return next();
+    const msg = err.code === "LIMIT_FILE_SIZE" ? "Фото больше 25 МБ — сделайте фото ещё раз или отправьте скриншот" : "Не удалось загрузить фото: " + err.message;
+    res.status(400).json({error: msg});
+  });
+}
 
 // ---------- Read-only API-ключ для внешних ассистентов ----------
 // Ключ задаётся переменной окружения READONLY_API_KEY (минимум 24 символа). Он НЕ даёт
@@ -693,8 +701,14 @@ function requireReadonlyKey(req, res, next){
   const same = (k) => { const a = Buffer.from(given), b = Buffer.from(k); return k.length >= 24 && a.length === b.length && require("crypto").timingSafeEqual(a, b); };
   if(same(READONLY_API_KEY)){ req.readonlyScope = "full"; return next(); }
   if(same(READONLY_BOT_KEY)){ req.readonlyScope = "bot"; return next(); }
+  // Боты, которые умеют только открывать ссылку (без заголовков) — ключ бота можно передать в адресе:
+  // /api/readonly/deals?key=<READONLY_BOT_KEY> (27.10.2026). Полный ключ разработчиков — только в заголовке.
+  if(req.query && req.query.key){
+    const q = String(req.query.key), b = Buffer.from(READONLY_BOT_KEY), a = Buffer.from(q);
+    if(READONLY_BOT_KEY.length >= 24 && a.length === b.length && require("crypto").timingSafeEqual(a, b)){ req.readonlyScope = "bot"; return next(); }
+  }
   if(READONLY_API_KEY.length < 24 && READONLY_BOT_KEY.length < 24) return res.status(503).json({error:"read-only ключ не настроен на сервере"});
-  return res.status(401).json({error:"неверный ключ"});
+  return res.status(401).json({error: READONLY_BOT_KEY.length < 24 ? "неверный ключ (на сервере не задан READONLY_BOT_KEY — ключ бота не работает)" : "неверный ключ"});
 }
 function pickFields(o, keys){ const r = {}; keys.forEach(k=>{ if(o[k] !== undefined) r[k] = o[k]; }); return r; }
 const RO_LARGE_FIELDS = ["id","blogerLogin","platform","product","barcode","responsible","bloggerCategory","status","plannedDate","publishedDate","plannedReach","reach","plannedClicks","clicks","plannedCost","cost","plannedContribution","autoContributionKzt","autoContributionStatus","likes","comments","saves"];
@@ -961,12 +975,13 @@ app.delete("/api/orders/:id", requireAuth, (req,res)=>{
   res.json({ok:true});
 });
 
-app.post("/api/orders/:id/deliver", requireAuth, upload.single("photo"), (req,res)=>{
+app.post("/api/orders/:id/deliver", requireAuth, uploadPhoto, (req,res)=>{
   const o = state.orders.find(o=>o.id===+req.params.id);
   if(!o) return res.status(404).json({error:"not found"});
   if(!req.file) return res.status(400).json({error:"Фото обязательно для статуса «Доставлено»"});
   o.status = "delivered";
   o.photo = "/uploads/" + req.file.filename;
+  o.closedWithoutPhoto = false;
   o.driverComment = (req.body && req.body.comment) || "";
   o.deliveredAt = new Date().toLocaleString("ru-RU");
   o.bitrixSynced = false;
