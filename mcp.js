@@ -34,7 +34,7 @@ module.exports = function mountMcp(app, { getState, pgPool, readonlyScrub }) {
   const MICRO_SHORT = ["id","responsible","blogerName","instagramAccount","tiktokAccount","followers","bloggerCategory","product","productCategory","barcode",
     "cost","productCost","paymentStatus","productStatus","videoStatus","plannedDate","publishDate","contentFormat","reelsLink","tiktokVideoLink",
     "factReachReels","factReachTT","factReachStories","storiesClicks","storiesLink","autoContributionKzt","autoContributionStatus","manualContribution",
-    "problemReason","problemReason2","problemStatus","problemNote","cpvNote","viewsHistory","city"];
+    "problemReason","problemReason2","problemStatus","problemNote","cpvNote","viewsHistory","city","tz","tzGroup"];
   const LARGE_SHORT = ["id","blogerLogin","platform","product","barcode","responsible","bloggerCategory","status","plannedDate","publishedDate","plannedReach","reach",
     "plannedClicks","clicks","plannedCost","cost","plannedContribution","autoContributionKzt","autoContributionStatus","likes","comments","saves","reelsLink","viewsHistory"];
   const pick = (o, keys) => { const r = {}; for (const k of keys) if (o[k] !== undefined && o[k] !== "" && o[k] !== null) r[k] = o[k]; return r; };
@@ -242,8 +242,9 @@ module.exports = function mountMcp(app, { getState, pgPool, readonlyScrub }) {
   }
 
   app.post("/mcp/:key", async (req, res) => {
+    // НЕ 401: на 401 Claude начинает вход через OAuth («Couldn't register with … sign-in service»).
     if (KEY.length < 24) return res.status(503).json({ error: "MCP_KEY не задан в Render — коннектор выключен" });
-    if (!keyOk(req.params.key)) return res.status(401).json({ error: "неверный ключ" });
+    if (!keyOk(req.params.key)) return res.status(403).json({ error: "неверный ключ в адресе коннектора" });
     const body = req.body;
     if (Array.isArray(body)) {
       const out = (await Promise.all(body.map(handle))).filter(Boolean);
@@ -252,7 +253,16 @@ module.exports = function mountMcp(app, { getState, pgPool, readonlyScrub }) {
     const out = await handle(body);
     return out ? res.json(out) : res.status(202).end();
   });
-  app.get("/mcp/:key", (req, res) => res.status(405).set("Allow", "POST").json({ error: "используйте POST (MCP Streamable HTTP)" }));
+  // Проверка в браузере: открыть адрес коннектора — покажет, всё ли настроено.
+  app.get("/mcp/:key", (req, res) => {
+    const say = (code, text) => res.status(code).type("text/plain; charset=utf-8").send(text);
+    if (KEY.length < 24) return say(503, "Коннектор выключен: в Render не задана переменная MCP_KEY (или короче 24 символов).");
+    if (!keyOk(req.params.key)) return say(403, "Ключ в адресе не совпадает с MCP_KEY в Render.");
+    return say(200, "OK: коннектор Barter Box работает. Этот адрес вставьте в Claude → Настройки → Коннекторы → Добавить свой.");
+  });
+  // Входа через OAuth нет — коннектор без авторизации (ключ в адресе).
+  app.get(["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/*", "/.well-known/oauth-authorization-server", "/.well-known/oauth-authorization-server/*", "/.well-known/openid-configuration"],
+    (req, res) => res.status(404).json({ error: "OAuth не используется" }));
   app.delete("/mcp/:key", (req, res) => res.status(405).end());
   return { TOOLS, handle };
 };
