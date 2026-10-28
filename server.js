@@ -712,7 +712,7 @@ function requireReadonlyKey(req, res, next){
 }
 function pickFields(o, keys){ const r = {}; keys.forEach(k=>{ if(o[k] !== undefined) r[k] = o[k]; }); return r; }
 const RO_LARGE_FIELDS = ["id","blogerLogin","platform","product","barcode","responsible","bloggerCategory","status","plannedDate","publishedDate","plannedReach","reach","plannedClicks","clicks","plannedCost","cost","plannedContribution","autoContributionKzt","autoContributionStatus","likes","comments","saves"];
-const RO_MICRO_FIELDS = ["id","responsible","blogerName","instagramAccount","tiktokAccount","followers","product","productCategory","barcode","bloggerCategory","plannedDate","publishDate","videoStatus","paymentStatus","cost","productCost","reelsLink","tiktokVideoLink","factReachReels","factReachTT","contentFormat","factReachStories","storiesClicks","storiesLink","autoContributionKzt","autoContributionStatus","problemReason","problemReason2","problemStatus","problemNote"];
+const RO_MICRO_FIELDS = ["id","responsible","blogerName","instagramAccount","tiktokAccount","followers","product","productCategory","barcode","bloggerCategory","plannedDate","publishDate","videoStatus","paymentStatus","cost","productCost","reelsLink","tiktokVideoLink","factReachReels","factReachTT","contentFormat","factReachStories","storiesClicks","storiesLink","autoContributionKzt","autoContributionStatus","problemReason","problemReason2","problemStatus","problemNote","tz","tzGroup"];
 const RO_DROP_KEYS = new Set(["iin"]);
 const RO_KEEP_DIGITS_KEYS = new Set(["phone","barcode","kaspiCode","kaspi_code","sku","code","autoContributionNote"]);
 function readonlyScrub(v, key){
@@ -1478,6 +1478,7 @@ app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
     };
     // Проблемный блогер и сторис — только если колонки есть в файле (старые CSV их не стирают).
     const has = k => Object.prototype.hasOwnProperty.call(r, k);
+    if(has("тз")) fields.tz = String(r["тз"]||"").trim().slice(0,120);
     if(has("формат")) fields.contentFormat = ["Сторис","Reels + Сторис","Сторис + Reels + TikTok"].includes(String(r["формат"]||"").trim()) ? String(r["формат"]).trim() : "";
     if(has("охват сторис")) fields.factReachStories = parseInt(r["охват сторис"] || 0, 10) || 0;
     if(has("клики сторис")) fields.storiesClicks = parseInt(r["клики сторис"] || 0, 10) || 0;
@@ -1765,6 +1766,25 @@ async function loadSkuCatalog(){
     ORDER BY s.kzt DESC NULLS LAST LIMIT 600`, [["CANCELLED", "CANCELLING"]]);
   return rows.map(r=>({ code: String(r.code), name: r.name ? String(r.name).trim() : "", qty: Math.round(Number(r.qty)||0), kzt: Math.round(Number(r.kzt)||0), last: r.last || "" }));
 }
+/* ---------- Справочник ТЗ для микро (28.10.2026) ----------
+   Группы по товарам: {group, all (для всех товаров), match (слова/ШК для подбора к строке через |), items: [варианты ТЗ]}.
+   Пока state.tzCatalog нет — фронтенд показывает встроенный список. Менять может менеджер/маркетолог (не только просмотр). */
+app.put("/api/micro-tz-catalog", requireAuth, (req,res)=>{
+  const s = req.session || {};
+  if(s.role !== "manager" && s.role !== "marketer") return res.status(403).json({error:"Справочник ТЗ меняет менеджер или маркетолог"});
+  const raw = req.body && req.body.catalog;
+  if(!Array.isArray(raw) || raw.length > 100) return res.status(400).json({error:"Неверный справочник"});
+  const clean = [];
+  for(const g of raw){
+    const group = String((g && g.group) || "").trim().slice(0,80);
+    if(!group) continue;
+    const items = [...new Set((Array.isArray(g.items) ? g.items : []).map(x=>String(x||"").trim().slice(0,120)).filter(Boolean))].slice(0,60);
+    clean.push({ group, all: !!g.all, match: String(g.match||"").trim().slice(0,300), items });
+  }
+  state.tzCatalog = clean;
+  persist();
+  res.json(clean);
+});
 app.get("/api/sku-catalog", requireAuth, async (req,res)=>{
   const fresh = skuCatalogCache.items && Date.now() - skuCatalogCache.at < 6*3600*1000;
   if(!fresh){
