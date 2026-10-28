@@ -4988,6 +4988,7 @@ function tplMicroInfluencers(){
     ${tplMicroPlanProducts(UI.microMonth)}
     ${tplMicroCategorySummary()}
     ${tplMicroSkuCatalog()}
+    ${tplMicroTzCatalog()}
     ${microSkuDatalist()}
 
     <div class="toolbar" style="margin-bottom:8px;align-items:center;flex-wrap:wrap">
@@ -5124,7 +5125,7 @@ function tplMicroInfluencers(){
         <thead><tr>
           <th class="rowcheck"><input type="checkbox" id="micro-check-all"></th>
           <th>#</th>
-          <th class="sticky-col">Блогер</th><th title="Проблемный блогер: причина и статус. Подсвечивается весь блогер — все его интеграции.">Проблема</th><th>Категория блогера</th><th>Ответственный</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th>Город</th>
+          <th class="sticky-col">Блогер</th><th title="Проблемный блогер: причина и статус. Подсвечивается весь блогер — все его интеграции.">Проблема</th><th>Категория блогера</th><th>Ответственный</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th title="ТЗ для блогера: варианты зависят от товара + общие (персональное, не по ТЗ). Справочник — над таблицей.">ТЗ</th><th>Город</th>
           ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
           ${sortableTh("Вклад в продажи (план/факт)","sales",mf.sort)}<th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th>${sortableTh("ROAS, ×","romi",mf.sort)}
         <th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (сумма оплаты + стоимость переданного товара). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th><th title="Вклад по заказам Kaspi: продажи товара сверх обычного уровня в дни выхода. Обычный уровень — среднее за дни до выхода при той же цене, без других блогеров этого товара (если цена была другой — дни после). Окно — с дня выхода, пока продажи не вернутся к обычным: у мелких до 7 дней, у крупных — только день выхода и следующий. Плюс шлейф: 50% подъёма продаж над уровнем до кампании, не попавшего в пики, делится по охвату (по корню: охват в 4 раза больше — доля в 2 раза больше) с затуханием (мелкие — до 14 дней, вдвое за 3 дня; крупные — только день выхода и следующий, сторис висят 24 ч). Скидка вычитается по прошлым сменам цены. Если в те же дни выходили другие блогеры этого товара — прирост делится по охвату (крупные и мелкие делят день, только если у меньшей стороны охват от 20% другой; иначе весь день — большей). Всплеска нет — 0. «—» — если обычный уровень определить не из чего. Ручной вклад менеджера главнее.">${UI.collapsedColGroups.has("infl-auto") ? `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">+ Авто</span>` : `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">− Авто (Kaspi)</span>`}</th>
@@ -5148,6 +5149,7 @@ function tplMicroInfluencers(){
               <td>${d.instagramAccount?`<a href="${escapeHtml(normalizeInstagramUrl(d.instagramAccount))}" target="_blank" rel="noopener">IG</a> `:""}${inlineEditSpan(fmtNum(d.followers||0), d.id, 'followers', d.followers||0, 'number')}</td>
               <td>${d.tiktokAccount?`<a href="${escapeHtml(d.tiktokAccount)}" target="_blank" rel="noopener">TT</a> `:""}${inlineEditSpan(fmtNum(d.followersTT||0), d.id, 'followersTT', d.followersTT||0, 'number')}</td>
               <td>${inlineEditSpan(escapeHtml(d.product||"—"), d.id, 'product', d.product||'', 'text')}<br><span style="color:var(--ink-mute);font-size:11px">ШК ${inlineEditSpan(escapeHtml(d.barcode||"—"), d.id, 'barcode', d.barcode||'', 'text')}</span></td>
+              <td>${microTzCell(d)}</td>
               <td>${inlineEditSpan(escapeHtml(d.city||"—"), d.id, 'city', d.city||'', 'text')}</td>
               <td>${inlineEditSpan(fmtNum(d.cost||0)+" ₸", d.id, 'cost', d.cost||0, 'number')}</td>
               <td>${inlineEditSpan(fmtNum(d.productCost||0)+" ₸", d.id, 'productCost', d.productCost||0, 'number')}</td>
@@ -5183,7 +5185,7 @@ function tplMicroInfluencers(){
                 <button class="btn btn-danger btn-sm del-micro-btn" data-id="${d.id}">✕</button>
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="24">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="25">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
       ${pager}
@@ -6206,6 +6208,120 @@ function tplMicroCalendar(){
 }
 
 // Ячейка «Проблема»: своя отметка этой интеграции, либо (серым) отметка блогера из другой его интеграции.
+// ---------- ТЗ для блогера (28.10.2026) ----------
+// Варианты ТЗ зависят от товара: в ячейке сначала варианты товара этой строки (по названию/ШК), потом общие
+// (персональное, не по ТЗ), потом остальные товары. Справочник — state.tzCatalog (меняют на сайте, панель
+// «Справочник ТЗ»); пока его не трогали — встроенный список ниже. В строке хранится tz (вариант) и tzGroup (товар).
+const MICRO_TZ_DEFAULT = [
+  {group:"Для всех товаров", all:true, match:"", items:["Персональное", "Не по ТЗ / в своём стиле"]},
+  {group:"Тональный флюид Velvet", match:"флюид|velvet|4620400203526|4620400203533", items:["Аналог флюида Chanel", "Невидимое покрытие", "Школа", "Кружок в Telegram", "Золотое яблоко"]},
+  {group:"Минеральная пудра", match:"пудр|powder|4650358450284", items:["Ластик для кожи", "Пудра без талька"]},
+  {group:"Стик-контур Perfectrix", match:"контур|скульпт|4620400204318|4620400204370", items:["−5 кг", "Для новичков"]},
+  {group:"Стик-румяна Perfectrix", match:"румян|blush|4620400204387|4620400204394", items:["Для новичков / тающие румяна", "Аналог Rhode"]},
+  {group:"Тушь LashLust", match:"тушь|lash|SKUA000932200", items:["Нарощенные ресницы", "Кукольные ресницы", "Подача через юмор", "Обучение / лайфхак"]},
+  {group:"Палетка 3в1", match:"палетк|3в1|3 в 1|SKUA000582900|SKUA000583000", items:["Макияж за 4 000 ₸ / одной палеткой", "Макияж за 3 минуты", "Визажисты пользуются"]},
+  {group:"Черри блеск", match:"черри|cherry|блеск|вишн|4620400204820", items:["Стеклянные губы"]},
+];
+function microTzCatalog(){
+  const c = DataManager.state && DataManager.state.tzCatalog;
+  return Array.isArray(c) && c.length ? c : MICRO_TZ_DEFAULT;
+}
+function microTzMatches(g, d){
+  if(!g || g.all || !g.match) return false;
+  const text = (String(d.product||"") + " " + String(d.barcode||"")).toLowerCase();
+  return String(g.match).split("|").map(w=>w.trim().toLowerCase()).filter(Boolean).some(w=> text.includes(w));
+}
+function microTzOptionValue(group, item){ return group + "\u0001" + item; }
+function microTzCell(d){
+  const cat = microTzCatalog();
+  const cur = String(d.tz||"").trim();
+  if(UI.readOnly) return cur ? `<span title="${escapeHtml(d.tzGroup||"")}">${escapeHtml(cur)}</span>` : "—";
+  const own = cat.filter(g=> microTzMatches(g, d)), common = cat.filter(g=> g.all), rest = cat.filter(g=> !g.all && !own.includes(g));
+  const curVal = cur ? microTzOptionValue(d.tzGroup||"", cur) : "";
+  let found = false;
+  const og = (g, label)=> (g.items||[]).length ? `<optgroup label="${escapeHtml(label)}">${g.items.map(it=>{
+    const v = microTzOptionValue(g.group, it);
+    const sel = cur && it===cur && (!d.tzGroup || d.tzGroup===g.group) && !found;
+    if(sel) found = true;
+    return `<option value="${escapeHtml(v)}"${sel?" selected":""}>${escapeHtml(it)}</option>`;
+  }).join("")}</optgroup>` : "";
+  const groupsHtml = own.map(g=>og(g, "★ " + g.group)).join("") + common.map(g=>og(g, g.group)).join("") + rest.map(g=>og(g, g.group)).join("");
+  const orphan = cur && !found ? `<option value="${escapeHtml(curVal)}" selected>${escapeHtml(cur)} (нет в справочнике)</option>` : "";
+  return `<select class="micro-tz-select" data-id="${d.id}" style="max-width:190px;font-size:12px" title="${escapeHtml(cur ? (d.tzGroup ? d.tzGroup + ": " : "") + cur : "ТЗ не выбрано")}">
+    <option value="">— ТЗ —</option>${orphan}${groupsHtml}</select>`;
+}
+function tplMicroTzCatalog(){
+  const open = !!UI.microTzCatalogOpen;
+  const cat = microTzCatalog();
+  const total = cat.reduce((a,g)=> a + (g.items||[]).length, 0);
+  return `
+    <div class="panel" style="margin-bottom:12px">
+      <div class="panel-title">
+        📝 Справочник ТЗ
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">${cat.length} групп, ${total} вариантов — в колонке «ТЗ» сначала показываются варианты товара этой строки</span>
+        <button class="btn btn-ghost btn-sm" id="micro-tz-catalog-toggle">${open?"Скрыть ▴":"Показать ▾"}</button>
+      </div>
+      ${open ? `
+      <div class="table-wrap"><table>
+        <thead><tr><th>Товар / группа</th><th>Варианты ТЗ</th><th title="По каким словам в названии товара или ШК группа подбирается к строке (через |)">Подбор по товару</th></tr></thead>
+        <tbody>
+          ${cat.map((g,gi)=>`<tr>
+            <td><b>${escapeHtml(g.group)}</b>${g.all?'<br><span style="color:var(--ink-mute);font-size:11px">для всех товаров</span>':""}</td>
+            <td>${(g.items||[]).map((it,ii)=>`<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:10px;background:var(--canvas);border:1px solid var(--line);white-space:nowrap">${escapeHtml(it)}${UI.readOnly?"":` <span class="micro-tz-del" data-g="${gi}" data-i="${ii}" style="cursor:pointer;color:var(--ink-mute)" title="Убрать вариант">×</span>`}</span>`).join("")}
+              ${UI.readOnly?"":`<div style="margin-top:4px;display:flex;gap:4px"><input class="micro-tz-new" data-g="${gi}" placeholder="новый вариант" style="flex:1;min-width:140px"><button class="btn btn-ghost btn-sm micro-tz-add" data-g="${gi}">+ Добавить</button></div>`}</td>
+            <td style="font-size:11px;color:var(--ink-mute)">${g.all ? "—" : escapeHtml(g.match||"")}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>
+      ${UI.readOnly ? "" : `<div class="toolbar" style="margin-top:8px">
+        <input id="micro-tz-new-group" placeholder="Новый товар (группа), например: Спрей-фиксатор" style="min-width:240px">
+        <input id="micro-tz-new-match" placeholder="Слова/ШК для подбора через |, например: фиксатор|4650358457429" style="min-width:300px">
+        <button class="btn btn-ghost btn-sm" id="micro-tz-add-group">+ Добавить товар</button>
+      </div>`}` : ""}
+    </div>`;
+}
+async function saveMicroTzCatalog(cat){
+  const saved = await apiFetch("/api/micro-tz-catalog", {method:"PUT", headers:jsonHeaders, body:JSON.stringify({catalog: cat})});
+  DataManager.state.tzCatalog = saved;
+  renderDeskTab();
+}
+function wireMicroTz(){
+  const tzToggle = document.getElementById("micro-tz-catalog-toggle");
+  if(tzToggle) tzToggle.onclick = ()=>{ UI.microTzCatalogOpen = !UI.microTzCatalogOpen; renderDeskTab(); };
+  const copyCat = ()=> JSON.parse(JSON.stringify(microTzCatalog()));
+  document.querySelectorAll(".micro-tz-add").forEach(b=>{ b.onclick = async ()=>{
+    const gi = +b.dataset.g, inp = document.querySelector(`.micro-tz-new[data-g="${gi}"]`);
+    const v = String(inp && inp.value || "").trim();
+    if(!v){ toast("Впишите вариант ТЗ", true); return; }
+    const cat = copyCat();
+    if((cat[gi].items||[]).some(x=> x.toLowerCase()===v.toLowerCase())){ toast("Такой вариант уже есть", true); return; }
+    cat[gi].items = (cat[gi].items||[]).concat([v]);
+    try{ await saveMicroTzCatalog(cat); toast("Добавлено: " + v); }catch(e){ toast(e.message, true); }
+  }; });
+  document.querySelectorAll(".micro-tz-del").forEach(x=>{ x.onclick = async ()=>{
+    const cat = copyCat(), gi = +x.dataset.g, ii = +x.dataset.i;
+    const name = cat[gi].items[ii];
+    cat[gi].items.splice(ii, 1);
+    try{ await saveMicroTzCatalog(cat); toast("Убрано из справочника: " + name + " (в строках, где выбрано, останется)"); }catch(e){ toast(e.message, true); }
+  }; });
+  const addGroup = document.getElementById("micro-tz-add-group");
+  if(addGroup) addGroup.onclick = async ()=>{
+    const g = String(document.getElementById("micro-tz-new-group").value||"").trim();
+    const m = String(document.getElementById("micro-tz-new-match").value||"").trim();
+    if(!g){ toast("Впишите название товара", true); return; }
+    const cat = copyCat();
+    if(cat.some(x=> x.group.toLowerCase()===g.toLowerCase())){ toast("Такой товар уже есть", true); return; }
+    cat.push({group:g, all:false, match: m || g.toLowerCase(), items:[]});
+    try{ await saveMicroTzCatalog(cat); toast("Товар добавлен — теперь добавьте ему варианты ТЗ"); }catch(e){ toast(e.message, true); }
+  };
+  document.querySelectorAll(".micro-tz-select").forEach(sel=>{ sel.onchange = async ()=>{
+    const id = parseInt(sel.dataset.id,10);
+    const [group, item] = sel.value ? sel.value.split("\u0001") : ["", ""];
+    try{ await Api.updateMicroDeal(id, {tz: item||"", tzGroup: group||""}); await DataManager.refresh(); renderDeskTab(); }
+    catch(e){ toast(e.message, true); }
+  }; });
+}
+
 function microProblemCell(d, pb){
   const btn = (inner, title) => `<span class="micro-problem-btn" data-id="${d.id}" style="cursor:pointer" title="${escapeHtml(title)}">${inner}</span>`;
   if(d.problemReason){
@@ -6990,6 +7106,7 @@ function wireDeskTab(){
     const categoryFilterEl = document.getElementById("micro-category-filter");
     if(categoryFilterEl) categoryFilterEl.onchange = e=>{ UI.microFilter.category = e.target.value; renderDeskTab(); };
     ensureSkuCatalogLoaded();
+    wireMicroTz();
     const skuToggle = document.getElementById("micro-sku-catalog-toggle");
     if(skuToggle) skuToggle.onclick = ()=>{ UI.microSkuCatalogOpen = !UI.microSkuCatalogOpen; renderDeskTab(); };
     const skuSearch = document.getElementById("micro-sku-search");
@@ -7144,7 +7261,7 @@ function wireDeskTab(){
       // которые реально пушатся в lines.push(...) ниже — иначе заголовок "уезжает" относительно
       // данных (была живая регрессия: сюда забыли добавить "ответственный"/"категория блогера",
       // когда их добавили в сами строки — эти два столбца тихо съезжали на всё, что после блогера).
-      const header = ["id","ответственный","блогер","категория блогера","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий","проблема","причина 2","статус проблемы","комментарий проблемы","формат","охват сторис","клики сторис","ссылка на сторис","комментарий cpv"];
+      const header = ["id","ответственный","блогер","категория блогера","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий","проблема","причина 2","статус проблемы","комментарий проблемы","формат","охват сторис","клики сторис","ссылка на сторис","комментарий cpv","тз"];
       const lines = [header.map(csvEscape).join(",")];
       // "deals" — переменная из tplMicroInfluencers() (учитывает поиск/фильтр), а этот обработчик
       // живёт в wireDeskTab() — отдельной функции, где такой переменной нет. Раньше это падало
@@ -7164,7 +7281,7 @@ function wireDeskTab(){
           d.plannedDate||"", d.publishDate||"", d.notes||"",
           d.problemReason||"", d.problemReason2||"", d.problemReason ? microProblemStatusOf(d) : "", d.problemNote||"",
           microFormatOf(d), d.factReachStories||0, d.storiesClicks||0, d.storiesLink||"",
-          d.cpvNote||"",
+          d.cpvNote||"", d.tz||"",
         ].map(csvEscape).join(","));
       });
       downloadFile("barter-box-micro-influencers-export.csv", "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
@@ -10798,6 +10915,27 @@ async function runSelfTests(){
       UI.role = savedRole;
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
+  });
+  TestSuite.test("ТЗ: колонка в микро-таблице, варианты товара строки первыми, общие для всех, справочник", ()=>{
+    const savedC = DataManager.state.tzCatalog, savedRO = UI.readOnly, savedOpen = UI.microTzCatalogOpen;
+    try{
+      DataManager.state.tzCatalog = undefined; UI.readOnly = false;
+      const d = {id:77, product:"Тушь LashLust", barcode:"SKUA000932200", tz:"Кукольные ресницы", tzGroup:"Тушь LashLust"};
+      const h = microTzCell(d);
+      const iOwn = h.indexOf("★ Тушь LashLust"), iAll = h.indexOf("Для всех товаров"), iFl = h.indexOf("Тональный флюид Velvet");
+      if(!(iOwn > 0 && iOwn < iAll && iAll < iFl)) throw new Error("порядок групп: товар строки → общие → остальные");
+      if(!/<option value="Тушь LashLust\u0001Кукольные ресницы" selected>/.test(h)) throw new Error("выбранное ТЗ");
+      if(!h.includes("Персональное") || !h.includes("Не по ТЗ / в своём стиле")) throw new Error("общие варианты");
+      const h2 = microTzCell({id:78, product:"x", tz:"Старое ТЗ"});
+      if(!h2.includes("Старое ТЗ (нет в справочнике)")) throw new Error("ТЗ не из справочника не теряется");
+      DataManager.state.tzCatalog = [{group:"Для всех товаров", all:true, items:["Персональное"]}, {group:"Спрей", match:"спрей", items:["Фиксация 16 ч"]}];
+      if(!microTzCell({id:79, product:"Спрей-фиксатор"}).includes("★ Спрей")) throw new Error("справочник с сервера");
+      UI.microTzCatalogOpen = true;
+      const p = tplMicroTzCatalog();
+      if(!p.includes("micro-tz-add") || !p.includes("micro-tz-add-group") || !p.includes("Фиксация 16 ч")) throw new Error("панель справочника");
+      UI.readOnly = true;
+      if(microTzCell(d).includes("<select")) throw new Error("только просмотр — без списка");
+    } finally { DataManager.state.tzCatalog = savedC; UI.readOnly = savedRO; UI.microTzCatalogOpen = savedOpen; }
   });
   TestSuite.test("Доставки: у логиста кнопка 📷 (прикрепить фото → Доставлено), модалка открывается; у водителя фото можно и из галереи", ()=>{
     const savedO = DataManager.state.orders, savedF = JSON.stringify(UI.filters||{}), savedRO = UI.readOnly;
