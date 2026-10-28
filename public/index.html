@@ -6250,15 +6250,35 @@ function microTzCell(d){
   return `<select class="micro-tz-select" data-id="${d.id}" style="max-width:190px;font-size:12px" title="${escapeHtml(cur ? (d.tzGroup ? d.tzGroup + ": " : "") + cur : "ТЗ не выбрано")}">
     <option value="">— ТЗ —</option>${orphan}${groupsHtml}</select>`;
 }
+// Счётчик: сколько интеграций с каждым ТЗ (за месяц из фильтра таблицы, иначе за всё время).
+function microTzCounts(){
+  const month = (UI.microFilter && UI.microFilter.month) || "";
+  const list = (DataManager.state.microInfluencerDeals||[]).filter(d=> !month || String(microDealDate(d)).slice(0,7)===month);
+  const byKey = new Map();
+  let withTz = 0;
+  for(const d of list){
+    const t = String(d.tz||"").trim();
+    if(!t) continue;
+    withTz++;
+    const k = (d.tzGroup||"") + "\u0001" + t;
+    byKey.set(k, (byKey.get(k)||0) + 1);
+  }
+  // ТЗ без группы (например, из загрузки CSV) считаем у варианта с тем же названием.
+  const countOf = (group, item)=> (byKey.get(group + "\u0001" + item) || 0) + (byKey.get("\u0001" + item) || 0);
+  return { month, total: list.length, withTz, countOf };
+}
 function tplMicroTzCatalog(){
   const open = !!UI.microTzCatalogOpen;
   const cat = microTzCatalog();
   const total = cat.reduce((a,g)=> a + (g.items||[]).length, 0);
+  const cnt = microTzCounts();
+  const period = cnt.month ? `за ${cnt.month.slice(5,7)}.${cnt.month.slice(0,4)}` : "за всё время";
+  const chipCount = (n)=> `<b style="margin-left:4px;padding:0 6px;border-radius:8px;background:${n ? "var(--accent, #e0559a)" : "var(--line, #ddd)"};color:${n ? "#fff" : "var(--ink-mute)"};font-size:11px">${n}</b>`;
   return `
     <div class="panel" style="margin-bottom:12px">
       <div class="panel-title">
         📝 Справочник ТЗ
-        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">${cat.length} групп, ${total} вариантов — в колонке «ТЗ» сначала показываются варианты товара этой строки</span>
+        <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">ТЗ выбрано в <b>${cnt.withTz}</b> из ${cnt.total} интеграций ${period} · ${cat.length} групп, ${total} вариантов</span>
         <button class="btn btn-ghost btn-sm" id="micro-tz-catalog-toggle">${open?"Скрыть ▴":"Показать ▾"}</button>
       </div>
       ${open ? `
@@ -6266,8 +6286,8 @@ function tplMicroTzCatalog(){
         <thead><tr><th>Товар / группа</th><th>Варианты ТЗ</th><th title="По каким словам в названии товара или ШК группа подбирается к строке (через |)">Подбор по товару</th></tr></thead>
         <tbody>
           ${cat.map((g,gi)=>`<tr>
-            <td><b>${escapeHtml(g.group)}</b>${g.all?'<br><span style="color:var(--ink-mute);font-size:11px">для всех товаров</span>':""}</td>
-            <td>${(g.items||[]).map((it,ii)=>`<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:10px;background:var(--canvas);border:1px solid var(--line);white-space:nowrap">${escapeHtml(it)}${UI.readOnly?"":` <span class="micro-tz-del" data-g="${gi}" data-i="${ii}" style="cursor:pointer;color:var(--ink-mute)" title="Убрать вариант">×</span>`}</span>`).join("")}
+            <td><b>${escapeHtml(g.group)}</b> ${chipCount((g.items||[]).reduce((a,it)=> a + cnt.countOf(g.group, it), 0))}${g.all?'<br><span style="color:var(--ink-mute);font-size:11px">для всех товаров</span>':""}</td>
+            <td>${(g.items||[]).map((it,ii)=>`<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:10px;background:var(--canvas);border:1px solid var(--line);white-space:nowrap" title="Интеграций с этим ТЗ ${period}">${escapeHtml(it)}${chipCount(cnt.countOf(g.group, it))}${UI.readOnly?"":` <span class="micro-tz-del" data-g="${gi}" data-i="${ii}" style="cursor:pointer;color:var(--ink-mute)" title="Убрать вариант">×</span>`}</span>`).join("")}
               ${UI.readOnly?"":`<div style="margin-top:4px;display:flex;gap:4px"><input class="micro-tz-new" data-g="${gi}" placeholder="новый вариант" style="flex:1;min-width:140px"><button class="btn btn-ghost btn-sm micro-tz-add" data-g="${gi}">+ Добавить</button></div>`}</td>
             <td style="font-size:11px;color:var(--ink-mute)">${g.all ? "—" : escapeHtml(g.match||"")}</td>
           </tr>`).join("")}
@@ -10931,6 +10951,13 @@ async function runSelfTests(){
       DataManager.state.tzCatalog = [{group:"Для всех товаров", all:true, items:["Персональное"]}, {group:"Спрей", match:"спрей", items:["Фиксация 16 ч"]}];
       if(!microTzCell({id:79, product:"Спрей-фиксатор"}).includes("★ Спрей")) throw new Error("справочник с сервера");
       UI.microTzCatalogOpen = true;
+      const savedDeals = DataManager.state.microInfluencerDeals, savedMF = JSON.stringify(UI.microFilter);
+      DataManager.state.microInfluencerDeals = [{id:1, tz:"Фиксация 16 ч", tzGroup:"Спрей", publishDate:"2026-10-05"}, {id:2, tz:"Фиксация 16 ч", tzGroup:"Спрей", publishDate:"2026-09-05"}, {id:3, publishDate:"2026-10-06"}];
+      UI.microFilter.month = "2026-10";
+      const pc = tplMicroTzCatalog();
+      DataManager.state.microInfluencerDeals = savedDeals; UI.microFilter = JSON.parse(savedMF);
+      if(!pc.includes("ТЗ выбрано в <b>1</b> из 2")) throw new Error("счётчик за месяц: " + pc.slice(0, 400));
+      if(!/Фиксация 16 ч<b[^>]*>1<\/b>/.test(pc)) throw new Error("счётчик у варианта");
       const p = tplMicroTzCatalog();
       if(!p.includes("micro-tz-add") || !p.includes("micro-tz-add-group") || !p.includes("Фиксация 16 ч")) throw new Error("панель справочника");
       UI.readOnly = true;
