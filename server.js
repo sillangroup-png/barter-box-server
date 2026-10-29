@@ -664,7 +664,9 @@ function activeIndexPath(){
   return BUNDLED_HTML_PATH;
 }
 // Перехватываем index.html ДО express.static, иначе статика отдаст версию из образа.
-app.get(["/", "/index.html"], (req,res)=> res.sendFile(activeIndexPath()));
+// no-cache (29.10.2026): браузер каждый раз сверяется с сервером (по ETag — быстро), иначе часть людей
+// после деплоя днями сидела на старой версии страницы (например, без колонки «ТЗ»).
+app.get(["/", "/index.html"], (req,res)=>{ res.set("Cache-Control", "no-cache"); res.sendFile(activeIndexPath()); });
 
 app.use("/uploads", express.static(UPLOADS_DIR, {maxAge: "30d"}));
 app.use(express.static(path.join(__dirname, "public")));
