@@ -5884,7 +5884,7 @@ function modalMyReminders(team){
       const arrow = l.dir==="out" ? "→" : l.dir==="in" ? "←" : "·";
       return `<div>${escapeHtml(when)} ${arrow} ${d ? `<b>${escapeHtml(d.blogerName||"")}</b>: ` : ""}${escapeHtml(l.text||"")}</div>`;
     }).join("");
-    box.innerHTML = `<div style="border-top:1px solid var(--line);padding-top:8px"><b>🤖 Координатор WhatsApp: ${mode}</b>${st.manager ? ` · тест: ${escapeHtml(st.manager)}` : ""}${st.phones && st.phones.length ? ` · номера: ${st.phones.length}` : ""} · в очереди ${st.queue||0} · отправка: ${st.transport==="bitrix" ? "через Битрикс" : st.transport==="wazzup" ? "через Wazzup" : "не настроена"}${st.transport==="bitrix" ? ` · бот: ${st.bot ? "подключён" : "нет"}` : ""}${st.wazzup ? ` · <a href="#" id="wz-info">каналы и шаблоны Wazzup</a>` : ""} · <a href="#" id="bx-info">Битрикс: линии</a>${st.transport==="bitrix" && !UI.readOnly ? ` · <a href="#" id="bx-bot">${st.bot ? "переподключить бота" : "подключить бота"}</a> · <a href="#" id="bx-test">тест: отправить на тестовый номер</a>` : ""}</div><div id="wz-info-box"></div>${logHtml ? `<div style="margin-top:6px;max-height:160px;overflow:auto">${logHtml}</div>` : ""}`;
+    box.innerHTML = `<div style="border-top:1px solid var(--line);padding-top:8px"><b>🤖 Координатор WhatsApp: ${mode}</b>${st.manager ? ` · тест: ${escapeHtml(st.manager)}` : ""}${st.phones && st.phones.length ? ` · номера: ${st.phones.length}` : ""} · в очереди ${st.queue||0} · отправка: ${st.transport==="bitrix" ? "через Битрикс" : st.transport==="wazzup" ? "через Wazzup" : "не настроена"}${st.transport==="bitrix" ? ` · бот: ${st.bot ? "подключён" : "нет"}` : ""}${st.wazzup ? ` · <a href="#" id="wz-info">каналы и шаблоны Wazzup</a>` : ""} · <a href="#" id="bx-info">Битрикс: линии</a>${st.transport==="bitrix" && !UI.readOnly ? ` · <a href="#" id="bx-bot">${st.bot ? "переподключить бота" : "подключить бота"}</a> · <a href="#" id="bx-test">тест: отправить на тестовый номер</a>` : ""}${st.transport==="wazzup" && !UI.readOnly ? ` · <a href="#" id="wz-hook">Wazzup: подключить ответы блогеров</a> · <a href="#" id="bx-test">тест: отправить на тестовый номер</a>` : ""}</div><div id="wz-info-box"></div>${logHtml ? `<div style="margin-top:6px;max-height:160px;overflow:auto">${logHtml}</div>` : ""}`;
     const showBox = (html)=>{ const b = document.getElementById("wz-info-box"); if(b) b.innerHTML = `<div style="margin-top:6px;padding:6px;border:1px solid var(--line);border-radius:8px;user-select:text">${html}</div>`; };
     const bxBot = document.getElementById("bx-bot");
     if(bxBot) bxBot.onclick = async (e)=>{
@@ -5892,10 +5892,16 @@ function modalMyReminders(team){
       try{ const r = await apiFetch("/api/coord/bitrix-bot/register", {method:"POST"}); showBox(`✅ Бот «Barter Box» создан в Битриксе (ID ${escapeHtml(String(r.botId))}). Теперь администратор: Контакт-центр → открытая линия с WhatsApp → настройки → «Чат-бот» → выбрать «Barter Box». Бот только читает первое сообщение диалога и сразу передаёт чат менеджеру.`); }
       catch(err){ showBox("❌ " + escapeHtml(err.message)); }
     };
+    const wzHook = document.getElementById("wz-hook");
+    if(wzHook) wzHook.onclick = async (e)=>{
+      e.preventDefault(); showBox("подключаю…");
+      try{ await apiFetch("/api/coord/wazzup/connect", {method:"POST"}); showBox("✅ Готово: ответы блогеров из Wazzup теперь приходят в Barter Box (только номера из теста, остальная переписка не трогается)."); }
+      catch(err){ showBox("❌ " + escapeHtml(err.message)); }
+    };
     const bxTest = document.getElementById("bx-test");
     if(bxTest) bxTest.onclick = async (e)=>{
       e.preventDefault(); showBox("отправляю тестовое сообщение…");
-      try{ const r = await apiFetch("/api/coord/test-send", {method:"POST"}); showBox(`✅ Отправлено (${escapeHtml(r.blogger||"")}): контакт ${escapeHtml(String(r.contactId))}, чат ${escapeHtml(String(r.chatId))}, от пользователя ${escapeHtml(String(r.userId))}. Проверьте WhatsApp на тестовом номере.`); }
+      try{ const r = await apiFetch("/api/coord/test-send", {method:"POST"}); showBox(`✅ Отправлено (${escapeHtml(r.blogger||"")}) ${escapeHtml(r.via||"")}. Проверьте WhatsApp на тестовом номере.`); }
       catch(err){ showBox("❌ " + escapeHtml(err.message)); }
     };
     const bx = document.getElementById("bx-info");
