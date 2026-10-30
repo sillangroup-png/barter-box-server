@@ -930,6 +930,9 @@ app.get("/api/readonly/deals", requireReadonlyKey, (req,res)=>{
 // ---------- Коннектор для Claude (MCP), 23.10.2026 — см. mcp.js ----------
 // Адрес: https://<сайт>/mcp/<MCP_KEY>. Только чтение: данные Barter Box + SELECT-запросы к Supabase.
 require("./mcp.js")(app, { getState: ()=> state, pgPool, readonlyScrub });
+// ИИ-координатор блогеров через WhatsApp/Wazzup (30.10.2026, тест на одном менеджере) — см. coordinator.js.
+// Выключен, пока в Render не задан COORD_MODE=dry (проверка без отправки) или on.
+require("./coordinator.js")(app, { getState: ()=> state, persist: ()=> persist(), requireAuth });
 
 // ---------- state & health ----------
 // /api/state отдаёт ВСЮ базу (заказы, телефоны, адреса, выручку, ROMI) — без
@@ -2031,7 +2034,9 @@ async function placementsTick(label){
   await pullAttributionFact().catch(e=> console.error(`Pull-fact (${label}):`, e.message));
   await maybeSyncDriveFolders().catch(e=> console.error(`Drive (${label}):`, e.message));
   // Просмотры по ссылкам (Apify) сами больше НЕ обновляются (22.10.2026, решение Нины) —
-  // только вручную по секретной ссылке /api/social-views/force.
+  // только вручную по секретной ссылке /api/social-views/force. Включить снова (для координатора, 30.10.2026):
+  // SOCIAL_VIEWS_AUTO=1 в Render — новые ссылки при ближайшей проверке, дальше раз в 3 дня.
+  if(process.env.SOCIAL_VIEWS_AUTO === "1") maybeSyncSocialViews();
 }
 placementsTick("старт");
 setInterval(()=> placementsTick("интервал"), 3*60*1000);

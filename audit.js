@@ -71,6 +71,7 @@ module.exports = function createAudit({ dataDir, getState }) {
     const st = als.getStore();
     const req = st && st.req;
     if (!req) return { who: "система", sys: true };
+    if (/\/api\/wazzup\//.test(req.originalUrl || req.url || "")) return { who: "координатор (WhatsApp)", sys: true };
     const s = req.session || {};
     let name = "";
     try { name = decodeURIComponent(String(req.headers["x-actor"] || "")).trim().slice(0, 60); } catch (e) {}
