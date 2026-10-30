@@ -309,6 +309,32 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     catch (e) { out.templatesError = e.message; }
     res.json(out);
   });
+  // Битрикс24 (входящий вебхук BITRIX_WEBHOOK_URL в Render): проверка прав и список открытых линий и ботов.
+  // Только чтение — ничего в Битриксе не меняет. Нужна, чтобы узнать ID линии с WhatsApp (Wazzup).
+  async function bitrix(method, params) {
+    let base = String(process.env.BITRIX_WEBHOOK_URL || "").trim();
+    if (!base) throw new Error("В Render не задан BITRIX_WEBHOOK_URL");
+    if (!base.endsWith("/")) base += "/";
+    const r = await fetch(base + method + ".json", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(params || {}) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error) throw new Error(`Битрикс ${method}: ${j.error_description || j.error || r.status}`);
+    return j.result;
+  }
+  app.get("/api/coord/bitrix-info", requireAuth, async (req, res) => {
+    if (!staff(req, res)) return;
+    if (!process.env.BITRIX_WEBHOOK_URL) return res.status(400).json({ error: "В Render не задан BITRIX_WEBHOOK_URL" });
+    const out = {};
+    try { out.scope = await bitrix("scope"); } catch (e) { out.scopeError = e.message; }
+    try {
+      const l = await bitrix("imopenlines.config.list.get", { PARAMS: { select: ["ID", "LINE_NAME", "ACTIVE"] } });
+      out.lines = (Array.isArray(l) ? l : []).map((x) => ({ id: x.ID, name: x.LINE_NAME, active: x.ACTIVE }));
+    } catch (e) { out.linesError = e.message; }
+    try {
+      const b = await bitrix("imbot.bot.list");
+      out.bots = Object.values(b || {}).map((x) => ({ id: x.ID, code: x.CODE, type: x.TYPE, openline: x.OPENLINE }));
+    } catch (e) { out.botsError = e.message; }
+    res.json(out);
+  });
   app.post("/api/coord/events/:id/read", requireAuth, (req, res) => {
     if (!staff(req, res)) return;
     const e = C().events.find((x) => x.id === req.params.id);
