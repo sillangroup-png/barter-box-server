@@ -3381,6 +3381,7 @@ function renderDeskShell(){
       <div class="top-spacer"></div>
       <span class="conn-dot" id="conn-dot" title="Связь с сервером"></span>
       <div class="role-pill">${roleLabel()}</div>
+      ${(()=>{ if(!(UI.role==="manager" || UI.role==="marketer") || !UI.actorName) return ""; const n = myRemindersSummary(); return `<button class="btn btn-ghost btn-sm" id="reminders-btn" title="Мои напоминания: просрочено, сегодня, скоро, нет номера WhatsApp">🔔${n.urgent ? ` <b style="background:var(--bad,#d33);color:#fff;border-radius:9px;padding:0 6px;font-size:11px">${n.urgent}</b>` : (n.total ? ` <span style="color:var(--ink-mute)">${n.total}</span>` : "")}</button>`; })()}
       <button class="btn btn-ghost btn-sm" id="actor-btn" title="Ваше имя для истории изменений — нажмите, чтобы сменить">👤 ${escapeHtml(UI.actorName || "кто вы?")}</button>
       ${UI.role==="manager" || UI.role==="marketer" ? `<button class="btn btn-ghost btn-sm" id="audit-btn" title="Кто, что и когда менял; удалённое и затёртое можно вернуть">🕘 Журнал</button>` : ""}
       <button class="btn btn-ghost" id="logout-btn">Выйти</button>
@@ -3400,6 +3401,8 @@ function renderDeskShell(){
   document.getElementById("logout-btn").onclick = logout;
   const actorBtn = document.getElementById("actor-btn");
   if(actorBtn) actorBtn.onclick = modalActorName;
+  const remBtn = document.getElementById("reminders-btn");
+  if(remBtn) remBtn.onclick = ()=> modalMyReminders();
   const auditBtn = document.getElementById("audit-btn");
   if(auditBtn) auditBtn.onclick = ()=> modalAudit({});
   if(!UI.actorName && (UI.role==="manager" || UI.role==="marketer") && !UI.actorAsked){ UI.actorAsked = true; setTimeout(modalActorName, 300); }
@@ -5744,6 +5747,135 @@ function modalNewReturn(){
       closeModal(); toast("Запись добавлена"); await DataManager.refresh(); render();
     }catch(e){ toast(e.message, true); }
   };
+}
+
+// ---------- Напоминания менеджеру (30.10.2026) ----------
+// Имя при входе («👤 Марина» или «Марина маркетолог») = ответственный в строке («Марина»): сравниваем по
+// первому слову имени (имена у всех уникальные). Руководитель группы может включить «моя команда».
+// Считается прямо из таблицы микро, без сервера: просрочено / сегодня / скоро (2 дня) / нет номера WhatsApp.
+// Позже сюда же придут события из WhatsApp (Wazzup): ответ, перенос, вопрос, видео.
+const REMINDER_SOON_DAYS = 2, REMINDER_OVERDUE_MAX_DAYS = 45;
+function personKey(name){ return String(name||"").toLowerCase().replace(/ё/g,"е").trim().split(/[\s,.;()\-–—\/]+/).filter(Boolean)[0] || ""; }
+function actorMatchesResponsible(actor, responsible){
+  const a = String(actor||"").toLowerCase().replace(/ё/g,"е").split(/[\s,.;()\-–—\/]+/).filter(Boolean);
+  const r = personKey(responsible);
+  return !!r && a.includes(r);
+}
+// Номер WhatsApp → 7XXXXXXXXXX (Казахстан/Россия) или "" если не похож на номер.
+function waNumber(raw){
+  let x = String(raw||"").replace(/\.0+$/,"").replace(/\D/g,"");
+  if(x.length === 11 && x[0] === "8") x = "7" + x.slice(1);
+  if(x.length === 10 && x[0] === "7") x = "7" + x;
+  return /^7\d{10}$/.test(x) ? x : "";
+}
+function myLeadMembers(actor){
+  const g = MICRO_RESPONSIBLE_GROUPS.find(g=> actorMatchesResponsible(actor, g.lead));
+  return g ? g.members : null;
+}
+function myReminders(opts){
+  const actor = UI.actorName || "";
+  const team = opts && opts.team ? (myLeadMembers(actor) || []) : [];
+  const mine = d => actorMatchesResponsible(actor, d.responsible) || team.some(t=> personKey(t) === personKey(d.responsible));
+  const today = todayStr();
+  const soonEnd = addDaysYMD(today, REMINDER_SOON_DAYS), oldest = addDaysYMD(today, -REMINDER_OVERDUE_MAX_DAYS);
+  const out = {overdue:[], today:[], soon:[], nophone:[]};
+  for(const d of DataManager.state.microInfluencerDeals || []){
+    if(!mine(d) || microDealPublished(d)) continue;
+    if(microProblemStatusOf(d) === "Отказ от блогера") continue;
+    const pd = String(d.plannedDate||"").slice(0,10);
+    if(!pd) continue;
+    let bucket = null;
+    if(pd < today && pd >= oldest) bucket = "overdue";
+    else if(pd === today) bucket = "today";
+    else if(pd > today && pd <= soonEnd) bucket = "soon";
+    if(!bucket) continue;
+    out[bucket].push(d);
+    if(!waNumber(d.phone)) out.nophone.push(d);
+  }
+  out.overdue.sort((a,b)=> String(a.plannedDate).localeCompare(String(b.plannedDate)));
+  out.soon.sort((a,b)=> String(a.plannedDate).localeCompare(String(b.plannedDate)));
+  return out;
+}
+function addDaysYMD(ymd, n){ const d = new Date(ymd + "T12:00:00"); d.setDate(d.getDate() + n); return toLocalYMD(d); }
+// События от координатора (WhatsApp): вопрос, перенос, стоп, видео, ссылка — адресованы ответственному строки.
+function myCoordEvents(team){
+  const c = DataManager.state.coord;
+  if(!c || !Array.isArray(c.events)) return [];
+  const actor = UI.actorName || "";
+  const members = team ? (myLeadMembers(actor) || []) : [];
+  return c.events.filter(e=> !e.read && (actorMatchesResponsible(actor, e.to) || members.some(m=> personKey(m) === personKey(e.to)))).slice().reverse();
+}
+function myRemindersSummary(){
+  try{
+    const r = myReminders(), ev = myCoordEvents().filter(e=> !e.info).length;
+    return {urgent: r.overdue.length + r.today.length + ev, total: r.overdue.length + r.today.length + r.soon.length + ev};
+  }catch(e){ return {urgent:0, total:0}; }
+}
+const COORD_EVENT_ICON = {question:"❓", move:"📆", stop:"⛔", media:"🎬", link:"🔗", overdue:"⏰", error:"⚠️"};
+function coordEventHtml(e){
+  const when = (()=>{ try{ return new Date(e.at).toLocaleString("ru-RU",{timeZone:"Asia/Almaty", day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}); }catch(x){ return ""; } })();
+  return `<div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--line)">
+    <span>${COORD_EVENT_ICON[e.kind]||"•"}</span>
+    <div style="flex:1;min-width:220px"><b>${escapeHtml(e.blogger||"")}</b> <span style="color:var(--ink-mute);font-size:11px">${escapeHtml(when)} · ${escapeHtml(e.to||"")}</span><br>${escapeHtml(e.text||"")}${e.url ? ` <a href="${escapeHtml(e.url)}" target="_blank" rel="noopener">открыть</a>` : ""}</div>
+    ${e.proposedDate && !UI.readOnly ? `<button class="btn btn-primary btn-sm coord-accept" data-id="${e.id}">Принять дату ${escapeHtml(e.proposedDate.slice(8,10)+"."+e.proposedDate.slice(5,7))}</button>` : ""}
+    ${e.dealId ? `<button class="btn btn-ghost btn-sm reminder-open" data-id="${e.dealId}">Открыть</button>` : ""}
+    ${UI.readOnly ? "" : `<button class="btn btn-ghost btn-sm coord-read" data-id="${e.id}">Готово</button>`}
+  </div>`;
+}
+function reminderRowHtml(d){
+  const wa = waNumber(d.phone);
+  const pd = String(d.plannedDate||"");
+  return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--line)">
+    <b>${escapeHtml(d.blogerName||"")}</b>
+    <span style="color:var(--ink-mute)">${escapeHtml(d.product||"—")} · план ${escapeHtml(pd.slice(8,10)+"."+pd.slice(5,7))} · ${escapeHtml(d.responsible||"")}</span>
+    ${d.coordNext && d.coordNext.text ? `<span style="font-size:11px;color:var(--ink-mute)" title="Координатор WhatsApp (тест)">🤖 ${escapeHtml(d.coordNext.text)}</span>` : ""}
+    <span style="flex:1"></span>
+    ${wa ? `<a class="btn btn-ghost btn-sm" href="https://wa.me/${wa}" target="_blank" rel="noopener" title="Открыть чат WhatsApp">💬 WhatsApp</a>` : `<span style="color:var(--bad);font-size:12px" title="Номер не похож на WhatsApp: ${escapeHtml(String(d.phone||"пусто"))}">нет номера</span>`}
+    <button class="btn btn-ghost btn-sm reminder-open" data-id="${d.id}">Открыть</button>
+  </div>`;
+}
+function modalMyReminders(team){
+  const isLead = !!myLeadMembers(UI.actorName);
+  const r = myReminders({team: !!team});
+  const sec = (title, list, hint)=> `<div style="margin:10px 0 4px"><b>${title}</b> <span style="color:var(--ink-mute)">${list.length}${hint?` · ${hint}`:""}</span></div>${list.length ? list.map(reminderRowHtml).join("") : '<div style="color:var(--ink-mute);font-size:12px">нет</div>'}`;
+  openModal(`
+    <h3>🔔 Напоминания — ${escapeHtml(UI.actorName||"")}${team ? " и команда" : ""}</h3>
+    <p style="color:var(--ink-soft);font-size:12px;margin-bottom:6px">Интеграции микро, где вы ответственная (по имени при входе), ещё не опубликованы и есть плановая дата.${isLead ? ` <a href="#" id="rem-team">${team ? "Только мои" : "Показать с командой"}</a>` : ""}</p>
+    <div style="max-height:62vh;overflow:auto">
+      ${(()=>{ const ev = myCoordEvents(!!team); return ev.length ? `<div style="margin:6px 0 4px"><b>💬 От блогеров (WhatsApp)</b> <span style="color:var(--ink-mute)">${ev.length}</span></div>${ev.map(coordEventHtml).join("")}` : ""; })()}
+      ${sec("⏰ Просрочено", r.overdue, `плановая дата прошла (до ${REMINDER_OVERDUE_MAX_DAYS} дней)`)}
+      ${sec("📅 Сегодня", r.today)}
+      ${sec("🔜 Скоро", r.soon, `в ближайшие ${REMINDER_SOON_DAYS} дня`)}
+      ${sec("📵 Нет номера WhatsApp", r.nophone, "у строк выше — без номера бот не сможет написать")}
+      <div id="coord-status" style="margin-top:12px;font-size:12px;color:var(--ink-mute)"></div>
+    </div>
+    <div class="modal-actions"><button class="btn btn-ghost" id="rem-close">Закрыть</button></div>`);
+  document.getElementById("rem-close").onclick = closeModal;
+  const t = document.getElementById("rem-team");
+  if(t) t.onclick = (e)=>{ e.preventDefault(); closeModal(); modalMyReminders(!team); };
+  document.querySelectorAll(".reminder-open").forEach(b=>{ b.onclick = ()=>{
+    const d = (DataManager.state.microInfluencerDeals||[]).find(x=> x.id === parseInt(b.dataset.id,10));
+    if(d){ closeModal(); modalMicroDeal(d); }
+  }; });
+  document.querySelectorAll(".coord-read").forEach(b=>{ b.onclick = async ()=>{
+    try{ await withBusy(b, ()=> apiFetch("/api/coord/events/"+b.dataset.id+"/read", {method:"POST"})); await DataManager.refresh(); closeModal(); modalMyReminders(team); render(); }catch(e){ toast(e.message, true); }
+  }; });
+  document.querySelectorAll(".coord-accept").forEach(b=>{ b.onclick = async ()=>{
+    try{ await withBusy(b, ()=> apiFetch("/api/coord/events/"+b.dataset.id+"/accept-date", {method:"POST"})); toast("Новая дата сохранена"); await DataManager.refresh(); closeModal(); modalMyReminders(team); render(); }catch(e){ toast(e.message, true); }
+  }; });
+  // Состояние координатора и его журнал (что отправлено / получено / решено).
+  apiFetch("/api/coord/status").then(st=>{
+    const box = document.getElementById("coord-status");
+    if(!box || !st) return;
+    const mode = st.mode === "on" ? "🟢 работает" : st.mode === "dry" ? "🟡 тест без отправки" : "⚪ выключен";
+    const logHtml = (st.log||[]).slice(0, 25).map(l=>{
+      const when = (()=>{ try{ return new Date(l.at).toLocaleString("ru-RU",{timeZone:"Asia/Almaty", day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}); }catch(x){ return ""; } })();
+      const d = l.dealId ? (DataManager.state.microInfluencerDeals||[]).find(x=> x.id===l.dealId) : null;
+      const arrow = l.dir==="out" ? "→" : l.dir==="in" ? "←" : "·";
+      return `<div>${escapeHtml(when)} ${arrow} ${d ? `<b>${escapeHtml(d.blogerName||"")}</b>: ` : ""}${escapeHtml(l.text||"")}</div>`;
+    }).join("");
+    box.innerHTML = `<div style="border-top:1px solid var(--line);padding-top:8px"><b>🤖 Координатор WhatsApp: ${mode}</b>${st.manager ? ` · тест: ${escapeHtml(st.manager)}` : ""}${st.phones && st.phones.length ? ` · номера: ${st.phones.length}` : ""} · в очереди ${st.queue||0}${st.mode!=="off" && !st.wazzup ? " · нет ключа Wazzup" : ""}</div>${logHtml ? `<div style="margin-top:6px;max-height:160px;overflow:auto">${logHtml}</div>` : ""}`;
+  }).catch(()=>{});
 }
 
 // ---------- Журнал изменений (29.10.2026) ----------
@@ -11115,6 +11247,38 @@ async function runSelfTests(){
       UI.role = savedRole;
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
+  });
+  TestSuite.test("Напоминания: имя при входе = ответственный (по первому слову), просрочено/сегодня/скоро/нет номера", ()=>{
+    const saved = DataManager.state.microInfluencerDeals, savedA = UI.actorName;
+    try{
+      const t0 = todayStr();
+      DataManager.state.microInfluencerDeals = [
+        {id:1, responsible:"Марина", blogerName:"a", plannedDate:addDaysYMD(t0,-3), videoStatus:"не опубликовано", phone:"87077500509.0"},
+        {id:2, responsible:"Марина", blogerName:"b", plannedDate:t0, videoStatus:"не опубликовано", phone:""},
+        {id:3, responsible:"Марина", blogerName:"c", plannedDate:addDaysYMD(t0,1), videoStatus:"не опубликовано", phone:"8 708 570 7069"},
+        {id:4, responsible:"Марина", blogerName:"d", plannedDate:addDaysYMD(t0,1), videoStatus:"опубликовано", phone:"87070000000"},
+        {id:5, responsible:"Сая", blogerName:"e", plannedDate:t0, videoStatus:"не опубликовано", phone:"87070000000"},
+        {id:6, responsible:"Марина", blogerName:"f", plannedDate:addDaysYMD(t0,10), videoStatus:"не опубликовано"},
+      ];
+      UI.actorName = "Марина маркетолог";
+      const savedCoord = DataManager.state.coord;
+      DataManager.state.coord = {events:[{id:"e1", to:"Марина", kind:"move", blogger:"a", dealId:1, text:"перенос", proposedDate:"2026-11-05", read:false}, {id:"e2", to:"Сая", kind:"question", text:"?", read:false}]};
+      if(myCoordEvents().length!==1 || myRemindersSummary().urgent!==3) throw new Error("события координатора для своего менеджера: "+JSON.stringify(myRemindersSummary()));
+      modalMyReminders();
+      if(!document.body.innerHTML.includes("Принять дату 05.11")) throw new Error("кнопка «Принять дату»");
+      closeModal();
+      DataManager.state.coord = savedCoord;
+      const r = myReminders();
+      if(r.overdue.length!==1 || r.today.length!==1 || r.soon.length!==1 || r.nophone.length!==1) throw new Error(JSON.stringify([r.overdue.length,r.today.length,r.soon.length,r.nophone.length]));
+      if(waNumber("87077500509.0")!=="77077500509" || waNumber("8 708 570 7069")!=="77085707069" || waNumber("123")!=="") throw new Error("номер WhatsApp");
+      if(!actorMatchesResponsible("Нина", "Нина") || actorMatchesResponsible("Нина", "Надира")) throw new Error("сравнение имён");
+      UI.actorName = "Нина";
+      DataManager.state.microInfluencerDeals.push({id:7, responsible:"Марина", blogerName:"g", plannedDate:t0, videoStatus:"не опубликовано", phone:"87070000001"});
+      if(myReminders().today.length!==0 || myReminders({team:true}).today.length!==2) throw new Error("руководитель видит команду только по кнопке");
+      modalMyReminders(true);
+      if(!document.querySelector(".reminder-open") || !document.body.innerHTML.includes("wa.me/77070000001")) throw new Error("окно напоминаний");
+      closeModal();
+    } finally { DataManager.state.microInfluencerDeals = saved; UI.actorName = savedA; try{ closeModal(); }catch(e){} }
   });
   TestSuite.test("Форма интеграции отправляет только изменённые поля (старая открытая форма не затирает чужие правки); журнал и имя в шапке", ()=>{
     const savedUpd = Api.updateMicroDeal, savedRefresh = DataManager.refresh, savedRender = window.render;
