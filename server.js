@@ -281,12 +281,37 @@ function seedState(){
 }
 
 let state = loadState();
+// Журнал изменений (29.10.2026) — кто, что и когда поменял; удалённое можно вернуть. См. audit.js.
+const audit = require("./audit.js")({ dataDir: DATA_DIR, getState: ()=> state });
 
 // ---------- Проблемные блогеры (микро): разовая разметка по заметкам менеджеров (16.10.2026) ----------
 // Причины P01–P10 (справочник — MICRO_PROBLEM_REASONS во фронтенде), статус, короткий комментарий.
 // Ставится один раз (флаг в state.seeds) и только если у интеграции ещё нет своей отметки;
 // дальше менеджеры правят сами в колонке «Проблема». Сверяем id И логин — если id занят другим
 // блогером, строку пропускаем.
+/* ---------- Тип сотрудничества (30.10.2026) ----------
+   Раньше «За товар» (и старое «Бартер») писали в «Категорию блогера». Теперь это отдельное поле coopType:
+   «Платная интеграция» / «За товар», а в категории — только тематика (Бьюти, Лайфстайл, Мама-блогер…).
+   Разово: «За товар»/«Бартер» из категории → coopType «За товар», категория очищается; у остальных
+   с суммой > 0 — «Платная интеграция»; у 0 ₸ (доп. видео и т.п.) тип не ставим. Опечатка «Лайфстал» → «Лайфстайл». */
+function applyCoopTypeMigration(){
+  const FLAG = "coopType20261030";
+  state.seeds = state.seeds && typeof state.seeds === "object" ? state.seeds : {};
+  if(state.seeds[FLAG]) return;
+  let forProduct = 0, paid = 0, typo = 0;
+  for(const d of state.microInfluencerDeals || []){
+    const cat = String(d.bloggerCategory || "").trim().toLowerCase();
+    if(cat === "за товар" || cat === "бартер"){
+      d.coopType = "За товар"; d.bloggerCategory = ""; forProduct++;
+    } else {
+      if(cat === "лайфстал"){ d.bloggerCategory = "Лайфстайл"; typo++; }
+      if(!d.coopType && Number(d.cost) > 0){ d.coopType = "Платная интеграция"; paid++; }
+    }
+  }
+  state.seeds[FLAG] = new Date().toISOString();
+  console.log(`Тип сотрудничества: «За товар» ${forProduct}, «Платная интеграция» ${paid}, опечаток категории ${typo}`);
+  persist();
+}
 function applyMicroProblemSeed(){
   const FLAG = "microProblems20261016";
   state.seeds = state.seeds && typeof state.seeds === "object" ? state.seeds : {};
@@ -338,7 +363,24 @@ function loadState(){
       Object.keys(emptyState()).forEach(k=>{ if(!Array.isArray(merged[k])) merged[k] = []; });
       return merged;
     }
-  }catch(e){ console.error("Не удалось прочитать state.json, создаю заново:", e.message); }
+  }catch(e){
+    console.error("Не удалось прочитать state.json:", e.message);
+    // Не начинаем с нуля, если есть резервные копии — берём самую свежую рабочую.
+    try{
+      const dir = path.join(DATA_DIR, "backups");
+      const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f=>/^state-.*\.json$/.test(f)).sort().reverse() : [];
+      for(const f of files){
+        try{
+          const raw = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+          console.error("Восстановлено из резервной копии " + f);
+          const merged = Object.assign(emptyState(), raw);
+          Object.keys(emptyState()).forEach(k=>{ if(!Array.isArray(merged[k])) merged[k] = []; });
+          return merged;
+        }catch(e2){}
+      }
+    }catch(e3){}
+    console.error("Резервных копий нет — создаю заново.");
+  }
   const seeded = seedState();
   fs.writeFileSync(STATE_PATH, JSON.stringify(seeded));
   return seeded;
@@ -380,8 +422,36 @@ function recordViewsHistory(){
   }
   return n;
 }
+/* Запись state.json (29.10.2026): сначала во временный файл, потом переименование — файл никогда не
+   остаётся наполовину записанным; две записи одновременно не идут (вторая ждёт первую).
+   Раз в день (по Алматы) — резервная копия в DATA_DIR/backups, хранятся последние 10 дней. */
+let stateWriting = false, stateDirty = false;
+function writeStateNow(){
+  if(stateWriting){ stateDirty = true; return; }
+  stateWriting = true;
+  const tmp = STATE_PATH + ".tmp";
+  fs.writeFile(tmp, JSON.stringify(state), (err)=>{
+    if(err){ console.error("Ошибка сохранения state.json:", err.message); stateWriting = false; return; }
+    fs.rename(tmp, STATE_PATH, (err2)=>{
+      if(err2) console.error("Ошибка сохранения state.json (rename):", err2.message);
+      stateWriting = false;
+      try{ dailyBackup(); }catch(e){ console.error("Резервная копия:", e.message); }
+      if(stateDirty){ stateDirty = false; writeStateNow(); }
+    });
+  });
+}
+function dailyBackup(){
+  const dir = path.join(DATA_DIR, "backups");
+  fs.mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, `state-${almatyDateStr()}.json`);
+  if(fs.existsSync(f)) return;
+  fs.copyFileSync(STATE_PATH, f);
+  const all = fs.readdirSync(dir).filter(x=>/^state-\d{4}-\d{2}-\d{2}\.json$/.test(x)).sort();
+  all.slice(0, Math.max(0, all.length - 10)).forEach(x=>{ try{ fs.unlinkSync(path.join(dir, x)); }catch(e){} });
+}
 function persist(){
   try{ recordViewsHistory(); }catch(e){ console.error("История просмотров:", e.message); }
+  try{ audit.check(); }catch(e){ console.error("Журнал изменений:", e.message); }
   // асинхронная запись, чтобы не блокировать event loop под нагрузкой от 20 пользователей;
   // in-memory state уже обновлён синхронно к этому моменту, так что читатели всегда видят
   // свежие данные независимо от того, успела ли запись на диск закончиться.
@@ -389,9 +459,7 @@ function persist(){
   persistScheduled = true;
   setImmediate(()=>{
     persistScheduled = false;
-    fs.writeFile(STATE_PATH, JSON.stringify(state), (err)=>{
-      if(err) console.error("Ошибка сохранения state.json:", err.message);
-    });
+    writeStateNow();
   });
 }
 
@@ -646,6 +714,7 @@ async function syncPlacementsToSupabase(){
    2. Express app
    ========================================================================= */
 const app = express();
+app.use(audit.middleware); // чтобы журнал знал, чей это запрос
 // 12mb — интерфейс это один большой index.html (~700 КБ), плюс запас на будущее.
 app.use(express.json({limit: "12mb"}));
 
@@ -714,7 +783,7 @@ function requireReadonlyKey(req, res, next){
 }
 function pickFields(o, keys){ const r = {}; keys.forEach(k=>{ if(o[k] !== undefined) r[k] = o[k]; }); return r; }
 const RO_LARGE_FIELDS = ["id","blogerLogin","platform","product","barcode","responsible","bloggerCategory","status","plannedDate","publishedDate","plannedReach","reach","plannedClicks","clicks","plannedCost","cost","plannedContribution","autoContributionKzt","autoContributionStatus","likes","comments","saves"];
-const RO_MICRO_FIELDS = ["id","responsible","blogerName","instagramAccount","tiktokAccount","followers","product","productCategory","barcode","bloggerCategory","plannedDate","publishDate","videoStatus","paymentStatus","cost","productCost","reelsLink","tiktokVideoLink","factReachReels","factReachTT","contentFormat","factReachStories","storiesClicks","storiesLink","autoContributionKzt","autoContributionStatus","problemReason","problemReason2","problemStatus","problemNote","tz","tzGroup"];
+const RO_MICRO_FIELDS = ["id","responsible","blogerName","instagramAccount","tiktokAccount","followers","product","productCategory","barcode","bloggerCategory","plannedDate","publishDate","videoStatus","paymentStatus","cost","productCost","reelsLink","tiktokVideoLink","factReachReels","factReachTT","contentFormat","factReachStories","storiesClicks","storiesLink","autoContributionKzt","autoContributionStatus","problemReason","problemReason2","problemStatus","problemNote","tz","tzGroup","coopType"];
 const RO_DROP_KEYS = new Set(["iin"]);
 const RO_KEEP_DIGITS_KEYS = new Set(["phone","barcode","kaspiCode","kaspi_code","sku","code","autoContributionNote"]);
 function readonlyScrub(v, key){
@@ -1392,6 +1461,7 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
     tiktokVideoLink: b.tiktokVideoLink || "", factReachTT: b.factReachTT || 0,
     contentFormat: b.contentFormat || "", factReachStories: b.factReachStories || 0, storiesClicks: b.storiesClicks || 0,
     storiesLink: normalizeLinkUrl(b.storiesLink || ""),
+    coopType: b.coopType || "",
     plannedDate: b.plannedDate || "", publishDate: b.publishDate || "", notes: b.notes || "",
   };
   state.microInfluencerDeals.push(deal);
@@ -1481,6 +1551,9 @@ app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
     // Проблемный блогер и сторис — только если колонки есть в файле (старые CSV их не стирают).
     const has = k => Object.prototype.hasOwnProperty.call(r, k);
     if(has("тз")) fields.tz = String(r["тз"]||"").trim().slice(0,120);
+    if(has("тип сотрудничества")){ const ct = String(r["тип сотрудничества"]||"").trim().toLowerCase(); fields.coopType = ct.startsWith("за товар") || ct === "бартер" ? "За товар" : ct.startsWith("плат") ? "Платная интеграция" : ""; }
+    // Старые файлы: «За товар»/«Бартер» в категории — это тип сотрудничества, а не категория.
+    if(/^(за товар|бартер)$/i.test(String(fields.bloggerCategory||"").trim())){ fields.bloggerCategory = ""; if(!fields.coopType) fields.coopType = "За товар"; }
     if(has("формат")) fields.contentFormat = ["Сторис","Reels + Сторис","Сторис + Reels + TikTok"].includes(String(r["формат"]||"").trim()) ? String(r["формат"]).trim() : "";
     if(has("охват сторис")) fields.factReachStories = parseInt(r["охват сторис"] || 0, 10) || 0;
     if(has("клики сторис")) fields.storiesClicks = parseInt(r["клики сторис"] || 0, 10) || 0;
@@ -1771,6 +1844,21 @@ async function loadSkuCatalog(){
 /* ---------- Справочник ТЗ для микро (28.10.2026) ----------
    Группы по товарам: {group, all (для всех товаров), match (слова/ШК для подбора к строке через |), items: [варианты ТЗ]}.
    Пока state.tzCatalog нет — фронтенд показывает встроенный список. Менять может менеджер/маркетолог (не только просмотр). */
+/* ---------- Журнал изменений (29.10.2026) ---------- */
+app.get("/api/audit", requireAuth, (req,res)=>{
+  const s = req.session || {};
+  if(s.role !== "manager" && s.role !== "marketer") return res.status(403).json({error:"Журнал доступен менеджеру и маркетологу"});
+  const q = req.query || {};
+  res.json({ items: audit.list({ entity: q.entity || "", id: q.id, q: q.q || "", before: q.before, limit: q.limit, includeSystem: q.system === "1" }) });
+});
+app.post("/api/audit/:n/revert", requireAuth, (req,res)=>{
+  const s = req.session || {};
+  if(s.role !== "manager" && s.role !== "marketer") return res.status(403).json({error:"Возвращать может менеджер или маркетолог"});
+  const r = audit.revert(req.params.n, req.body && req.body.field);
+  if(r.error) return res.status(400).json(r);
+  persist();
+  res.json(r);
+});
 app.put("/api/micro-tz-catalog", requireAuth, (req,res)=>{
   const s = req.session || {};
   if(s.role !== "manager" && s.role !== "marketer") return res.status(403).json({error:"Справочник ТЗ меняет менеджер или маркетолог"});
@@ -1834,7 +1922,7 @@ app.get(/^(?!\/api).*/, (req,res)=>{
 // было записано (у state.json запись отложенная, см. persist()).
 ["SIGTERM","SIGINT"].forEach(sig=>{
   process.on(sig, ()=>{
-    try{ fs.writeFileSync(STATE_PATH, JSON.stringify(state)); }catch(e){ console.error("Ошибка сохранения state.json при остановке:", e.message); }
+    try{ fs.writeFileSync(STATE_PATH + ".tmp", JSON.stringify(state)); fs.renameSync(STATE_PATH + ".tmp", STATE_PATH); }catch(e){ console.error("Ошибка сохранения state.json при остановке:", e.message); }
     persistSessions();
     console.log("Получен "+sig+" — состояние и сессии сохранены, выходим.");
     process.exit(0);
@@ -1892,6 +1980,7 @@ setInterval(()=> placementsTick("интервал"), 3*60*1000);
 
 const PORT = process.env.PORT || 3001;
 applyMicroProblemSeed(); // разовая разметка проблемных блогеров (см. выше), до старта сервера
+applyCoopTypeMigration(); // «За товар» из категории блогера → отдельное поле «Тип сотрудничества» (30.10.2026)
 app.listen(PORT, ()=>{
   console.log(`Barter Box сервер запущен: http://localhost:${PORT}`);
   console.log(`Заказов в базе: ${state.orders.length}`);
