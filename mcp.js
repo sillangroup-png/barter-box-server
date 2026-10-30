@@ -34,7 +34,7 @@ module.exports = function mountMcp(app, { getState, pgPool, readonlyScrub }) {
   const MICRO_SHORT = ["id","responsible","blogerName","instagramAccount","tiktokAccount","followers","bloggerCategory","product","productCategory","barcode",
     "cost","productCost","paymentStatus","productStatus","videoStatus","plannedDate","publishDate","contentFormat","reelsLink","tiktokVideoLink",
     "factReachReels","factReachTT","factReachStories","storiesClicks","storiesLink","autoContributionKzt","autoContributionStatus","manualContribution",
-    "problemReason","problemReason2","problemStatus","problemNote","cpvNote","viewsHistory","city","tz","tzGroup"];
+    "problemReason","problemReason2","problemStatus","problemNote","cpvNote","viewsHistory","city","tz","tzGroup","coopType"];
   const LARGE_SHORT = ["id","blogerLogin","platform","product","barcode","responsible","bloggerCategory","status","plannedDate","publishedDate","plannedReach","reach",
     "plannedClicks","clicks","plannedCost","cost","plannedContribution","autoContributionKzt","autoContributionStatus","likes","comments","saves","reelsLink","viewsHistory"];
   const pick = (o, keys) => { const r = {}; for (const k of keys) if (o[k] !== undefined && o[k] !== "" && o[k] !== null) r[k] = o[k]; return r; };
