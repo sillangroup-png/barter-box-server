@@ -340,7 +340,7 @@ const MICRO_VIDEO_STATUSES = ["не опубликовано","опублико�
 // нужна, чтобы подбирать блогеров под тип продукта/задачи (напр. визажиста под декор.косметику).
 // «За товар» — больше не категория, а тип сотрудничества (30.10.2026, см. MICRO_COOP_TYPES).
 const MICRO_BLOGGER_CATEGORIES = ["Лайфстайл","Визажист","Бьюти","Дерматолог","Стилист","Нутрициолог","Фитнес","Мама-блогер","Врач","Другое"];
-const MICRO_COOP_TYPES = ["Платная интеграция","За товар"];
+const MICRO_COOP_TYPES = ["Платная интеграция","За товар","Доп. видео"];
 // То же самое, но для крупных блогеров (вкладка "Инфлюенс интеграции крупные") — свой список,
 // т.к. крупные блогеры чаще медийные личности, а не узкие ниши, как у микро/средних.
 const LARGE_BLOGGER_CATEGORIES = ["Певица","Телеведущая","Актриса","Тик-токер","Лайфстайл","Бьюти","Визажист","Спортсмен"];
@@ -8342,6 +8342,7 @@ async function runSelfTests(){
       if(!/data-scope="team" data-key="micro" data-metric="bloggers" data-auto="426"/.test(html)) throw new Error("в «Итого» план команды 426");
       if(!/из<\/span> <span class="plan-cell"[^>]*data-metric="integrations"[^>]*>790</.test(html)) throw new Error("в «Итого» интеграции из 790");
       if(MICRO_BLOGGER_CATEGORIES.includes("За товар") || MICRO_BLOGGER_CATEGORIES.includes("Бартер")) throw new Error("«За товар» — тип сотрудничества, не категория");
+      if(!MICRO_COOP_TYPES.includes("Доп. видео")) throw new Error("тип «Доп. видео»");
       if(microCoopTypeOf({bloggerCategory:"Бартер"})!=="За товар" || microCoopTypeOf({coopType:"Платная интеграция", bloggerCategory:"Бьюти"})!=="Платная интеграция") throw new Error("тип сотрудничества (и старые «Бартер»)");
     } finally {
       DataManager.state.microInfluencerDeals = savedMicro; DataManager.state.plans = savedPlans; UI.microResponsibleMonth = savedM;
