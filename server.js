@@ -333,6 +333,22 @@ function fillMicroCategoriesFromSameBlogger(){
   }
   return n;
 }
+// Разово: у строк без типа, где в имени блогера, комментарии или условиях написано «доп видео»/«допик», —
+// тип «Доп. видео». Строки с уже выбранным типом не трогаем.
+function applyCoopDopMigration(){
+  const FLAG = "coopDop20261030";
+  state.seeds = state.seeds && typeof state.seeds === "object" ? state.seeds : {};
+  if(state.seeds[FLAG]) return;
+  let n = 0;
+  for(const d of state.microInfluencerDeals || []){
+    if(d.coopType) continue;
+    const text = [d.blogerName, d.notes, d.conditions].map(x=>String(x||"")).join(" ");
+    if(/доп\.?\s*видео|допик/i.test(text)){ d.coopType = "Доп. видео"; n++; }
+  }
+  state.seeds[FLAG] = new Date().toISOString();
+  console.log(`Тип «Доп. видео» проставлен: ${n}`);
+  persist();
+}
 function applyCoopTypeMigration(){
   const FLAG = "coopType20261030";
   state.seeds = state.seeds && typeof state.seeds === "object" ? state.seeds : {};
@@ -1593,7 +1609,7 @@ app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
     // Проблемный блогер и сторис — только если колонки есть в файле (старые CSV их не стирают).
     const has = k => Object.prototype.hasOwnProperty.call(r, k);
     if(has("тз")) fields.tz = String(r["тз"]||"").trim().slice(0,120);
-    if(has("тип сотрудничества")){ const ct = String(r["тип сотрудничества"]||"").trim().toLowerCase(); fields.coopType = ct.startsWith("за товар") || ct === "бартер" ? "За товар" : ct.startsWith("плат") ? "Платная интеграция" : ""; }
+    if(has("тип сотрудничества")){ const ct = String(r["тип сотрудничества"]||"").trim().toLowerCase(); fields.coopType = ct.startsWith("за товар") || ct === "бартер" ? "За товар" : ct.startsWith("плат") ? "Платная интеграция" : /^доп/.test(ct) ? "Доп. видео" : ""; }
     // Старые файлы: «За товар»/«Бартер» в категории — это тип сотрудничества, а не категория.
     if(/^(за товар|бартер)$/i.test(String(fields.bloggerCategory||"").trim())){ fields.bloggerCategory = ""; if(!fields.coopType) fields.coopType = "За товар"; }
     if(has("формат")) fields.contentFormat = ["Сторис","Reels + Сторис","Сторис + Reels + TikTok"].includes(String(r["формат"]||"").trim()) ? String(r["формат"]).trim() : "";
@@ -2023,6 +2039,7 @@ setInterval(()=> placementsTick("интервал"), 3*60*1000);
 const PORT = process.env.PORT || 3001;
 applyMicroProblemSeed(); // разовая разметка проблемных блогеров (см. выше), до старта сервера
 applyCoopTypeMigration(); // «За товар» из категории блогера → отдельное поле «Тип сотрудничества» (30.10.2026)
+applyCoopDopMigration();  // тип «Доп. видео» — по пометке «доп видео»/«допик» в имени или комментарии (30.10.2026)
 app.listen(PORT, ()=>{
   console.log(`Barter Box сервер запущен: http://localhost:${PORT}`);
   console.log(`Заказов в базе: ${state.orders.length}`);
