@@ -5874,7 +5874,19 @@ function modalMyReminders(team){
       const arrow = l.dir==="out" ? "→" : l.dir==="in" ? "←" : "·";
       return `<div>${escapeHtml(when)} ${arrow} ${d ? `<b>${escapeHtml(d.blogerName||"")}</b>: ` : ""}${escapeHtml(l.text||"")}</div>`;
     }).join("");
-    box.innerHTML = `<div style="border-top:1px solid var(--line);padding-top:8px"><b>🤖 Координатор WhatsApp: ${mode}</b>${st.manager ? ` · тест: ${escapeHtml(st.manager)}` : ""}${st.phones && st.phones.length ? ` · номера: ${st.phones.length}` : ""} · в очереди ${st.queue||0}${st.mode!=="off" && !st.wazzup ? " · нет ключа Wazzup" : ""}</div>${logHtml ? `<div style="margin-top:6px;max-height:160px;overflow:auto">${logHtml}</div>` : ""}`;
+    box.innerHTML = `<div style="border-top:1px solid var(--line);padding-top:8px"><b>🤖 Координатор WhatsApp: ${mode}</b>${st.manager ? ` · тест: ${escapeHtml(st.manager)}` : ""}${st.phones && st.phones.length ? ` · номера: ${st.phones.length}` : ""} · в очереди ${st.queue||0}${st.mode!=="off" && !st.wazzup ? " · нет ключа Wazzup" : ""}${st.wazzup ? ` · <a href="#" id="wz-info">каналы и шаблоны Wazzup</a>` : ""}</div><div id="wz-info-box"></div>${logHtml ? `<div style="margin-top:6px;max-height:160px;overflow:auto">${logHtml}</div>` : ""}`;
+    const wz = document.getElementById("wz-info");
+    if(wz) wz.onclick = async (e)=>{
+      e.preventDefault();
+      const b = document.getElementById("wz-info-box");
+      b.innerHTML = "загружаю…";
+      try{
+        const r = await apiFetch("/api/coord/wazzup-info");
+        const ch = (r.channels||[]).map(c=>`<div>канал <b>${escapeHtml(c.transport||"")}</b> ${escapeHtml(c.plainId||"")} · ${escapeHtml(c.state||"")} · <code>${escapeHtml(c.channelId||"")}</code></div>`).join("") || (r.channelsError ? `<div>каналы: ${escapeHtml(r.channelsError)}</div>` : "");
+        const tp = (r.templates||[]).map(t=>`<div style="margin-top:4px"><code>${escapeHtml(t.templateGuid||"")}</code> · ${escapeHtml(t.status||"")} · ${escapeHtml(t.title||"")}<br><span style="font-size:11px">${escapeHtml(t.text||"")}</span></div>`).join("") || (r.templatesError ? `<div>шаблоны: ${escapeHtml(r.templatesError)}</div>` : "<div>шаблонов нет</div>");
+        b.innerHTML = `<div style="margin-top:6px;padding:6px;border:1px solid var(--line);border-radius:8px;user-select:text">${ch}<div style="margin-top:6px"><b>Шаблоны WABA</b> — код (templateGuid) вставьте в WAZZUP_TPL_SOON / _TODAY / _OVERDUE:</div>${tp}</div>`;
+      }catch(err){ b.innerHTML = escapeHtml(err.message); }
+    };
   }).catch(()=>{});
 }
 
