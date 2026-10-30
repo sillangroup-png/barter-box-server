@@ -475,6 +475,31 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     try { planReminders(); } catch (er) {}
     persist(); res.json({ ok: true, plannedDate: d.plannedDate });
   });
+  // Принудительно: отправить напоминание этой строке СЕЙЧАС (кнопка «📨 напомнить сейчас»). Ручное действие менеджера:
+  // работает и в режиме dry, без тихих часов и графика; но только в рамках теста (менеджер + номера из COORD_PILOT_PHONES).
+  app.post("/api/coord/deal/:id/send-now", requireAuth, async (req, res) => {
+    if (!staff(req, res)) return;
+    const d = (getState().microInfluencerDeals || []).find((x) => x.id === +req.params.id);
+    if (!d) return res.status(404).json({ error: "не найдено" });
+    if (!inPilot(d)) return res.status(400).json({ error: "Строка не в тесте: ответственный должен быть " + (cfg().manager || "(не задан COORD_PILOT_MANAGER)") + ", номер — из COORD_PILOT_PHONES" });
+    if (transport() !== "bitrix") return res.status(400).json({ error: "Отправка не настроена: в Render нет BITRIX_WEBHOOK_URL" });
+    const pd = String(d.plannedDate || "").slice(0, 10), today = almatyDate();
+    const diff = pd ? daysBetween(today, pd) : 1;
+    const kind = diff > 0 ? "soon" : diff === 0 ? "today" : "overdue";
+    const vals = [String(d.blogerName || "").replace(/@/g, "").trim() || "здравствуйте", d.product || "интеграции", ddmm(pd)];
+    const text = TEXTS[kind](vals);
+    try {
+      const r = await sendViaBitrix(d, text);
+      d.coordLastOutDay = today;
+      log(d.id, "out", `[вручную] через Битрикс (чат ${r.chatId}): ${text}`);
+      persist();
+      res.json({ ok: true, text, ...r });
+    } catch (e) {
+      log(d.id, "sys", `[вручную] не отправлено: ${e.message}`);
+      persist();
+      res.status(400).json({ error: e.message });
+    }
+  });
   app.post("/api/coord/deal/:id/stop", requireAuth, (req, res) => {
     if (!staff(req, res)) return;
     const d = (getState().microInfluencerDeals || []).find((x) => x.id === +req.params.id);
