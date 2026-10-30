@@ -131,6 +131,25 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     today: (v) => `${v[0]}, сегодня дата публикации по ${v[1]}. Пришлите, пожалуйста, ссылку на видео, когда выложите.`,
     overdue: (v) => `${v[0]}, публикация по ${v[1]} была запланирована на ${v[2]}. Подскажите, пожалуйста, когда планируете выложить?`,
   };
+  // Канал WhatsApp: из WAZZUP_CHANNEL_ID или, если не задан, единственный WhatsApp/WABA-канал аккаунта (GET /channels).
+  let channelCache = null;
+  async function wazzupGet(path) {
+    const k = cfg();
+    const r = await fetch(`${WAZZUP}${path}`, { headers: { Authorization: `Bearer ${k.apiKey}` } });
+    const txt = await r.text();
+    if (!r.ok) throw new Error(`Wazzup ${r.status}: ${txt.slice(0, 200)}`);
+    try { return JSON.parse(txt); } catch (e) { return null; }
+  }
+  async function channelId() {
+    const k = cfg();
+    if (k.channelId) return k.channelId;
+    if (channelCache) return channelCache;
+    const list = await wazzupGet("/channels");
+    const wa = (Array.isArray(list) ? list : []).filter((c) => /wapi|whatsapp/i.test(String(c.transport || "")) && (!c.state || /active/i.test(String(c.state))));
+    if (wa.length !== 1) throw new Error(`WhatsApp-каналов в Wazzup: ${wa.length} — укажите WAZZUP_CHANNEL_ID`);
+    channelCache = wa[0].channelId;
+    return channelCache;
+  }
   async function wazzupSend(body) {
     const k = cfg();
     const r = await fetch(`${WAZZUP}/message`, { method: "POST", headers: { Authorization: `Bearer ${k.apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -167,6 +186,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
           changed = true; continue;
         }
         try {
+          body.channelId = await channelId();
           await wazzupSend(body);
           q.status = "sent"; q.sentAt = new Date().toISOString(); d.coordLastOutDay = today;
           log(q.dealId, "out", `${inWindow ? "текст" : "шаблон"}: ${text}`);
@@ -275,8 +295,19 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   const staff = (req, res) => { const s = req.session || {}; if (s.role !== "manager" && s.role !== "marketer") { res.status(403).json({ error: "нет доступа" }); return false; } return true; };
   app.get("/api/coord/status", requireAuth, (req, res) => {
     const k = cfg(), c = C();
-    res.json({ mode: k.mode, manager: k.manager, phones: k.phones, wazzup: !!(k.apiKey && k.channelId), templates: { soon: !!k.tpl.soon, today: !!k.tpl.today, overdue: !!k.tpl.overdue },
+    res.json({ mode: k.mode, manager: k.manager, phones: k.phones, wazzup: !!k.apiKey, templates: { soon: !!k.tpl.soon, today: !!k.tpl.today, overdue: !!k.tpl.overdue },
       webhook: k.secret.length >= 16, queue: c.queue.filter((q) => q.status === "pending").length, log: c.log.slice(-60).reverse() });
+  });
+  // Каналы и шаблоны WABA из Wazzup — чтобы взять коды для WAZZUP_TPL_* и WAZZUP_CHANNEL_ID без программиста.
+  app.get("/api/coord/wazzup-info", requireAuth, async (req, res) => {
+    if (!staff(req, res)) return;
+    if (!cfg().apiKey) return res.status(400).json({ error: "В Render не задан WAZZUP_API_KEY" });
+    const out = {};
+    try { const ch = await wazzupGet("/channels"); out.channels = (Array.isArray(ch) ? ch : []).map((c) => ({ channelId: c.channelId, transport: c.transport, plainId: c.plainId, state: c.state })); }
+    catch (e) { out.channelsError = e.message; }
+    try { const t = await wazzupGet("/templates/whatsapp?limit=100"); out.templates = (Array.isArray(t) ? t : (t && t.data) || []).map((x) => ({ templateGuid: x.templateGuid, title: x.title || x.name || "", status: x.status, text: (x.components && JSON.stringify(x.components).slice(0, 300)) || x.text || "" })); }
+    catch (e) { out.templatesError = e.message; }
+    res.json(out);
   });
   app.post("/api/coord/events/:id/read", requireAuth, (req, res) => {
     if (!staff(req, res)) return;
