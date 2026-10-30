@@ -294,6 +294,45 @@ const audit = require("./audit.js")({ dataDir: DATA_DIR, getState: ()=> state })
    «Платная интеграция» / «За товар», а в категории — только тематика (Бьюти, Лайфстайл, Мама-блогер…).
    Разово: «За товар»/«Бартер» из категории → coopType «За товар», категория очищается; у остальных
    с суммой > 0 — «Платная интеграция»; у 0 ₸ (доп. видео и т.п.) тип не ставим. Опечатка «Лайфстал» → «Лайфстайл». */
+function microIgLogin(u){
+  let x = String(u||"").trim().toLowerCase().replace(/^https?:\/\//,"").replace(/^(www\.)?(instagram\.com|instagr\.am)\//,"");
+  x = x.split(/[?#]/)[0].replace(/^\/+|\/+$/g,"").replace(/^@/,"");
+  const first = x.split("/")[0];
+  if(!first || ["p","reel","reels","stories","explore"].includes(first)) return "";
+  return /^[a-z0-9._]{3,}$/.test(first) ? first : "";
+}
+function microTtLogin(u){
+  const x = String(u||"").trim().toLowerCase();
+  const m = x.match(/tiktok\.com\/@([a-z0-9._]+)/);
+  if(m) return m[1];
+  const y = x.replace(/^@/,"");
+  return /^[a-z0-9._]{3,}$/.test(y) ? y : "";
+}
+function fillMicroCategoriesFromSameBlogger(){
+  const list = state.microInfluencerDeals || [];
+  const par = list.map((_,i)=>i);
+  const find = (x)=>{ while(par[x]!==x){ par[x]=par[par[x]]; x=par[x]; } return x; };
+  const first = new Map();
+  list.forEach((d,i)=>{
+    const at = String(d.blogerName||"").toLowerCase().match(/@([a-z0-9._]{3,})/);
+    const keys = [["ig", microIgLogin(d.instagramAccount)], ["tt", microTtLogin(d.tiktokAccount)], ["ig", at ? at[1] : ""]];
+    for(const [t,k] of keys){
+      if(!k) continue;
+      const key = t + ":" + k;
+      if(first.has(key)) par[find(i)] = find(first.get(key)); else first.set(key, i);
+    }
+  });
+  const groups = new Map();
+  list.forEach((d,i)=>{ const r = find(i); if(!groups.has(r)) groups.set(r, []); groups.get(r).push(d); });
+  let n = 0;
+  for(const g of groups.values()){
+    const cats = new Set(g.map(d=>String(d.bloggerCategory||"").trim()).filter(Boolean));
+    if(cats.size !== 1) continue;
+    const c = [...cats][0];
+    for(const d of g) if(!String(d.bloggerCategory||"").trim()){ d.bloggerCategory = c; n++; }
+  }
+  return n;
+}
 function applyCoopTypeMigration(){
   const FLAG = "coopType20261030";
   state.seeds = state.seeds && typeof state.seeds === "object" ? state.seeds : {};
@@ -308,8 +347,11 @@ function applyCoopTypeMigration(){
       if(!d.coopType && Number(d.cost) > 0){ d.coopType = "Платная интеграция"; paid++; }
     }
   }
+  // Пустая категория → берём у других строк ЭТОГО ЖЕ блогера (тот же Instagram, TikTok или @логин в имени),
+  // только если у него везде одна категория. По одному имени («Айдана») не сводим — это разные люди.
+  const filled = fillMicroCategoriesFromSameBlogger();
   state.seeds[FLAG] = new Date().toISOString();
-  console.log(`Тип сотрудничества: «За товар» ${forProduct}, «Платная интеграция» ${paid}, опечаток категории ${typo}`);
+  console.log(`Тип сотрудничества: «За товар» ${forProduct}, «Платная интеграция» ${paid}, опечаток категории ${typo}; категория дозаполнена по тому же блогеру: ${filled}`);
   persist();
 }
 function applyMicroProblemSeed(){
