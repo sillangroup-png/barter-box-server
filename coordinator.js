@@ -361,8 +361,62 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       lines.push(`чат ${ch.chatId} — линия ${ln || "?"}`);
       if (!lineId || ln === lineId) { best = ch; break; }
     }
-    const summary = `контакты: ${found.contact.join(",") || "—"}; сделки: ${found.deal.join(",") || "—"}; лиды: ${found.lead.join(",") || "—"}${lines.length ? "; " + lines.slice(0, 5).join(", ") : ""}${lineId ? `; нужна линия ${lineId}` : ""}`;
+    let extra = "";
+    if (!best && lineId) {
+      // Запасной путь: чат линии мог привязаться к другой карточке (новый лид/контакт без телефона в поле PHONE).
+      // Смотрим последние диалоги открытых линий в CRM (дела IMOPENLINES_SESSION) и ищем номер в них или в их карточке.
+      const r = await findByRecentSessions(n, lineId).catch((e) => ({ err: e.message }));
+      if (r && r.best) best = r.best;
+      extra = r && r.err ? `; поиск по диалогам: ${r.err}` : r && r.note ? `; ${r.note}` : "";
+    }
+    const summary = `контакты: ${found.contact.join(",") || "—"}; сделки: ${found.deal.join(",") || "—"}; лиды: ${found.lead.join(",") || "—"}${lines.length ? "; " + lines.slice(0, 5).join(", ") : ""}${lineId ? `; нужна линия ${lineId}` : ""}${extra}`;
     return { best, summary };
+  }
+  const OWNER_TYPES = { 1: "lead", 2: "deal", 3: "contact", 4: "company" };
+  function phonesOf(o) {
+    const out = [];
+    for (const f of ["PHONE", "IM"]) for (const x of (o && Array.isArray(o[f]) ? o[f] : [])) out.push(String(x.VALUE || ""));
+    return out.join(" ");
+  }
+  // Номер в тексте в любом виде: «+7 701 280-89-60», «87012808960», «77012808960@c.us».
+  function hasNum(text, tail) { return String(text || "").replace(/[\s\-().+]/g, "").split(/\D+/).some((x) => x.length >= 10 && x.endsWith(tail)); }
+  async function findByRecentSessions(n, lineId) {
+    const tail = n.slice(-10);
+    const acts = await bitrix("crm.activity.list", {
+      order: { ID: "DESC" }, filter: { PROVIDER_ID: "IMOPENLINES_SESSION" },
+      select: ["ID", "OWNER_TYPE_ID", "OWNER_ID", "ASSOCIATED_ENTITY_ID", "SUBJECT", "COMMUNICATIONS", "PROVIDER_PARAMS", "ORIGIN_ID"],
+    });
+    const list = (Array.isArray(acts) ? acts : []).slice(0, 50);
+    const seenOwner = new Map(); let lookups = 0; let onLine = 0;
+    for (const a of list) {
+      const blob = JSON.stringify(a);
+      const sid = Number(a.ASSOCIATED_ENTITY_ID) || Number(String(a.ORIGIN_ID || "").replace(/\D/g, "")) || 0;
+      const type = OWNER_TYPES[Number(a.OWNER_TYPE_ID)];
+      const ownerId = Number(a.OWNER_ID) || 0;
+      let hit = hasNum(blob, tail);
+      if (!hit && type && ownerId && lookups < 25) {
+        const key = `${type}:${ownerId}`;
+        if (!seenOwner.has(key)) {
+          lookups++;
+          let txt = "";
+          if (type === "deal") {
+            const items = await bitrix("crm.deal.contact.items.get", { id: ownerId }).catch(() => []);
+            for (const it of (Array.isArray(items) ? items : []).slice(0, 3)) txt += " " + phonesOf(await bitrix("crm.contact.get", { id: it.CONTACT_ID }).catch(() => null));
+          } else txt = phonesOf(await bitrix(`crm.${type}.get`, { id: ownerId }).catch(() => null));
+          seenOwner.set(key, hasNum(txt, tail));
+        }
+        hit = seenOwner.get(key);
+      }
+      if (!hit) continue;
+      const dlg = sid ? await bitrix("imopenlines.dialog.get", { SESSION_ID: sid }).catch(() => null) : null;
+      if (!dlg) continue;
+      const ent = String(dlg.entity_id || dlg.ENTITY_ID || "");
+      const ln = String(dlg.config_id || dlg.CONFIG_ID || dlg.line_id || ent.split("|")[1] || "");
+      const chatId = Number(dlg.id || dlg.chat_id || dlg.CHAT_ID || String(dlg.dialog_id || "").replace(/\D/g, "")) || 0;
+      if (ln === lineId) onLine++;
+      if (ln === lineId && chatId && type && ownerId) return { best: { chatId, type, id: ownerId, line: ln, owner: Number(dlg.owner || dlg.OWNER) || 0 } };
+    }
+    return { note: `в последних ${list.length} диалогах открытых линий номер ${onLine ? "есть, но чат не открылся" : "не найден"}` };
   }
   async function sendViaBitrix(d, text) {
     const k = cfg();
