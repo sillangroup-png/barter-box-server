@@ -15,6 +15,13 @@
 //  4. Журнал: что отправлено, что получено, что решено и следующее напоминание — state.coord.log и d.coordNext.
 //
 // Не больше 1 сообщения в день и 3 напоминаний на одну плановую дату; блогер ответил «стоп» — больше не пишем.
+//
+// Транспорт (31.10.2026): у MIXIT обычный номер WhatsApp (не WABA) через Wazzup, подключённый к открытой линии Битрикс24.
+// Если задан BITRIX_WEBHOOK_URL (и нет WAZZUP_API_KEY) — отправка через Битрикс: контакт по телефону → последний чат
+// открытой линии → сообщение от имени менеджера чата (Wazzup доставляет в WhatsApp). Шаблоны не нужны — обычный текст.
+// Ответы: бот Barter Box на открытой линии читает первое сообщение диалога, пишет уведомление в Barter Box и СРАЗУ
+// передаёт чат менеджеру (imopenlines.bot.session.operator) — работа менеджеров в Битриксе не меняется.
+// Лимит: COORD_DAILY_CAP сообщений в день на всех (по умолчанию 30).
 const crypto = require("crypto");
 
 const H = 3600 * 1000;
@@ -47,7 +54,11 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     channelId: String(process.env.WAZZUP_CHANNEL_ID || ""),
     tpl: { soon: process.env.WAZZUP_TPL_SOON || "", today: process.env.WAZZUP_TPL_TODAY || "", overdue: process.env.WAZZUP_TPL_OVERDUE || "" },
     secret: String(process.env.COORD_WEBHOOK_SECRET || ""),
+    bitrix: String(process.env.BITRIX_WEBHOOK_URL || "").trim(),
+    dailyCap: Number(process.env.COORD_DAILY_CAP) || 30,
+    senderId: Number(process.env.COORD_SENDER_USER_ID) || 0,
   });
+  const transport = () => { const k = cfg(); return k.apiKey ? "wazzup" : k.bitrix ? "bitrix" : "none"; };
   const C = () => {
     const st = getState();
     st.coord = st.coord && typeof st.coord === "object" ? st.coord : {};
@@ -89,7 +100,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       if (!inPilot(d)) continue;
       const pd = String(d.plannedDate || "").slice(0, 10);
       let next = null;
-      if (d.coordStop) next = { text: "блогер попросил не писать — напоминаний нет" };
+      if (d.coordStop) next = { text: "автонапоминания выключены (стоп)" };
       else if (isPublished(d)) next = { text: "опубликовано — напоминаний нет" };
       else if (!pd) next = { text: "нет плановой даты" };
       else {
@@ -174,8 +185,28 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         if (Date.now() - Date.parse(q.createdAt) > STALE_MS) { q.status = "stale"; log(q.dealId, "sys", "напоминание устарело (не отправлено вовремя) — пропущено"); changed = true; continue; }
         if (!d || d.coordStop || isPublished(d)) { q.status = "cancelled"; log(q.dealId, "sys", "напоминание отменено: опубликовано / стоп / строка удалена"); changed = true; continue; }
         if (d.coordLastOutDay === today) { q.nextTry = Date.now() + 12 * H; continue; } // не больше 1 сообщения в день
-        const inWindow = c.lastIn[q.chatId] && Date.now() - Date.parse(c.lastIn[q.chatId]) < 23.5 * H;
+        const sentToday = c.log.filter((l) => l.dir === "out" && String(l.at).slice(0, 10) === new Date().toISOString().slice(0, 10)).length;
+        if (sentToday >= k.dailyCap) { q.nextTry = Date.now() + 2 * H; continue; } // общий лимит в день
         const text = TEXTS[q.kind](q.vals);
+        if (transport() === "bitrix") {
+          if (k.mode === "dry") {
+            q.status = "dry"; d.coordLastOutDay = today;
+            log(q.dealId, "out", `[ТЕСТ, не отправлено] через Битрикс: ${text}`);
+            changed = true; continue;
+          }
+          try {
+            const r = await sendViaBitrix(d, text);
+            q.status = "sent"; q.sentAt = new Date().toISOString(); d.coordLastOutDay = today;
+            log(q.dealId, "out", `через Битрикс (чат ${r.chatId}): ${text}`);
+          } catch (e) {
+            q.tries++;
+            if (e.permanent || q.tries >= RETRY_MIN.length) { q.status = "failed"; log(q.dealId, "sys", `не отправлено: ${e.message}`); event(d, "error", `Не удалось отправить напоминание: ${e.message}`); }
+            else { q.nextTry = Date.now() + RETRY_MIN[q.tries - 1] * 60 * 1000; log(q.dealId, "sys", `ошибка отправки, повтор через ${RETRY_MIN[q.tries - 1]} мин: ${e.message}`); }
+          }
+          changed = true; continue;
+        }
+        if (transport() === "none") { q.nextTry = Date.now() + H; continue; }
+        const inWindow = c.lastIn[q.chatId] && Date.now() - Date.parse(c.lastIn[q.chatId]) < 23.5 * H;
         const body = { channelId: k.channelId, chatType: "whatsapp", chatId: q.chatId, crmMessageId: q.key };
         if (inWindow) body.text = text;
         else if (k.tpl[q.kind]) { body.templateId = k.tpl[q.kind]; body.templateValues = q.kind === "today" ? q.vals.slice(0, 2) : q.vals; } // «сегодня»: {{1}} имя, {{2}} товар; остальные + {{3}} дата
@@ -239,12 +270,15 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const today = almatyDate();
     const active = cands.filter((d) => !isPublished(d)).sort((a, b) => Math.abs(daysBetween(today, a.plannedDate || today)) - Math.abs(daysBetween(today, b.plannedDate || today)));
     const d = active[0] || cands[0];
-    const text = String(msg.text || "").trim();
-    const type = String(msg.type || "text");
-    log(d.id, "in", type === "text" ? text : `[${type}] ${msg.contentUri || ""} ${text}`.trim());
-    if (["video", "image", "document"].includes(type)) {
-      d.coordMedia = (Array.isArray(d.coordMedia) ? d.coordMedia : []).concat([{ at: new Date().toISOString(), type, url: msg.contentUri || "" }]).slice(-20);
-      event(d, "media", `Блогер прислал ${type === "video" ? "видео" : type === "image" ? "фото" : "файл"} — посмотрите${msg.contentUri ? "" : " в переписке"}`, { url: msg.contentUri || "" });
+    return processReply(d, String(msg.text || "").trim(), String(msg.type || "text"), msg.contentUri || "");
+  }
+  // Разбор ответа блогера (общий для Wazzup и бота Битрикса). Дату сам не меняет — только предлагает менеджеру.
+  function processReply(d, text, type, url) {
+    const today = almatyDate();
+    log(d.id, "in", type === "text" ? text : `[${type}] ${url || ""} ${text}`.trim());
+    if (["video", "image", "document", "file"].includes(type)) {
+      d.coordMedia = (Array.isArray(d.coordMedia) ? d.coordMedia : []).concat([{ at: new Date().toISOString(), type, url: url || "" }]).slice(-20);
+      event(d, "media", `Блогер прислал ${type === "video" ? "видео" : type === "image" ? "фото" : "файл"} — посмотрите${url ? "" : " в переписке"}`, { url: url || "" });
       return true;
     }
     const link = text.match(RE_LINK);
@@ -291,11 +325,70 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     res.status(200).json({ ok: true });
   });
 
+  // ---------- Битрикс24: отправка и бот ----------
+  function bxPhoneVariants(n) { return [`+${n}`, n, `8${n.slice(1)}`]; }
+  async function sendViaBitrix(d, text) {
+    const k = cfg();
+    const n = waNumber(d.phone);
+    const fail = (m) => { const e = new Error(m); e.permanent = true; return e; };
+    let contactId = d.coordContactId || null;
+    if (!contactId) {
+      const f = await bitrix("crm.duplicate.findbycomm", { entity_type: "CONTACT", type: "PHONE", values: bxPhoneVariants(n) });
+      contactId = f && Array.isArray(f.CONTACT) && f.CONTACT.length ? f.CONTACT[0] : null;
+      if (!contactId) throw fail(`в CRM Битрикса нет контакта с номером +${n} — напишите блогеру вручную`);
+      d.coordContactId = contactId;
+    }
+    const chatId = await bitrix("imopenlines.crm.chat.getLastId", { CRM_ENTITY_TYPE: "CONTACT", CRM_ENTITY: contactId });
+    if (!chatId) throw fail(`у контакта ${contactId} нет переписки в открытой линии — первое сообщение отправьте вручную`);
+    d.coordChatId = Number(chatId);
+    let userId = k.senderId;
+    if (!userId) {
+      const dlg = await bitrix("imopenlines.dialog.get", { CHAT_ID: chatId }).catch(() => null);
+      userId = dlg && Number(dlg.owner || dlg.OWNER) || 0;
+    }
+    if (!userId) throw fail("не понятно, от чьего имени писать (у чата нет ответственного) — задайте COORD_SENDER_USER_ID");
+    await bitrix("imopenlines.crm.message.add", { CRM_ENTITY_TYPE: "contact", CRM_ENTITY: contactId, USER_ID: userId, CHAT_ID: chatId, MESSAGE: text });
+    return { chatId, contactId, userId };
+  }
+  // Бот Barter Box на открытой линии. Регистрация — кнопкой на сайте; к линии его прикрепляют в Контакт-центре.
+  const express = require("express");
+  app.post("/api/bitrix/bot/:secret", express.urlencoded({ extended: true, limit: "2mb" }), (req, res) => {
+    const k = cfg(), c = C();
+    if (k.secret.length < 16 || req.params.secret !== k.secret) return res.status(404).end();
+    res.status(200).end(); // отвечаем сразу, разбираем после (повторной доставки у Битрикса нет)
+    const b = req.body || {};
+    const token = c.botToken || "";
+    const auth = b.auth || {};
+    if (!token || auth.application_token !== `custom${token}`) { console.error("Бот Битрикса: неверный токен события"); return; }
+    if (!/MESSAGEADD/i.test(String(b.event || ""))) return;
+    const data = b.data || {};
+    const chat = data.chat || {}, msg = data.message || {};
+    if (String(chat.entityType || "").toUpperCase() !== "LINES") return;
+    const chatId = Number(chat.id || msg.chatId);
+    const mid = `bx:${msg.id || ""}`;
+    (async () => {
+      try {
+        if (msg.id && c.seen[mid]) return;
+        if (msg.id) c.seen[mid] = Date.now();
+        const st = getState();
+        const d = (st.microInfluencerDeals || []).find((x) => Number(x.coordChatId) === chatId && inPilot(x));
+        if (d) {
+          const files = data.files || msg.files || null;
+          const hasFile = files && (Array.isArray(files) ? files.length : Object.keys(files).length);
+          processReply(d, String(msg.text || "").replace(/\[[^\]]+\]/g, "").trim(), hasFile && !String(msg.text || "").trim() ? "file" : "text", "");
+          persist();
+        }
+      } catch (e) { console.error("Бот Битрикса:", e.message); }
+      // Всегда сразу отдаём чат менеджеру — для всех диалогов линии, не только тестовых.
+      try { await bitrix("imopenlines.bot.session.operator", { CHAT_ID: chatId }); } catch (e) { console.error("Бот Битрикса → оператор:", e.message); }
+    })();
+  });
+
   // ---------- Для сайта ----------
   const staff = (req, res) => { const s = req.session || {}; if (s.role !== "manager" && s.role !== "marketer") { res.status(403).json({ error: "нет доступа" }); return false; } return true; };
   app.get("/api/coord/status", requireAuth, (req, res) => {
     const k = cfg(), c = C();
-    res.json({ mode: k.mode, manager: k.manager, phones: k.phones, wazzup: !!k.apiKey, templates: { soon: !!k.tpl.soon, today: !!k.tpl.today, overdue: !!k.tpl.overdue },
+    res.json({ mode: k.mode, transport: transport(), bot: C().botId || null, manager: k.manager, phones: k.phones, wazzup: !!k.apiKey, templates: { soon: !!k.tpl.soon, today: !!k.tpl.today, overdue: !!k.tpl.overdue },
       webhook: k.secret.length >= 16, queue: c.queue.filter((q) => q.status === "pending").length, log: c.log.slice(-60).reverse() });
   });
   // Каналы и шаблоны WABA из Wazzup — чтобы взять коды для WAZZUP_TPL_* и WAZZUP_CHANNEL_ID без программиста.
@@ -320,6 +413,35 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (!r.ok || j.error) throw new Error(`Битрикс ${method}: ${j.error_description || j.error || r.status}`);
     return j.result;
   }
+  app.post("/api/coord/bitrix-bot/register", requireAuth, async (req, res) => {
+    if (!staff(req, res)) return;
+    const k = cfg(), c = C();
+    if (!k.bitrix) return res.status(400).json({ error: "В Render не задан BITRIX_WEBHOOK_URL" });
+    if (k.secret.length < 16) return res.status(400).json({ error: "В Render не задан COORD_WEBHOOK_SECRET" });
+    if (!c.botToken) c.botToken = crypto.randomBytes(16).toString("hex");
+    const base = String(process.env.PUBLIC_URL || `https://${req.get("host")}`).replace(/\/+$/, "");
+    try {
+      const r = await bitrix("imbot.v2.Bot.register", { code: "barterbox_coord", botToken: c.botToken, type: "bot", isSupportOpenline: true,
+        eventMode: "webhook", webhookUrl: `${base}/api/bitrix/bot/${k.secret}`, properties: { name: "Barter Box", workPosition: "Координатор блогеров" } });
+      c.botId = (r && r.bot && r.bot.id) || (r && r.id) || r;
+      log(null, "sys", `бот Barter Box зарегистрирован в Битриксе (ID ${c.botId}) — прикрепите его к открытой линии в Контакт-центре`);
+      persist();
+      res.json({ ok: true, botId: c.botId });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+  // Тест: одно сообщение на тестовый номер (только из COORD_PILOT_PHONES) — показывает, на каком шаге ошибка.
+  app.post("/api/coord/test-send", requireAuth, async (req, res) => {
+    if (!staff(req, res)) return;
+    const k = cfg();
+    const d = (getState().microInfluencerDeals || []).find((x) => inPilot(x) && k.phones.includes(waNumber(x.phone)));
+    if (!d) return res.status(400).json({ error: "Нет строки тестового менеджера с номером из COORD_PILOT_PHONES" });
+    try {
+      const r = await sendViaBitrix(d, `Тест Barter Box: проверка связи (${d.blogerName || ""}). Можно не отвечать.`);
+      log(d.id, "out", `[проверка] через Битрикс (чат ${r.chatId}, контакт ${r.contactId}, от пользователя ${r.userId})`);
+      persist();
+      res.json({ ok: true, ...r, blogger: d.blogerName });
+    } catch (e) { res.status(400).json({ error: e.message, blogger: d.blogerName }); }
+  });
   app.get("/api/coord/bitrix-info", requireAuth, async (req, res) => {
     if (!staff(req, res)) return;
     if (!process.env.BITRIX_WEBHOOK_URL) return res.status(400).json({ error: "В Render не задан BITRIX_WEBHOOK_URL" });
