@@ -159,7 +159,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         const text = TEXTS[q.kind](q.vals);
         const body = { channelId: k.channelId, chatType: "whatsapp", chatId: q.chatId, crmMessageId: q.key };
         if (inWindow) body.text = text;
-        else if (k.tpl[q.kind]) { body.templateId = k.tpl[q.kind]; body.templateValues = q.vals; }
+        else if (k.tpl[q.kind]) { body.templateId = k.tpl[q.kind]; body.templateValues = q.kind === "today" ? q.vals.slice(0, 2) : q.vals; } // «сегодня»: {{1}} имя, {{2}} товар; остальные + {{3}} дата
         else { q.status = "failed"; log(q.dealId, "sys", `нет кода шаблона WAZZUP_TPL_${q.kind.toUpperCase()} — блогер не писал сутки, без шаблона WABA отправить нельзя`); changed = true; continue; }
         if (k.mode === "dry") {
           q.status = "dry"; d.coordLastOutDay = today;
