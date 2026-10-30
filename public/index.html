@@ -338,7 +338,9 @@ const MICRO_PRODUCT_STATUSES = ["товар заказан","товар дост
 const MICRO_VIDEO_STATUSES = ["не опубликовано","опубликовано"];
 // Категория (специализация) блогера — не путать с productCategory (категорией товара):
 // нужна, чтобы подбирать блогеров под тип продукта/задачи (напр. визажиста под декор.косметику).
-const MICRO_BLOGGER_CATEGORIES = ["Лайфстайл","Визажист","Бьюти","Дерматолог","Стилист","Нутрициолог","Фитнес","Мама-блогер","Врач","За товар","Другое"];
+// «За товар» — больше не категория, а тип сотрудничества (30.10.2026, см. MICRO_COOP_TYPES).
+const MICRO_BLOGGER_CATEGORIES = ["Лайфстайл","Визажист","Бьюти","Дерматолог","Стилист","Нутрициолог","Фитнес","Мама-блогер","Врач","Другое"];
+const MICRO_COOP_TYPES = ["Платная интеграция","За товар"];
 // То же самое, но для крупных блогеров (вкладка "Инфлюенс интеграции крупные") — свой список,
 // т.к. крупные блогеры чаще медийные личности, а не узкие ниши, как у микро/средних.
 const LARGE_BLOGGER_CATEGORIES = ["Певица","Телеведущая","Актриса","Тик-токер","Лайфстайл","Бьюти","Визажист","Спортсмен"];
@@ -359,6 +361,7 @@ async function apiFetch(url, options){
   options = options || {};
   const headers = Object.assign({}, options.headers || {});
   if(typeof UI !== "undefined" && UI.authToken) headers["Authorization"] = "Bearer " + UI.authToken;
+  if(typeof UI !== "undefined" && UI.actorName) headers["X-Actor"] = encodeURIComponent(UI.actorName); // для журнала изменений
   options = Object.assign({}, options, {headers});
   let res;
   try{
@@ -380,6 +383,12 @@ async function apiFetch(url, options){
   return data;
 }
 const jsonHeaders = {"Content-Type":"application/json"};
+// Только изменённые поля формы (сравнение с тем, что было в форме при открытии).
+function changedFields(now, before){
+  const out = {};
+  Object.keys(now).forEach(k=>{ if(JSON.stringify(now[k]) !== JSON.stringify(before ? before[k] : undefined)) out[k] = now[k]; });
+  return out;
+}
 
 // Фото доставки (27.10.2026): перед отправкой уменьшаем до 1600 px по большей стороне (JPEG ~0.82) —
 // фото с телефона по 5–15 МБ на мобильном интернете часто не доходили. Если браузер не умеет открыть
@@ -2868,7 +2877,7 @@ function tplMicroResponsibleSummary(){
 // Сами записи в базе при этом не меняем — правка только на чтении, чтобы ничего не испортить.
 // «Бартер» переименована в «За товар» (16.10.2026): старые записи в базе остаются «Бартер»,
 // на чтении показываем и считаем их как «За товар».
-const CATEGORY_TYPO_FIX = {"лайфстал":"Лайфстайл", "бартер":"За товар"};
+const CATEGORY_TYPO_FIX = {"лайфстал":"Лайфстайл"};
 const MICRO_FOR_PRODUCT_CATEGORY = "За товар";
 // «Охваты без всплесков» в сводке по ответственным: сумма охватов без вирусных роликов — интеграций,
 // у которых факт. охват от 500 тыс. просмотров (один такой ролик перекрывает охваты всех остальных).
@@ -2921,7 +2930,14 @@ function microBloggerKey(name){
   s = s.replace(/[^a-zа-я0-9]+/g,"");
   return s || "—";
 }
-const isMicroForProduct = d => normalizeBloggerCategory(d && d.bloggerCategory) === MICRO_FOR_PRODUCT_CATEGORY;
+// Тип сотрудничества: поле coopType; у старых записей (до переноса на сервере) — «За товар»/«Бартер» в категории.
+function microCoopTypeOf(d){
+  if(!d) return "";
+  if(d.coopType) return d.coopType;
+  const c = String(d.bloggerCategory||"").trim().toLowerCase();
+  return c === "за товар" || c === "бартер" ? MICRO_FOR_PRODUCT_CATEGORY : "";
+}
+const isMicroForProduct = d => microCoopTypeOf(d) === MICRO_FOR_PRODUCT_CATEGORY;
 // Сколько уникальных блогеров (аккаунтов) из этих интеграций работают «за товар».
 const microForProductBloggers = deals => new Set(deals.filter(isMicroForProduct).map(d=>microBloggerKey(d.blogerName))).size;
 function normalizeBloggerCategory(raw){
@@ -2929,6 +2945,7 @@ function normalizeBloggerCategory(raw){
   if(!v) return "Не указана";
   const low = v.toLowerCase();
   if(CATEGORY_TYPO_FIX[low]) return CATEGORY_TYPO_FIX[low];
+  if(low === "за товар" || low === "бартер") return "Не указана"; // это тип сотрудничества, а не категория
   return MICRO_BLOGGER_CATEGORIES.find(c=>c.toLowerCase()===low) || v;
 }
 function microCategorySummary(month){
@@ -3100,7 +3117,7 @@ const UI = {
   reportPeriod: {from:"", to:""}, // период (по дате публикации) для сводки "Сколько выложили" в верхней части "Сводного отчёта" — см. reportPeriodSummary()
   reportOnlyWaiting: false, // фильтр "Сводного отчёта": показывать только доставленные, но ещё не выложенные (чтобы обзванивать блогеров)
   inflFilter: {search:"", sort:"default", month:"", dateFrom:"", dateTo:"", responsible:"", category:"", status:""},
-  microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:"", dateFrom:"", dateTo:"", problem:"", video:"", format:"", category:""},
+  microFilter: {search:"", sort:"default", paymentStatus:"", month:"", responsible:"", dateFrom:"", dateTo:"", problem:"", video:"", format:"", category:"", coop:""},
   microPage: 1,          // страница таблицы микро (по 50 строк) — чтобы не рисовать 1000+ строк разом
   microPageSig: "",      // при смене фильтров/сортировки страница сбрасывается на первую
   microProblemReasonsOpen: false,
@@ -3183,6 +3200,7 @@ function ensureMonthInitialized(store, months){
   return UI[store];
 }
 function loadSession(){
+  loadActor();
   try{
     const raw = localStorage.getItem(SESSION_KEY);
     if(raw){
@@ -3192,6 +3210,10 @@ function loadSession(){
     }
   }catch(e){}
 }
+// Имя того, кто работает (для журнала изменений) — помнится в этом браузере.
+const ACTOR_KEY = "barterBoxApp_actor";
+function loadActor(){ try{ UI.actorName = localStorage.getItem(ACTOR_KEY) || ""; }catch(e){ UI.actorName = UI.actorName || ""; } }
+function saveActor(name){ UI.actorName = String(name||"").trim().slice(0,60); try{ localStorage.setItem(ACTOR_KEY, UI.actorName); }catch(e){} }
 function saveSession(){
   try{ localStorage.setItem(SESSION_KEY, JSON.stringify({role:UI.role, driverCode:UI.driverCode, authToken:UI.authToken, readOnly:UI.readOnly})); }catch(e){}
 }
@@ -3251,12 +3273,20 @@ function renderLogin(){
         <label>Пароль</label>
         <input type="password" id="staff-password-input" autocomplete="current-password">
       </div>
+      <div class="field" style="text-align:left">
+        <label>Ваше имя <span style="font-weight:400;color:var(--ink-mute)">(для истории изменений)</span></label>
+        <input type="text" id="staff-actor-input" list="staff-actor-list" placeholder="например: Сая" value="${escapeHtml(UI.actorName||"")}">
+        <datalist id="staff-actor-list">${Object.keys(MICRO_PLAN_BY_MANAGER).filter(n=>!/^Менеджер/.test(n)).map(n=>`<option value="${escapeHtml(n)}">`).join("")}</datalist>
+      </div>
       <button class="btn btn-primary" id="staff-login-btn" style="width:100%;justify-content:center">Войти</button>
     `;
     const submit = async ()=>{
       const login = document.getElementById("staff-login-input").value.trim();
       const password = document.getElementById("staff-password-input").value;
       if(!login || !password){ toast("Введите логин и пароль", true); return; }
+      const actor = document.getElementById("staff-actor-input").value.trim();
+      if(!actor){ toast("Впишите ваше имя — оно нужно для истории изменений", true); return; }
+      saveActor(actor);
       const btn = document.getElementById("staff-login-btn");
       try{
         const data = await withBusy(btn, ()=> Api.login(role, login, password));
@@ -3266,7 +3296,7 @@ function renderLogin(){
       }catch(e){ toast(e.message, true); }
     };
     document.getElementById("staff-login-btn").onclick = submit;
-    ["staff-login-input","staff-password-input"].forEach(id=>{
+    ["staff-login-input","staff-password-input","staff-actor-input"].forEach(id=>{
       document.getElementById(id).addEventListener("keydown", e=>{ if(e.key==="Enter") submit(); });
     });
   }
@@ -3351,6 +3381,8 @@ function renderDeskShell(){
       <div class="top-spacer"></div>
       <span class="conn-dot" id="conn-dot" title="Связь с сервером"></span>
       <div class="role-pill">${roleLabel()}</div>
+      <button class="btn btn-ghost btn-sm" id="actor-btn" title="Ваше имя для истории изменений — нажмите, чтобы сменить">👤 ${escapeHtml(UI.actorName || "кто вы?")}</button>
+      ${UI.role==="manager" || UI.role==="marketer" ? `<button class="btn btn-ghost btn-sm" id="audit-btn" title="Кто, что и когда менял; удалённое и затёртое можно вернуть">🕘 Журнал</button>` : ""}
       <button class="btn btn-ghost" id="logout-btn">Выйти</button>
     </div>
     <div class="tabs" id="tabs">
@@ -3366,6 +3398,11 @@ function renderDeskShell(){
   `;
   setConnStatus(isOnline);
   document.getElementById("logout-btn").onclick = logout;
+  const actorBtn = document.getElementById("actor-btn");
+  if(actorBtn) actorBtn.onclick = modalActorName;
+  const auditBtn = document.getElementById("audit-btn");
+  if(auditBtn) auditBtn.onclick = ()=> modalAudit({});
+  if(!UI.actorName && (UI.role==="manager" || UI.role==="marketer") && !UI.actorAsked){ UI.actorAsked = true; setTimeout(modalActorName, 300); }
   document.querySelectorAll("#tabs .tab").forEach(btn=>{
     btn.onclick = ()=>{ UI.tab = btn.dataset.tab; render(); };
   });
@@ -3790,7 +3827,7 @@ function tplDeliveries(){
                 </select>` : "—"}
               </td>
               <td>${o.status==="delivered" ? `<button class="btn btn-sm ${o.bitrixSynced?'btn-ghost':'btn-primary'} sync-bitrix-btn" data-id="${o.id}">${o.bitrixSynced?'✓ синхр.':'Отправить'}</button>` : "—"}</td>
-              <td><button class="btn btn-danger btn-sm del-order-btn" data-id="${o.id}">✕</button></td>
+              <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm audit-row-btn" data-e="order" data-id="${o.id}" title="История изменений этой доставки">🕘</button> <button class="btn btn-danger btn-sm del-order-btn" data-id="${o.id}">✕</button></td>
             </tr>
           `).join("") || `<tr><td colspan="15" class="empty">Ничего не найдено по фильтрам</td></tr>`}
         </tbody>
@@ -4854,6 +4891,7 @@ function tplInfluencerDeals(){
               <td><select class="deal-status-select" data-id="${d.id}">${DEAL_STATUSES.map(st=>`<option ${st===d.status?'selected':''}>${st}</option>`).join("")}</select></td>
               <td>
                 <button class="btn btn-ghost btn-sm edit-deal-btn" data-id="${d.id}">✎</button>
+                <button class="btn btn-ghost btn-sm audit-row-btn" data-e="large" data-id="${d.id}" title="История изменений этой строки">🕘</button>
                 <button class="btn btn-danger btn-sm del-deal-btn" data-id="${d.id}">✕</button>
               </td>
             </tr>`;
@@ -4921,6 +4959,7 @@ function tplMicroInfluencers(){
   // Формат (Reels + TikTok / Сторис / Reels + Сторис / Сторис + Reels + TikTok) и категория блогера.
   if(mf.format) deals = deals.filter(d=> microFormatOf(d)===mf.format);
   if(mf.category) deals = deals.filter(d=> (d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "Не указана")===mf.category);
+  if(mf.coop) deals = deals.filter(d=> (microCoopTypeOf(d) || "Не указан")===mf.coop);
   // Статус видео: «опубликовано» = вышла (в т.ч. сторис с охватом без ссылки), см. microDealPublished.
   if(mf.video==="published") deals = deals.filter(microDealPublished);
   else if(mf.video==="notpublished") deals = deals.filter(d=>!microDealPublished(d));
@@ -5068,6 +5107,10 @@ function tplMicroInfluencers(){
           <option value="">Все форматы</option>
           ${MICRO_FORMATS.map(f=>`<option value="${escapeHtml(f)}" ${mf.format===f?'selected':''}>${escapeHtml(f)}</option>`).join("")}
         </select>
+        <select id="micro-coop-filter" title="Тип сотрудничества">
+          <option value="">Все типы</option>
+          ${[...MICRO_COOP_TYPES, "Не указан"].map(c=>`<option value="${escapeHtml(c)}" ${mf.coop===c?'selected':''}>${escapeHtml(c)}</option>`).join("")}
+        </select>
         <select id="micro-category-filter" title="Категория блогера">
           <option value="">Все категории</option>
           ${[...MICRO_BLOGGER_CATEGORIES, "Не указана"].map(c=>`<option value="${escapeHtml(c)}" ${mf.category===c?'selected':''}>${escapeHtml(c)}</option>`).join("")}
@@ -5125,7 +5168,7 @@ function tplMicroInfluencers(){
         <thead><tr>
           <th class="rowcheck"><input type="checkbox" id="micro-check-all"></th>
           <th>#</th>
-          <th class="sticky-col">Блогер</th><th title="Проблемный блогер: причина и статус. Подсвечивается весь блогер — все его интеграции.">Проблема</th><th>Категория блогера</th><th>Ответственный</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th title="ТЗ для блогера: варианты зависят от товара + общие (персональное, не по ТЗ). Справочник — над таблицей.">ТЗ</th><th>Город</th>
+          <th class="sticky-col">Блогер</th><th title="Проблемный блогер: причина и статус. Подсвечивается весь блогер — все его интеграции.">Проблема</th><th>Категория блогера</th><th title="Платная интеграция или за товар">Тип</th><th>Ответственный</th><th>Instagram</th><th>TikTok</th><th>Товар</th><th title="ТЗ для блогера: варианты зависят от товара + общие (персональное, не по ТЗ). Справочник — над таблицей.">ТЗ</th><th>Город</th>
           ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
           ${sortableTh("Вклад в продажи (план/факт)","sales",mf.sort)}<th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th>${sortableTh("ROAS, ×","romi",mf.sort)}
         <th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (сумма оплаты + стоимость переданного товара). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th><th title="Вклад по заказам Kaspi: продажи товара сверх обычного уровня в дни выхода. Обычный уровень — среднее за дни до выхода при той же цене, без других блогеров этого товара (если цена была другой — дни после). Окно — с дня выхода, пока продажи не вернутся к обычным: у мелких до 7 дней, у крупных — только день выхода и следующий. Плюс шлейф: 50% подъёма продаж над уровнем до кампании, не попавшего в пики, делится по охвату (по корню: охват в 4 раза больше — доля в 2 раза больше) с затуханием (мелкие — до 14 дней, вдвое за 3 дня; крупные — только день выхода и следующий, сторис висят 24 ч). Скидка вычитается по прошлым сменам цены. Если в те же дни выходили другие блогеры этого товара — прирост делится по охвату (крупные и мелкие делят день, только если у меньшей стороны охват от 20% другой; иначе весь день — большей). Всплеска нет — 0. «—» — если обычный уровень определить не из чего. Ручной вклад менеджера главнее.">${UI.collapsedColGroups.has("infl-auto") ? `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">+ Авто</span>` : `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">− Авто (Kaspi)</span>`}</th>
@@ -5145,6 +5188,7 @@ function tplMicroInfluencers(){
               <td class="sticky-col">${pb && pb.status==="Отказ от блогера" ? '<span title="Отказ от блогера">⛔ </span>' : ""}${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')}${microHasStories(d) ? ` <span style="font-size:10.5px;padding:1px 6px;border-radius:8px;background:var(--canvas);border:1px solid var(--line);white-space:nowrap" title="${escapeHtml(microFormatOf(d))}">📱 сторис</span>` : ""}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
               <td>${microProblemCell(d, pb)}</td>
               <td>${inlineEditSpan(escapeHtml(d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "—"), d.id, 'bloggerCategory', d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : '', 'select', MICRO_BLOGGER_CATEGORIES)}</td>
+              <td>${inlineEditSpan(microCoopTypeOf(d) ? `<span style="white-space:nowrap${microCoopTypeOf(d)==="За товар" ? ";color:var(--accent,#c2185b)" : ""}">${escapeHtml(microCoopTypeOf(d))}</span>` : '<span style="color:var(--ink-mute)">—</span>', d.id, 'coopType', microCoopTypeOf(d), 'select', MICRO_COOP_TYPES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.responsible||"—"), d.id, 'responsible', d.responsible||'', 'text')}</td>
               <td>${d.instagramAccount?`<a href="${escapeHtml(normalizeInstagramUrl(d.instagramAccount))}" target="_blank" rel="noopener">IG</a> `:""}${inlineEditSpan(fmtNum(d.followers||0), d.id, 'followers', d.followers||0, 'number')}</td>
               <td>${d.tiktokAccount?`<a href="${escapeHtml(d.tiktokAccount)}" target="_blank" rel="noopener">TT</a> `:""}${inlineEditSpan(fmtNum(d.followersTT||0), d.id, 'followersTT', d.followersTT||0, 'number')}</td>
@@ -5182,10 +5226,11 @@ function tplMicroInfluencers(){
               <td>${microLinkStoriesCell(d)}</td>
               <td>
                 <button class="btn btn-ghost btn-sm edit-micro-btn" data-id="${d.id}">✎</button>
+                <button class="btn btn-ghost btn-sm audit-row-btn" data-e="micro" data-id="${d.id}" title="История изменений этой строки">🕘</button>
                 <button class="btn btn-danger btn-sm del-micro-btn" data-id="${d.id}">✕</button>
               </td>
             </tr>`;
-          }).join("") || `<tr><td class="empty" colspan="25">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
+          }).join("") || `<tr><td class="empty" colspan="26">${s.deals.length ? "Ничего не найдено по фильтру" : "Интеграций пока нет"}</td></tr>`}
         </tbody>
       </table></div>
       ${pager}
@@ -5506,20 +5551,24 @@ function modalEditCampaign(id){
     </div>
   `);
   document.getElementById("m-cancel").onclick = closeModal;
+  const readCampaignForm = ()=>({
+    name: document.getElementById("m-name").value.trim(), city: document.getElementById("m-city").value.trim() || "—",
+    period: document.getElementById("m-period").value.trim() || "—",
+    responsible: document.getElementById("m-resp").value.trim() || "—",
+    boxType: document.getElementById("m-box").value,
+    plannedCount: parseInt(document.getElementById("m-count").value,10) || 0,
+    costPerBox: parseInt(document.getElementById("m-costbox").value,10) || 0,
+    realizationNumber: document.getElementById("m-realization").value.trim(),
+  });
+  const campaignAtOpen = readCampaignForm();
   document.getElementById("m-save").onclick = async ()=>{
     const btn = document.getElementById("m-save");
     const name = document.getElementById("m-name").value.trim();
     if(!name){ toast("Укажите название проекта", true); return; }
+    const toSend = changedFields(readCampaignForm(), campaignAtOpen);
+    if(!Object.keys(toSend).length){ closeModal(); toast("Изменений нет"); return; }
     try{
-      await withBusy(btn, ()=> Api.updateCampaign(id, {
-        name, city: document.getElementById("m-city").value.trim() || "—",
-        period: document.getElementById("m-period").value.trim() || "—",
-        responsible: document.getElementById("m-resp").value.trim() || "—",
-        boxType: document.getElementById("m-box").value,
-        plannedCount: parseInt(document.getElementById("m-count").value,10) || 0,
-        costPerBox: parseInt(document.getElementById("m-costbox").value,10) || 0,
-        realizationNumber: document.getElementById("m-realization").value.trim(),
-      }));
+      await withBusy(btn, ()=> Api.updateCampaign(id, toSend));
       closeModal(); toast("Проект обновлён"); await DataManager.refresh(); render();
     }catch(e){ toast(e.message, true); }
   };
@@ -5696,6 +5745,114 @@ function modalNewReturn(){
     }catch(e){ toast(e.message, true); }
   };
 }
+
+// ---------- Журнал изменений (29.10.2026) ----------
+// Сервер пишет каждое изменение: кто (имя из «👤» + логин), что (поле: было → стало), когда.
+// Отсюда же можно вернуть затёртое значение или восстановить удалённую строку.
+const AUDIT_ENTITY_LABEL = {micro:"Микро", large:"Крупные", order:"Доставка", campaign:"Проект", driver:"Водитель", return:"Возврат", publication:"Публикация"};
+const AUDIT_FIELD_LABEL = {
+  paymentStatus:"Статус оплаты", paymentMethod:"Способ оплаты", videoStatus:"Статус видео", productStatus:"Статус товара", status:"Статус",
+  cost:"Сумма", productCost:"Стоимость товара", responsible:"Ответственный", blogerName:"Блогер", blogerLogin:"Блогер", product:"Товар", barcode:"ШК",
+  plannedDate:"Плановая дата", publishDate:"Дата выкладки", publishedDate:"Дата выхода", reelsLink:"Ссылка Reels", tiktokVideoLink:"Ссылка TikTok",
+  factReachReels:"Охват Reels", factReachTT:"Охват TikTok", factReachStories:"Охват сторис", storiesClicks:"Клики сторис", storiesLink:"Ссылка на сторис",
+  contentFormat:"Формат", notes:"Комментарий", conditions:"Условия", city:"Город", address:"Адрес", phone:"Телефон", tz:"ТЗ", tzGroup:"ТЗ (товар)",
+  problemReason:"Проблема", problemReason2:"Проблема 2", problemStatus:"Статус проблемы", problemNote:"Комментарий проблемы", cpvNote:"Комментарий CPV",
+  manualContribution:"Вклад вручную", plannedContribution:"План вклада", reach:"Охват", clicks:"Клики", driverCode:"Водитель", photo:"Фото",
+  closedWithoutPhoto:"Закрыто без фото", deliveredAt:"Дата доставки", assignedAt:"Дата назначения", logisticsCost:"Логистика", closureType:"Закрытие",
+  driverComment:"Комментарий водителя", bloggerCategory:"Категория блогера", followers:"Подписчики", instagramAccount:"Instagram", tiktokAccount:"TikTok",
+  iin:"ИИН", stage:"Этап", name:"Название", costPerBox:"Себестоимость бокса", active:"Активен",
+};
+function auditVal(v){
+  if(v === null || v === undefined || v === "") return '<span style="color:var(--ink-mute)">пусто</span>';
+  const t = typeof v === "object" ? JSON.stringify(v) : String(v);
+  return escapeHtml(t.length > 140 ? t.slice(0,140) + "…" : t);
+}
+function auditWhen(iso){
+  try{ return new Date(iso).toLocaleString("ru-RU", {timeZone:"Asia/Almaty", day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}); }catch(e){ return iso; }
+}
+function auditEntryHtml(e){
+  const head = `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:baseline">
+    <b>${escapeHtml(auditWhen(e.at))}</b>
+    <span style="color:${e.sys?"var(--ink-mute)":"inherit"}">👤 ${escapeHtml(e.who||"")}</span>
+    <span style="color:var(--ink-mute)">${escapeHtml(AUDIT_ENTITY_LABEL[e.e]||e.e)} #${escapeHtml(String(e.id))}${e.label?` · ${escapeHtml(String(e.label))}`:""}</span>
+    ${e.act==="create"?'<span style="color:var(--ok,#2e7d32)">добавлено</span>':""}
+    ${e.act==="delete"?'<span style="color:var(--bad)">удалено</span>':""}
+  </div>`;
+  let body = "";
+  if(e.act==="update"){
+    body = Object.entries(e.ch||{}).map(([f,[a,b]])=>`<div style="margin:2px 0 2px 12px;font-size:12.5px">
+      ${escapeHtml(AUDIT_FIELD_LABEL[f]||f)}: ${auditVal(a)} → <b>${auditVal(b)}</b>
+      ${UI.readOnly?"":` <button class="btn btn-ghost btn-sm audit-revert" data-n="${e.n}" data-f="${escapeHtml(f)}" title="Вернуть «${escapeHtml(String(a==null?"":(typeof a==="object"?JSON.stringify(a):a)).slice(0,60))}»">↩ вернуть</button>`}</div>`).join("");
+  }
+  if(e.act==="delete" && !UI.readOnly) body = `<div style="margin-left:12px"><button class="btn btn-ghost btn-sm audit-revert" data-n="${e.n}">↩ восстановить строку</button></div>`;
+  return `<div style="padding:8px 0;border-bottom:1px solid var(--line)">${head}${body}</div>`;
+}
+async function modalAudit(filter){
+  const f = Object.assign({entity:"", id:"", q:"", system:false}, filter||{});
+  let items = [], more = true;
+  const load = async (append)=>{
+    const qs = new URLSearchParams({entity:f.entity||"", id:f.id||"", q:f.q||"", limit:"150", system: f.system ? "1" : ""});
+    if(append && items.length) qs.set("before", String(items[items.length-1].n));
+    const r = await apiFetch("/api/audit?" + qs.toString());
+    const got = (r && r.items) || [];
+    items = append ? items.concat(got) : got;
+    more = got.length === 150;
+  };
+  const draw = ()=>{
+    const box = document.getElementById("audit-list");
+    if(!box) return;
+    box.innerHTML = items.length ? items.map(auditEntryHtml).join("") + (more ? `<div style="text-align:center;margin:8px"><button class="btn btn-ghost btn-sm" id="audit-more">Показать ещё</button></div>` : "")
+      : `<div class="empty">${f.id ? "По этой строке изменений пока нет (журнал ведётся с 29.10.2026)" : "Ничего не найдено"}</div>`;
+    const moreBtn = document.getElementById("audit-more");
+    if(moreBtn) moreBtn.onclick = async ()=>{ try{ await load(true); draw(); }catch(e){ toast(e.message, true); } };
+    box.querySelectorAll(".audit-revert").forEach(b=>{ b.onclick = async ()=>{
+      try{
+        await withBusy(b, ()=> apiFetch("/api/audit/" + b.dataset.n + "/revert", {method:"POST", headers:jsonHeaders, body:JSON.stringify(b.dataset.f ? {field:b.dataset.f} : {})}));
+        toast("Вернула ✅"); await DataManager.refresh(); await load(false); draw();
+      }catch(e){ toast(e.message, true); }
+    }; });
+  };
+  const title = f.id ? `История: ${AUDIT_ENTITY_LABEL[f.entity]||""} #${f.id}` : "Журнал изменений";
+  openModal(`
+    <h3>🕘 ${escapeHtml(title)}</h3>
+    ${f.id ? "" : `<div class="toolbar" style="margin-bottom:8px">
+      <input type="search" id="audit-q" class="fill" placeholder="Поиск: блогер, имя, «оплачено»…" value="${escapeHtml(f.q)}">
+      <select id="audit-entity"><option value="">Все разделы</option>${Object.entries(AUDIT_ENTITY_LABEL).map(([k,l])=>`<option value="${k}"${f.entity===k?" selected":""}>${l}</option>`).join("")}</select>
+      <label style="font-size:12px;white-space:nowrap"><input type="checkbox" id="audit-system"${f.system?" checked":""}> + автоматические</label>
+    </div>`}
+    <div id="audit-list" style="max-height:60vh;overflow:auto"><div class="empty">Загружаю…</div></div>
+    <div class="modal-actions"><button class="btn btn-ghost" id="audit-close">Закрыть</button></div>
+  `);
+  document.getElementById("audit-close").onclick = closeModal;
+  const reload = async ()=>{ try{ await load(false); draw(); }catch(e){ const b = document.getElementById("audit-list"); if(b) b.innerHTML = `<div class="empty">${escapeHtml(e.message)}</div>`; } };
+  const qEl = document.getElementById("audit-q");
+  if(qEl){ let t = null; qEl.oninput = ()=>{ clearTimeout(t); t = setTimeout(()=>{ f.q = qEl.value.trim(); reload(); }, 400); }; }
+  const eEl = document.getElementById("audit-entity");
+  if(eEl) eEl.onchange = ()=>{ f.entity = eEl.value; reload(); };
+  const sEl = document.getElementById("audit-system");
+  if(sEl) sEl.onchange = ()=>{ f.system = sEl.checked; reload(); };
+  await reload();
+}
+function modalActorName(){
+  openModal(`
+    <h3>👤 Как вас зовут?</h3>
+    <p style="color:var(--ink-soft);margin-bottom:8px">Имя пишется в историю изменений — чтобы было видно, кто что поменял. Помнится в этом браузере.</p>
+    <div class="field"><input id="actor-input" list="actor-list" value="${escapeHtml(UI.actorName||"")}" placeholder="например: Сая">
+      <datalist id="actor-list">${Object.keys(MICRO_PLAN_BY_MANAGER).filter(n=>!/^Менеджер/.test(n)).map(n=>`<option value="${escapeHtml(n)}">`).join("")}</datalist></div>
+    <div class="modal-actions"><button class="btn btn-ghost" id="actor-cancel">Позже</button><button class="btn btn-primary" id="actor-save">Сохранить</button></div>`);
+  document.getElementById("actor-cancel").onclick = closeModal;
+  document.getElementById("actor-save").onclick = ()=>{
+    const v = document.getElementById("actor-input").value.trim();
+    if(!v){ toast("Впишите имя", true); return; }
+    saveActor(v); closeModal(); render();
+  };
+}
+// Кнопки 🕘 в строках таблиц — один обработчик на весь документ (таблицы перерисовываются).
+document.addEventListener("click", (ev)=>{
+  const b = ev.target && ev.target.closest && ev.target.closest(".audit-row-btn");
+  if(!b) return;
+  modalAudit({entity: b.dataset.e, id: b.dataset.id});
+});
 
 // Логист/менеджер сам прикрепляет фото и ставит «Доставлено» (27.10.2026) — если водитель не смог.
 function modalManagerDeliverPhoto(o){
@@ -6016,11 +6173,11 @@ function modalDeal(existing){
     </div>
   `);
   document.getElementById("m-cancel").onclick = closeModal;
-  document.getElementById("m-save").onclick = async ()=>{
-    const btn = document.getElementById("m-save");
+  // Сохраняем только то, что поменяли в этой форме (29.10.2026): раньше форма отправляла ВСЕ поля, и если
+  // она была открыта давно, старые значения затирали то, что за это время внесли другие (статус оплаты и т.п.).
+  const readDealForm = ()=>{
     const blogerLogin = document.getElementById("m-login").value.trim();
-    if(!blogerLogin){ toast("Укажите логин блогера", true); return; }
-    const payload = {
+    return {
       blogerLogin, platform: document.getElementById("m-platform").value, product: document.getElementById("m-product").value.trim(),
       barcode: document.getElementById("m-barcode").value.trim(),
       responsible: document.getElementById("m-responsible").value.trim(),
@@ -6041,8 +6198,17 @@ function modalDeal(existing){
       driveFolderLink: normalizeLinkUrl(document.getElementById("m-drive-folder").value),
       notes: document.getElementById("m-notes").value.trim(),
     };
+  };
+  const formAtOpen = readDealForm();
+  document.getElementById("m-save").onclick = async ()=>{
+    const btn = document.getElementById("m-save");
+    const blogerLogin = document.getElementById("m-login").value.trim();
+    if(!blogerLogin){ toast("Укажите логин блогера", true); return; }
+    const payload = readDealForm();
+    const toSend = isEdit ? changedFields(payload, formAtOpen) : payload;
+    if(isEdit && !Object.keys(toSend).length){ closeModal(); toast("Изменений нет"); return; }
     try{
-      await withBusy(btn, ()=> isEdit ? Api.updateDeal(existing.id, payload) : Api.createDeal(payload));
+      await withBusy(btn, ()=> isEdit ? Api.updateDeal(existing.id, toSend) : Api.createDeal(payload));
       closeModal(); toast(isEdit?"Интеграция обновлена":"Интеграция добавлена"); await DataManager.refresh(); render();
     }catch(e){ toast(e.message, true); }
   };
@@ -6427,6 +6593,7 @@ function modalMicroDeal(existing, prefill){
     <div id="mm-problem-warn">${microProblemWarning(d.blogerName, isEdit ? existing.id : null)}</div>
     <div class="form-row">
       <div class="field"><label>Блогер</label><input id="mm-name" placeholder="Имя / название аккаунта" value="${escapeHtml(d.blogerName)}"></div>
+      <div class="field"><label>Тип сотрудничества</label><select id="mm-coop-type"><option value="">—</option>${MICRO_COOP_TYPES.map(c=>`<option ${c===microCoopTypeOf(d)?'selected':''}>${c}</option>`).join("")}</select></div>
       <div class="field"><label>Категория блогера</label><select id="mm-blogger-category"><option value="">—</option>${MICRO_BLOGGER_CATEGORIES.map(c=>`<option ${d.bloggerCategory && c===normalizeBloggerCategory(d.bloggerCategory)?'selected':''}>${c}</option>`).join("")}</select></div>
       <div class="field"><label>Ответственный</label><input id="mm-responsible" value="${escapeHtml(d.responsible||'')}"></div>
       <div class="field"><label>Телефон</label><input id="mm-phone" value="${escapeHtml(d.phone||'')}"></div>
@@ -6504,13 +6671,14 @@ function modalMicroDeal(existing, prefill){
     const w = document.getElementById("mm-problem-warn");
     if(w) w.innerHTML = microProblemWarning(e.target.value, isEdit ? existing.id : null);
   });
-  document.getElementById("mm-save").onclick = async ()=>{
-    const btn = document.getElementById("mm-save");
+  // Сохраняем только то, что поменяли в этой форме (29.10.2026): раньше форма отправляла ВСЕ поля, и если
+  // она была открыта давно, старые значения затирали то, что за это время внесли другие (статус оплаты и т.п.).
+  const readMicroForm = ()=>{
     const blogerName = document.getElementById("mm-name").value.trim();
-    if(!blogerName){ toast("Укажите блогера", true); return; }
-    const payload = {
+    return {
       responsible: document.getElementById("mm-responsible").value.trim() || "Нина", blogerName,
       bloggerCategory: document.getElementById("mm-blogger-category").value,
+      coopType: document.getElementById("mm-coop-type").value,
       phone: document.getElementById("mm-phone").value.trim(),
       city: document.getElementById("mm-city").value.trim(),
       address: document.getElementById("mm-address").value.trim(),
@@ -6545,8 +6713,17 @@ function modalMicroDeal(existing, prefill){
       publishDate: document.getElementById("mm-publish-date").value,
       notes: document.getElementById("mm-notes").value.trim(),
     };
+  };
+  const formAtOpen = readMicroForm();
+  document.getElementById("mm-save").onclick = async ()=>{
+    const btn = document.getElementById("mm-save");
+    const blogerName = document.getElementById("mm-name").value.trim();
+    if(!blogerName){ toast("Укажите блогера", true); return; }
+    const payload = readMicroForm();
+    const toSend = isEdit ? changedFields(payload, formAtOpen) : payload;
+    if(isEdit && !Object.keys(toSend).length){ closeModal(); toast("Изменений нет"); return; }
     try{
-      await withBusy(btn, ()=> isEdit ? Api.updateMicroDeal(existing.id, payload) : Api.createMicroDeal(payload));
+      await withBusy(btn, ()=> isEdit ? Api.updateMicroDeal(existing.id, toSend) : Api.createMicroDeal(payload));
       closeModal(); toast(isEdit?"Интеграция обновлена":"Интеграция добавлена"); await DataManager.refresh(); render();
     }catch(e){ toast(e.message, true); }
   };
@@ -7123,6 +7300,8 @@ function wireDeskTab(){
     if(problemFilterEl) problemFilterEl.onchange = e=>{ UI.microFilter.problem = e.target.value; renderDeskTab(); };
     const formatFilterEl = document.getElementById("micro-format-filter");
     if(formatFilterEl) formatFilterEl.onchange = e=>{ UI.microFilter.format = e.target.value; renderDeskTab(); };
+    const coopFilterEl = document.getElementById("micro-coop-filter");
+    if(coopFilterEl) coopFilterEl.onchange = e=>{ UI.microFilter.coop = e.target.value; renderDeskTab(); };
     const categoryFilterEl = document.getElementById("micro-category-filter");
     if(categoryFilterEl) categoryFilterEl.onchange = e=>{ UI.microFilter.category = e.target.value; renderDeskTab(); };
     ensureSkuCatalogLoaded();
@@ -7281,7 +7460,7 @@ function wireDeskTab(){
       // которые реально пушатся в lines.push(...) ниже — иначе заголовок "уезжает" относительно
       // данных (была живая регрессия: сюда забыли добавить "ответственный"/"категория блогера",
       // когда их добавили в сами строки — эти два столбца тихо съезжали на всё, что после блогера).
-      const header = ["id","ответственный","блогер","категория блогера","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий","проблема","причина 2","статус проблемы","комментарий проблемы","формат","охват сторис","клики сторис","ссылка на сторис","комментарий cpv","тз"];
+      const header = ["id","ответственный","блогер","категория блогера","телефон","город","адрес","instagram","подписчики","er","ср. охваты","tiktok","подписчики tt","er tt","ср. охваты tt","сумма","стоимость товара","статус оплаты","способ оплаты","иин","условия","товар","шк","категория товара","статус товара","статус видео","ссылка на reels","факт охват reels","ссылка на видео тт","факт охват тт","плановая дата","дата выкладки","комментарий","проблема","причина 2","статус проблемы","комментарий проблемы","формат","охват сторис","клики сторис","ссылка на сторис","комментарий cpv","тз","тип сотрудничества"];
       const lines = [header.map(csvEscape).join(",")];
       // "deals" — переменная из tplMicroInfluencers() (учитывает поиск/фильтр), а этот обработчик
       // живёт в wireDeskTab() — отдельной функции, где такой переменной нет. Раньше это падало
@@ -7301,7 +7480,7 @@ function wireDeskTab(){
           d.plannedDate||"", d.publishDate||"", d.notes||"",
           d.problemReason||"", d.problemReason2||"", d.problemReason ? microProblemStatusOf(d) : "", d.problemNote||"",
           microFormatOf(d), d.factReachStories||0, d.storiesClicks||0, d.storiesLink||"",
-          d.cpvNote||"", d.tz||"",
+          d.cpvNote||"", d.tz||"", microCoopTypeOf(d),
         ].map(csvEscape).join(","));
       });
       downloadFile("barter-box-micro-influencers-export.csv", "﻿" + lines.join("\n"), "text/csv;charset=utf-8");
@@ -8162,8 +8341,8 @@ async function runSelfTests(){
       if(!html.includes("426 уникальных блогеров") || !html.includes("790 интеграций")) throw new Error("в подсказке общий план команды");
       if(!/data-scope="team" data-key="micro" data-metric="bloggers" data-auto="426"/.test(html)) throw new Error("в «Итого» план команды 426");
       if(!/из<\/span> <span class="plan-cell"[^>]*data-metric="integrations"[^>]*>790</.test(html)) throw new Error("в «Итого» интеграции из 790");
-      if(!MICRO_BLOGGER_CATEGORIES.includes("За товар") || MICRO_BLOGGER_CATEGORIES.includes("Бартер")) throw new Error("категория «Бартер» должна называться «За товар»");
-      if(normalizeBloggerCategory("Бартер")!=="За товар") throw new Error("старые записи «Бартер» читаются как «За товар»");
+      if(MICRO_BLOGGER_CATEGORIES.includes("За товар") || MICRO_BLOGGER_CATEGORIES.includes("Бартер")) throw new Error("«За товар» — тип сотрудничества, не категория");
+      if(microCoopTypeOf({bloggerCategory:"Бартер"})!=="За товар" || microCoopTypeOf({coopType:"Платная интеграция", bloggerCategory:"Бьюти"})!=="Платная интеграция") throw new Error("тип сотрудничества (и старые «Бартер»)");
     } finally {
       DataManager.state.microInfluencerDeals = savedMicro; DataManager.state.plans = savedPlans; UI.microResponsibleMonth = savedM;
     }
@@ -8269,9 +8448,9 @@ async function runSelfTests(){
       if(!html.includes("🔗 сторис") || !html.includes("https://drive.google.com/x")) throw new Error("ссылка на сторис видна");
       UI.microFilter.video = ""; UI.microFilter.format = "Сторис"; html = tplMicroInfluencers();
       if(rowsOf(html)!==1) throw new Error("фильтр по формату «Сторис» — 1 строка, а не "+rowsOf(html));
-      UI.microFilter.format = ""; DataManager.state.microInfluencerDeals[5].bloggerCategory = "Бартер"; UI.microFilter.category = "За товар"; html = tplMicroInfluencers();
-      if(rowsOf(html)!==1) throw new Error("фильтр по категории (старое «Бартер» = «За товар») — 1 строка, а не "+rowsOf(html));
-      UI.microFilter.category = "";
+      UI.microFilter.format = ""; DataManager.state.microInfluencerDeals[5].bloggerCategory = "Бартер"; UI.microFilter.coop = "За товар"; html = tplMicroInfluencers();
+      if(rowsOf(html)!==1) throw new Error("фильтр по типу (старое «Бартер» в категории = «За товар») — 1 строка, а не "+rowsOf(html));
+      UI.microFilter.coop = "";
       UI.microResponsibleMonth = "2026-10"; UI.microProblemReasonsOpen = false;
       let rs = tplMicroResponsibleSummary();
       if(!rs.includes("micro-problem-reasons-toggle") || rs.includes("<th>Причина</th>")) throw new Error("таблица причин свёрнута по умолчанию");
@@ -10935,6 +11114,24 @@ async function runSelfTests(){
       UI.role = savedRole;
       document.body.innerHTML = '<div id="app"></div><div id="toast"></div>';
     }
+  });
+  TestSuite.test("Форма интеграции отправляет только изменённые поля (старая открытая форма не затирает чужие правки); журнал и имя в шапке", ()=>{
+    const savedUpd = Api.updateMicroDeal, savedRefresh = DataManager.refresh, savedRender = window.render;
+    let sent = null;
+    try{
+      Api.updateMicroDeal = async (id, ch)=>{ sent = {id, ch}; return {}; };
+      DataManager.refresh = async ()=>{};
+      const deal = {id:4242, blogerName:"@diff", responsible:"Сая", paymentStatus:"к оплате", notes:"", cost:1000};
+      modalMicroDeal(deal);
+      document.getElementById("mm-notes").value = "новый комментарий";
+      document.getElementById("mm-save").onclick(); // до первого await запрос уже вызван
+      if(!sent || sent.id!==4242) throw new Error("сохранение не вызвано");
+      const keys = Object.keys(sent.ch);
+      if(keys.length!==1 || keys[0]!=="notes") throw new Error("ушли лишние поля: " + keys.join(","));
+      closeModal();
+      if(typeof modalAudit!=="function" || typeof changedFields!=="function") throw new Error("журнал");
+      if(JSON.stringify(changedFields({a:1,b:"x"},{a:1,b:"y"}))!=='{"b":"x"}') throw new Error("changedFields");
+    } finally { Api.updateMicroDeal = savedUpd; DataManager.refresh = savedRefresh; try{ closeModal(); }catch(e){} }
   });
   TestSuite.test("ТЗ: колонка в микро-таблице, варианты товара строки первыми, общие для всех, справочник", ()=>{
     const savedC = DataManager.state.tzCatalog, savedRO = UI.readOnly, savedOpen = UI.microTzCatalogOpen;
