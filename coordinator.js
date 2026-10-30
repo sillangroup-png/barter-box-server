@@ -151,22 +151,43 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (!r.ok) throw new Error(`Wazzup ${r.status}: ${txt.slice(0, 200)}`);
     try { return JSON.parse(txt); } catch (e) { return null; }
   }
-  async function channelId() {
-    const k = cfg();
-    if (k.channelId) return k.channelId;
+  // WAZZUP_CHANNEL_ID — код канала или просто номер канала (например 77710206625). transport "whatsapp" — обычный
+  // WhatsApp (можно писать любым текстом), "wapi" — WABA (вне 24 ч только шаблоном).
+  async function chanInfo() {
     if (channelCache) return channelCache;
+    const k = cfg();
     const list = await wazzupGet("/channels");
-    const wa = (Array.isArray(list) ? list : []).filter((c) => /wapi|whatsapp/i.test(String(c.transport || "")) && (!c.state || /active/i.test(String(c.state))));
-    if (wa.length !== 1) throw new Error(`WhatsApp-каналов в Wazzup: ${wa.length} — укажите WAZZUP_CHANNEL_ID`);
-    channelCache = wa[0].channelId;
+    const all = Array.isArray(list) ? list : [];
+    const wa = all.filter((c) => /wapi|whatsapp/i.test(String(c.transport || "")));
+    const want = k.channelId.trim(), wd = want.replace(/\D/g, "");
+    let pick = null;
+    if (want) pick = all.find((c) => c.channelId === want) || (wd.length >= 10 ? wa.find((c) => String(c.plainId || "").replace(/\D/g, "").endsWith(wd.slice(-10))) : null);
+    else { const act = wa.filter((c) => !c.state || /active/i.test(String(c.state))); if (act.length === 1) pick = act[0]; }
+    const names = wa.map((c) => `${c.plainId || "?"} (${c.transport})`).join(", ") || "—";
+    if (!pick) throw new Error(want ? `канал «${want}» не найден в Wazzup; есть: ${names}` : `WhatsApp-каналов в Wazzup несколько: ${names} — укажите в Render WAZZUP_CHANNEL_ID = номер нужного канала`);
+    channelCache = { id: pick.channelId, plain: !/wapi/i.test(String(pick.transport || "")), phone: pick.plainId || "" };
     return channelCache;
+  }
+  async function channelId() { return (await chanInfo()).id; }
+  // Ручная отправка одному блогеру (кнопки «напомнить сейчас» и «тест»): через Wazzup, если задан ключ, иначе через Битрикс.
+  async function sendNow(d, text) {
+    if (transport() === "bitrix") { const r = await sendViaBitrix(d, text); return { via: `через Битрикс (чат ${r.chatId})`, ...r }; }
+    if (transport() !== "wazzup") throw new Error("Отправка не настроена: в Render нет WAZZUP_API_KEY / BITRIX_WEBHOOK_URL");
+    const ch = await chanInfo();
+    const n = waNumber(d.phone);
+    const inWindow = C().lastIn[n] && Date.now() - Date.parse(C().lastIn[n]) < 23.5 * H;
+    if (!ch.plain && !inWindow) throw new Error("канал WABA: блогер не писал сутки, свободный текст нельзя — только шаблоном (автонапоминание)");
+    await wazzupSend({ channelId: ch.id, chatType: "whatsapp", chatId: n, text, crmMessageId: `bb-manual-${d.id}-${Date.now()}` });
+    return { via: `через Wazzup (${ch.phone})`, chatId: n, contactId: "—", userId: "—" };
   }
   async function wazzupSend(body) {
     const k = cfg();
     const r = await fetch(`${WAZZUP}/message`, { method: "POST", headers: { Authorization: `Bearer ${k.apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const txt = await r.text();
     if (!r.ok) throw new Error(`Wazzup ${r.status}: ${txt.slice(0, 200)}`);
-    try { return JSON.parse(txt); } catch (e) { return {}; }
+    let j = {}; try { j = JSON.parse(txt) || {}; } catch (e) {}
+    if (j.messageId) C().seen[`out:${j.messageId}`] = Date.now(); // чтобы статусы ошибок брать только по нашим сообщениям
+    return j;
   }
   let sending = false;
   async function processQueue() {
@@ -208,19 +229,22 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         if (transport() === "none") { q.nextTry = Date.now() + H; continue; }
         const inWindow = c.lastIn[q.chatId] && Date.now() - Date.parse(c.lastIn[q.chatId]) < 23.5 * H;
         const body = { channelId: k.channelId, chatType: "whatsapp", chatId: q.chatId, crmMessageId: q.key };
-        if (inWindow) body.text = text;
+        let plain = false;
+        try { plain = (await chanInfo()).plain; }
+        catch (e) { q.tries++; q.nextTry = Date.now() + 30 * 60 * 1000; log(q.dealId, "sys", `Wazzup: ${e.message}`); if (q.tries >= RETRY_MIN.length) { q.status = "failed"; event(d, "error", `Не удалось отправить напоминание: ${e.message}`); } changed = true; continue; }
+        if (inWindow || plain) body.text = text;
         else if (k.tpl[q.kind]) { body.templateId = k.tpl[q.kind]; body.templateValues = q.kind === "today" ? q.vals.slice(0, 2) : q.vals; } // «сегодня»: {{1}} имя, {{2}} товар; остальные + {{3}} дата
         else { q.status = "failed"; log(q.dealId, "sys", `нет кода шаблона WAZZUP_TPL_${q.kind.toUpperCase()} — блогер не писал сутки, без шаблона WABA отправить нельзя`); changed = true; continue; }
         if (k.mode === "dry") {
           q.status = "dry"; d.coordLastOutDay = today;
-          log(q.dealId, "out", `[ТЕСТ, не отправлено] ${inWindow ? "текст" : "шаблон"}: ${text}`);
+          log(q.dealId, "out", `[ТЕСТ, не отправлено] через Wazzup ${body.text ? "текст" : "шаблон"}: ${text}`);
           changed = true; continue;
         }
         try {
           body.channelId = await channelId();
           await wazzupSend(body);
           q.status = "sent"; q.sentAt = new Date().toISOString(); d.coordLastOutDay = today;
-          log(q.dealId, "out", `${inWindow ? "текст" : "шаблон"}: ${text}`);
+          log(q.dealId, "out", `через Wazzup ${body.text ? "текст" : "шаблон"}: ${text}`);
         } catch (e) {
           q.tries++;
           if (q.tries >= RETRY_MIN.length) { q.status = "failed"; log(q.dealId, "sys", `не отправлено после ${q.tries} попыток: ${e.message}`); event(d, "error", `Не удалось отправить напоминание: ${e.message}`); }
@@ -261,12 +285,13 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const id = String(msg.messageId || "");
     if (!id || c.seen[id]) return false; // дубль
     c.seen[id] = Date.now();
-    if (msg.isEcho) return true;         // наше же исходящее
+    if (msg.isEcho) return false;        // наше же исходящее или менеджера
     const chatId = waNumber(msg.chatId);
-    if (!chatId) return true;
-    c.lastIn[chatId] = new Date().toISOString();
+    if (!chatId) return false;
+    // Через Wazzup идёт вся переписка компании — берём только номера из теста, остальное не трогаем и не пишем в журнал.
     const cands = (st.microInfluencerDeals || []).filter((d) => inPilot(d) && waNumber(d.phone) === chatId);
-    if (!cands.length) { log(null, "in", `сообщение от ${chatId} — не из теста, пропущено`); return true; }
+    if (!cands.length) { delete c.seen[id]; return false; }
+    c.lastIn[chatId] = new Date().toISOString();
     const today = almatyDate();
     const active = cands.filter((d) => !isPublished(d)).sort((a, b) => Math.abs(daysBetween(today, a.plannedDate || today)) - Math.abs(daysBetween(today, b.plannedDate || today)));
     const d = active[0] || cands[0];
@@ -319,7 +344,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     let changed = false;
     try {
       for (const m of Array.isArray(b.messages) ? b.messages : []) if (handleIncoming(m)) changed = true;
-      if (Array.isArray(b.statuses)) for (const s of b.statuses) if (s && s.status === "error") { log(null, "sys", `Wazzup: ошибка доставки сообщения ${s.messageId || ""}`); changed = true; }
+      if (Array.isArray(b.statuses)) for (const s of b.statuses) if (s && s.status === "error" && C().seen[`out:${s.messageId}`]) { log(null, "sys", `Wazzup: ошибка доставки сообщения ${s.messageId || ""}`); changed = true; }
     } catch (e) { console.error("Wazzup webhook:", e.message); }
     if (changed) persist();
     res.status(200).json({ ok: true });
@@ -516,11 +541,35 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const d = (getState().microInfluencerDeals || []).find((x) => inPilot(x) && k.phones.includes(waNumber(x.phone)));
     if (!d) return res.status(400).json({ error: "Нет строки тестового менеджера с номером из COORD_PILOT_PHONES" });
     try {
-      const r = await sendViaBitrix(d, `Тест Barter Box: проверка связи (${d.blogerName || ""}). Можно не отвечать.`);
-      log(d.id, "out", `[проверка] через Битрикс (чат ${r.chatId}, контакт ${r.contactId}, от пользователя ${r.userId})`);
+      const r = await sendNow(d, `Тест Barter Box: проверка связи (${d.blogerName || ""}). Можно не отвечать.`);
+      log(d.id, "out", `[проверка] ${r.via}`);
       persist();
       res.json({ ok: true, ...r, blogger: d.blogerName });
     } catch (e) { res.status(400).json({ error: e.message, blogger: d.blogerName }); }
+  });
+  // Wazzup → Barter Box: куда присылать ответы блогеров. Если в Wazzup уже стоит ДРУГОЙ адрес — не перезаписываем.
+  app.post("/api/coord/wazzup/connect", requireAuth, async (req, res) => {
+    if (!staff(req, res)) return;
+    const k = cfg();
+    if (!k.apiKey) return res.status(400).json({ error: "В Render не задан WAZZUP_API_KEY" });
+    if (k.secret.length < 16) return res.status(400).json({ error: "В Render не задан COORD_WEBHOOK_SECRET (16+ символов)" });
+    const base = String(process.env.PUBLIC_URL || `https://${req.get("host")}`).replace(/\/+$/, "");
+    const url = `${base}/api/wazzup/webhook/${k.secret}`;
+    try {
+      const cur = await wazzupGet("/webhooks").catch(() => null);
+      const curUri = String((cur && cur.webhooksUri) || "");
+      if (curUri && curUri !== url) {
+        let host = ""; try { host = new URL(curUri).host; } catch (e) { host = "?"; }
+        return res.status(409).json({ error: `В Wazzup уже указан другой адрес для вебхуков (${host}) — его использует другая интеграция, не перезаписываю. Спросите разработчика.` });
+      }
+      const r = await fetch(`${WAZZUP}/webhooks`, { method: "PATCH", headers: { Authorization: `Bearer ${k.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ webhooksUri: url, subscriptions: { messagesAndStatuses: true } }) });
+      const txt = await r.text();
+      if (!r.ok) throw new Error(`Wazzup ${r.status}: ${txt.slice(0, 200)}`);
+      log(null, "sys", "Wazzup: ответы блогеров подключены к Barter Box");
+      persist();
+      res.json({ ok: true });
+    } catch (e) { res.status(400).json({ error: e.message }); }
   });
   app.get("/api/coord/bitrix-info", requireAuth, async (req, res) => {
     if (!staff(req, res)) return;
@@ -562,16 +611,16 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const d = (getState().microInfluencerDeals || []).find((x) => x.id === +req.params.id);
     if (!d) return res.status(404).json({ error: "не найдено" });
     if (!inPilot(d)) return res.status(400).json({ error: "Строка не в тесте: ответственный должен быть " + (cfg().manager || "(не задан COORD_PILOT_MANAGER)") + ", номер — из COORD_PILOT_PHONES" });
-    if (transport() !== "bitrix") return res.status(400).json({ error: "Отправка не настроена: в Render нет BITRIX_WEBHOOK_URL" });
+    if (transport() === "none") return res.status(400).json({ error: "Отправка не настроена: в Render нет WAZZUP_API_KEY / BITRIX_WEBHOOK_URL" });
     const pd = String(d.plannedDate || "").slice(0, 10), today = almatyDate();
     const diff = pd ? daysBetween(today, pd) : 1;
     const kind = diff > 0 ? "soon" : diff === 0 ? "today" : "overdue";
     const vals = [String(d.blogerName || "").replace(/@/g, "").trim() || "здравствуйте", d.product || "интеграции", ddmm(pd)];
     const text = TEXTS[kind](vals);
     try {
-      const r = await sendViaBitrix(d, text);
+      const r = await sendNow(d, text);
       d.coordLastOutDay = today;
-      log(d.id, "out", `[вручную] через Битрикс (чат ${r.chatId}): ${text}`);
+      log(d.id, "out", `[вручную] ${r.via}: ${text}`);
       persist();
       res.json({ ok: true, text, ...r });
     } catch (e) {
