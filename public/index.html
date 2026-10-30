@@ -5828,7 +5828,7 @@ function reminderRowHtml(d){
   return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--line)">
     <b>${escapeHtml(d.blogerName||"")}</b>
     <span style="color:var(--ink-mute)">${escapeHtml(d.product||"—")} · план ${escapeHtml(pd.slice(8,10)+"."+pd.slice(5,7))} · ${escapeHtml(d.responsible||"")}</span>
-    ${d.coordNext && d.coordNext.text ? `<span style="font-size:11px;color:var(--ink-mute)" title="Координатор WhatsApp (тест)">🤖 ${escapeHtml(d.coordNext.text)}</span>` : ""}
+    ${d.coordNext && d.coordNext.text ? `<span style="font-size:11px;color:var(--ink-mute)" title="Координатор WhatsApp (тест)">🤖 ${escapeHtml(d.coordNext.text)}</span>${UI.readOnly ? "" : ` <a href="#" class="coord-stop" data-id="${d.id}" data-resume="${d.coordStop ? 1 : 0}" style="font-size:11px">${d.coordStop ? "▶ включить напоминания" : "⏸ стоп"}</a>`}` : ""}
     <span style="flex:1"></span>
     ${wa ? `<a class="btn btn-ghost btn-sm" href="https://wa.me/${wa}" target="_blank" rel="noopener" title="Открыть чат WhatsApp">💬 WhatsApp</a>` : `<span style="color:var(--bad);font-size:12px" title="Номер не похож на WhatsApp: ${escapeHtml(String(d.phone||"пусто"))}">нет номера</span>`}
     <button class="btn btn-ghost btn-sm reminder-open" data-id="${d.id}">Открыть</button>
@@ -5857,6 +5857,10 @@ function modalMyReminders(team){
     const d = (DataManager.state.microInfluencerDeals||[]).find(x=> x.id === parseInt(b.dataset.id,10));
     if(d){ closeModal(); modalMicroDeal(d); }
   }; });
+  document.querySelectorAll(".coord-stop").forEach(a=>{ a.onclick = async (e)=>{
+    e.preventDefault();
+    try{ await apiFetch("/api/coord/deal/"+a.dataset.id+"/stop", {method:"POST", headers:jsonHeaders, body:JSON.stringify(a.dataset.resume==="1" ? {resume:true} : {})}); await DataManager.refresh(); closeModal(); modalMyReminders(team); }catch(err){ toast(err.message, true); }
+  }; });
   document.querySelectorAll(".coord-read").forEach(b=>{ b.onclick = async ()=>{
     try{ await withBusy(b, ()=> apiFetch("/api/coord/events/"+b.dataset.id+"/read", {method:"POST"})); await DataManager.refresh(); closeModal(); modalMyReminders(team); render(); }catch(e){ toast(e.message, true); }
   }; });
@@ -5874,7 +5878,20 @@ function modalMyReminders(team){
       const arrow = l.dir==="out" ? "→" : l.dir==="in" ? "←" : "·";
       return `<div>${escapeHtml(when)} ${arrow} ${d ? `<b>${escapeHtml(d.blogerName||"")}</b>: ` : ""}${escapeHtml(l.text||"")}</div>`;
     }).join("");
-    box.innerHTML = `<div style="border-top:1px solid var(--line);padding-top:8px"><b>🤖 Координатор WhatsApp: ${mode}</b>${st.manager ? ` · тест: ${escapeHtml(st.manager)}` : ""}${st.phones && st.phones.length ? ` · номера: ${st.phones.length}` : ""} · в очереди ${st.queue||0}${st.mode!=="off" && !st.wazzup ? " · нет ключа Wazzup" : ""}${st.wazzup ? ` · <a href="#" id="wz-info">каналы и шаблоны Wazzup</a>` : ""} · <a href="#" id="bx-info">Битрикс: линии</a></div><div id="wz-info-box"></div>${logHtml ? `<div style="margin-top:6px;max-height:160px;overflow:auto">${logHtml}</div>` : ""}`;
+    box.innerHTML = `<div style="border-top:1px solid var(--line);padding-top:8px"><b>🤖 Координатор WhatsApp: ${mode}</b>${st.manager ? ` · тест: ${escapeHtml(st.manager)}` : ""}${st.phones && st.phones.length ? ` · номера: ${st.phones.length}` : ""} · в очереди ${st.queue||0} · отправка: ${st.transport==="bitrix" ? "через Битрикс" : st.transport==="wazzup" ? "через Wazzup" : "не настроена"}${st.transport==="bitrix" ? ` · бот: ${st.bot ? "подключён" : "нет"}` : ""}${st.wazzup ? ` · <a href="#" id="wz-info">каналы и шаблоны Wazzup</a>` : ""} · <a href="#" id="bx-info">Битрикс: линии</a>${st.transport==="bitrix" && !UI.readOnly ? ` · <a href="#" id="bx-bot">${st.bot ? "переподключить бота" : "подключить бота"}</a> · <a href="#" id="bx-test">тест: отправить на тестовый номер</a>` : ""}</div><div id="wz-info-box"></div>${logHtml ? `<div style="margin-top:6px;max-height:160px;overflow:auto">${logHtml}</div>` : ""}`;
+    const showBox = (html)=>{ const b = document.getElementById("wz-info-box"); if(b) b.innerHTML = `<div style="margin-top:6px;padding:6px;border:1px solid var(--line);border-radius:8px;user-select:text">${html}</div>`; };
+    const bxBot = document.getElementById("bx-bot");
+    if(bxBot) bxBot.onclick = async (e)=>{
+      e.preventDefault(); showBox("подключаю…");
+      try{ const r = await apiFetch("/api/coord/bitrix-bot/register", {method:"POST"}); showBox(`✅ Бот «Barter Box» создан в Битриксе (ID ${escapeHtml(String(r.botId))}). Теперь администратор: Контакт-центр → открытая линия с WhatsApp → настройки → «Чат-бот» → выбрать «Barter Box». Бот только читает первое сообщение диалога и сразу передаёт чат менеджеру.`); }
+      catch(err){ showBox("❌ " + escapeHtml(err.message)); }
+    };
+    const bxTest = document.getElementById("bx-test");
+    if(bxTest) bxTest.onclick = async (e)=>{
+      e.preventDefault(); showBox("отправляю тестовое сообщение…");
+      try{ const r = await apiFetch("/api/coord/test-send", {method:"POST"}); showBox(`✅ Отправлено (${escapeHtml(r.blogger||"")}): контакт ${escapeHtml(String(r.contactId))}, чат ${escapeHtml(String(r.chatId))}, от пользователя ${escapeHtml(String(r.userId))}. Проверьте WhatsApp на тестовом номере.`); }
+      catch(err){ showBox("❌ " + escapeHtml(err.message)); }
+    };
     const bx = document.getElementById("bx-info");
     if(bx) bx.onclick = async (e)=>{
       e.preventDefault();
