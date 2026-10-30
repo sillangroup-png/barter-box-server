@@ -327,28 +327,46 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
 
   // ---------- Битрикс24: отправка и бот ----------
   function bxPhoneVariants(n) { return [`+${n}`, n, `8${n.slice(1)}`]; }
+  // Чат блогера в открытой линии: Wazzup мог привязать переписку к контакту, сделке контакта, лиду или компании —
+  // ищем все объекты CRM с этим телефоном и берём самый свежий чат (imopenlines.crm.chat.get, типы — строчными).
+  async function findOpenlineChat(n) {
+    const found = { contact: [], deal: [], lead: [], company: [] };
+    for (const [et, key] of [["CONTACT", "contact"], ["LEAD", "lead"], ["COMPANY", "company"]]) {
+      const f = await bitrix("crm.duplicate.findbycomm", { entity_type: et, type: "PHONE", values: bxPhoneVariants(n) }).catch(() => null);
+      if (f && Array.isArray(f[et])) found[key] = f[et].slice(0, 5).map(Number);
+    }
+    for (const cid of found.contact) {
+      const deals = await bitrix("crm.deal.list", { filter: { CONTACT_ID: cid }, select: ["ID"], order: { ID: "DESC" } }).catch(() => []);
+      found.deal.push(...(Array.isArray(deals) ? deals : []).slice(0, 5).map((x) => Number(x.ID)));
+    }
+    let best = null;
+    for (const type of ["contact", "deal", "lead", "company"]) {
+      for (const id of found[type]) {
+        const chats = await bitrix("imopenlines.crm.chat.get", { CRM_ENTITY_TYPE: type, CRM_ENTITY: id, ACTIVE_ONLY: "N" }).catch(() => []);
+        for (const ch of Array.isArray(chats) ? chats : []) {
+          const chatId = Number(ch.CHAT_ID || ch.chatId);
+          if (chatId && (!best || chatId > best.chatId)) best = { chatId, type, id, connector: ch.CONNECTOR_TITLE || ch.CONNECTOR_ID || "" };
+        }
+      }
+    }
+    const summary = `контакты: ${found.contact.join(",") || "—"}; сделки: ${found.deal.join(",") || "—"}; лиды: ${found.lead.join(",") || "—"}`;
+    return { best, summary };
+  }
   async function sendViaBitrix(d, text) {
     const k = cfg();
     const n = waNumber(d.phone);
     const fail = (m) => { const e = new Error(m); e.permanent = true; return e; };
-    let contactId = d.coordContactId || null;
-    if (!contactId) {
-      const f = await bitrix("crm.duplicate.findbycomm", { entity_type: "CONTACT", type: "PHONE", values: bxPhoneVariants(n) });
-      contactId = f && Array.isArray(f.CONTACT) && f.CONTACT.length ? f.CONTACT[0] : null;
-      if (!contactId) throw fail(`в CRM Битрикса нет контакта с номером +${n} — напишите блогеру вручную`);
-      d.coordContactId = contactId;
-    }
-    const chatId = await bitrix("imopenlines.crm.chat.getLastId", { CRM_ENTITY_TYPE: "CONTACT", CRM_ENTITY: contactId });
-    if (!chatId) throw fail(`у контакта ${contactId} нет переписки в открытой линии — первое сообщение отправьте вручную`);
-    d.coordChatId = Number(chatId);
+    const { best, summary } = await findOpenlineChat(n);
+    if (!best) throw fail(`в Битриксе не найден чат открытой линии с номером +${n} (${summary}) — напишите блогеру вручную`);
+    d.coordChatId = best.chatId; d.coordCrm = { type: best.type, id: best.id };
     let userId = k.senderId;
     if (!userId) {
-      const dlg = await bitrix("imopenlines.dialog.get", { CHAT_ID: chatId }).catch(() => null);
+      const dlg = await bitrix("imopenlines.dialog.get", { CHAT_ID: best.chatId }).catch(() => null);
       userId = dlg && Number(dlg.owner || dlg.OWNER) || 0;
     }
     if (!userId) throw fail("не понятно, от чьего имени писать (у чата нет ответственного) — задайте COORD_SENDER_USER_ID");
-    await bitrix("imopenlines.crm.message.add", { CRM_ENTITY_TYPE: "contact", CRM_ENTITY: contactId, USER_ID: userId, CHAT_ID: chatId, MESSAGE: text });
-    return { chatId, contactId, userId };
+    await bitrix("imopenlines.crm.message.add", { CRM_ENTITY_TYPE: best.type, CRM_ENTITY: best.id, USER_ID: userId, CHAT_ID: best.chatId, MESSAGE: text });
+    return { chatId: best.chatId, contactId: `${best.type} ${best.id}`, userId };
   }
   // Бот Barter Box на открытой линии. Регистрация — кнопкой на сайте; к линии его прикрепляют в Контакт-центре.
   const express = require("express");
