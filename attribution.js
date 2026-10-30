@@ -33,7 +33,7 @@
 //    один раз (строка крупных), вторая duplicate. Отменённые (cancelled) не считаются.
 // ============================================================================
 
-const PARAMS_VERSION = "attrib-v11.0-2026-10-21";
+const PARAMS_VERSION = "attrib-v12.0-2026-10-30";
 // v10 (21.10.2026, решение Нины): окно у крупных — только день выхода и следующий (у них часто сторис,
 // продажи в первые сутки); у мелких — как в v9, до 7 дней. В общий день прирост делится между крупными
 // и мелкими только при заметном пересечении: если охват одной стороны в этот день меньше 20% охвата
@@ -42,7 +42,15 @@ const PARAMS_VERSION = "attrib-v11.0-2026-10-21";
 const LARGE_WINDOW_DAYS = 2;
 // v11 (21.10.2026): шлейф — 50% подъёма над уровнем до кампании, не попавшего в пики.
 const TAIL_SHARE = 0.5;
-const TAIL_DAYS_MICRO = 14, TAIL_HALF_LIFE_MICRO = 3;
+// v12 (30.10.2026, по замечанию аналитика «шлейф = верхняя оценка»): шлейф мелких короче — 7 дней, вдвое за 2 дня;
+// уровень до кампании поправляется на общий фон магазина (контрольная группа — все товары, которые блогеры
+// не рекламировали: если весь Kaspi вырос из-за сезона/рекламы Kaspi, этот рост блогерам не идёт);
+// в дни скидки (цена ниже обычной больше чем на 5%) шлейфа нет — рост в такие дни отдаём акции.
+const TAIL_DAYS_MICRO = 7, TAIL_HALF_LIFE_MICRO = 2;
+const QUIET_DAYS = 14;          // «тихий» день для уровня до кампании: 14 дней до него о товаре никто не выходил
+const CONTROL_SMOOTH_DAYS = 7;  // фон магазина — среднее за 7 дней (сглаживает дни недели)
+const CONTROL_INDEX_MIN = 0.5, CONTROL_INDEX_MAX = 3;
+const PROMO_PRICE_DROP = 0.05;
 const TAIL_DAYS_LARGE = 2, TAIL_HALF_LIFE_LARGE = 1;
 const OVERLAP_MIN_SHARE = 0.2;
 
@@ -224,7 +232,18 @@ function robustFit2(x1, x2, ys) {
 //   listedSince, feedStart, lastCompleteDay ('YYYY-MM-DD' — последний полностью загруженный день)
 // ---------------------------------------------------------------------------
 const EMPTY = Object.freeze({ lines: 0, cancelled: 0, returned: 0, netLines: 0, qty: 0, kzt: 0 });
-function planAttribution({ placements, resolution, daily, weekdayFactor, listedSince, feedStart, lastCompleteDay }) {
+function planAttribution({ placements, resolution, daily, weekdayFactor, listedSince, feedStart, lastCompleteDay, control }) {
+  // Фон магазина по дням (контрольная группа): скользящее среднее за CONTROL_SMOOTH_DAYS по товарам без блогеров.
+  const ctrlAvgCache = new Map();
+  const ctrlAvg = (d) => {
+    if (!control || !control.size) return null;
+    if (ctrlAvgCache.has(d)) return ctrlAvgCache.get(d);
+    let sum = 0, n = 0;
+    for (let k = 0; k < CONTROL_SMOOTH_DAYS; k++) { const x = control.get(addDaysStr(d, -k)); if (x != null) { sum += x; n++; } }
+    const v = n >= 4 ? sum / n : null;
+    ctrlAvgCache.set(d, v);
+    return v;
+  };
   const results = new Map();
   const V = ` [${PARAMS_VERSION}]`;
   const setNo = (id, status, note) => results.set(String(id), { status, units: null, kzt: null, note: note + V });
@@ -420,13 +439,30 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
     //    Уровень до кампании — среднее за дни, когда о товаре 14 дней до этого никто не выходил (до 30 последних
     //    таких дней), с пересчётом на цену дня; нужно ≥3 таких дней, иначе шлейфа нет.
     const postDaysSorted = [...new Set(members.map((m) => m.d0))].sort();
-    const quietDays = days.filter((d) => !postDaysSorted.some((p) => p <= d && daysBetween(p, d) < TAIL_DAYS_MICRO));
+    const quietDays = days.filter((d) => !postDaysSorted.some((p) => p <= d && daysBetween(p, d) < QUIET_DAYS));
+    // Уровень до кампании на день d: среднее тихих дней (с поправкой на цену) × рост фона магазина с тех дней до d.
+    // Возвращает {pb, idx, promo}: promo — в день d скидка (цена ниже обычной тихих дней) → шлейфа нет.
     const preBaseOf = (d) => {
       const pd = dayPrice.get(d);
       const cand = quietDays.filter((x) => x < d).slice(-30);
-      const vals = [];
-      for (const x of cand) { const f = priceFactor(dayPrice.get(x), pd); if (f != null) vals.push(rec(code, x).qty * f); }
-      return vals.length >= 3 ? vals.reduce((a, v) => a + v, 0) / vals.length : null;
+      const vals = [], prices = [], ctrl = [];
+      for (const x of cand) {
+        const f = priceFactor(dayPrice.get(x), pd);
+        if (f != null) vals.push(rec(code, x).qty * f);
+        if (dayPrice.get(x) > 0) prices.push(dayPrice.get(x));
+        const c = ctrlAvg(x); if (c != null) ctrl.push(c);
+      }
+      if (vals.length < 3) return null;
+      const base = vals.reduce((a, v) => a + v, 0) / vals.length;
+      const usual = median(prices);
+      const promo = !!(usual && pd > 0 && pd < usual * (1 - PROMO_PRICE_DROP));
+      let idx = 1;
+      const cNow = ctrlAvg(d);
+      if (cNow != null && ctrl.length >= 3) {
+        const cPre = ctrl.reduce((a, v) => a + v, 0) / ctrl.length;
+        if (cPre > 0) idx = Math.min(CONTROL_INDEX_MAX, Math.max(CONTROL_INDEX_MIN, cNow / cPre));
+      }
+      return { pb: base * idx, idx, promo };
     };
     const tail = new Map(); // id → {u, k, days, pre}
     const tailMembers = members.filter((m) => win.has(m.id));
@@ -442,22 +478,23 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
         cover.push({ m, wgt: Math.sqrt(m.reachUsed) * m.format.coef * Math.pow(0.5, k / hl) });
       }
       if (!cover.length) continue;
-      const pb = preBaseOf(d);
-      if (pb == null) continue;
+      const pre = preBaseOf(d);
+      if (pre == null || pre.promo) continue;
+      const pb = pre.pb;
       const resid = rec(code, d).qty - pb - (assignedByDay.get(d) || 0);
       if (!(resid > 0)) continue;
       const pool = resid * TAIL_SHARE, W = cover.reduce((a, c) => a + c.wgt, 0);
       for (const c of cover) {
         const u = pool * c.wgt / W;
-        const t = tail.get(c.m.id) || { u: 0, k: 0, days: 0, pre: [] };
-        t.u += u; t.k += u * dayPrice.get(d); t.days++; t.pre.push(pb);
+        const t = tail.get(c.m.id) || { u: 0, k: 0, days: 0, pre: [], idx: [] };
+        t.u += u; t.k += u * dayPrice.get(d); t.days++; t.pre.push(pb); t.idx.push(pre.idx);
         tail.set(c.m.id, t);
       }
     }
     for (const w of win.values()) {
       const { m, bl } = w;
       let { u0, k0, uT, kT, parts, minShare } = spike.get(m.id);
-      const tl = tail.get(m.id) || { u: 0, k: 0, days: 0, pre: [] };
+      const tl = tail.get(m.id) || { u: 0, k: 0, days: 0, pre: [], idx: [] };
       let uS = tl.u, kS = tl.k;
       let units = u0 + uT + uS, capped = false;
       if (!m.reachEstimated && units > 0 && units > m.reachUsed * MAX_PURCHASES_PER_VIEW) {
@@ -466,7 +503,8 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
       }
       const conf = m.reachEstimated || bl.step === 4 ? "L" : (bl.step === 3 || minShare < 0.5 || w.priceGap ? "M" : "H");
       const preLevel = tl.pre.length ? tl.pre.reduce((a, v) => a + v, 0) / tl.pre.length : null;
-      push(m.id, { code, status: k0 + kT + kS >= 1 ? "ok" : "zero", k0: Math.floor(k0), kT: Math.floor(kT), kS: Math.floor(kS), uS, tailDays: tl.days, preLevel,
+      const ctrlIdx = tl.idx.length ? tl.idx.reduce((a, v) => a + v, 0) / tl.idx.length : null;
+      push(m.id, { code, status: k0 + kT + kS >= 1 ? "ok" : "zero", k0: Math.floor(k0), kT: Math.floor(kT), kS: Math.floor(kS), uS, tailDays: tl.days, preLevel, ctrlIdx,
         units, conf, bl, parts, capped, growing: w.open, priceGap: w.priceGap, q0: rec(code, m.d0).qty, price0: dayPrice.get(m.d0) });
     }
   }
@@ -490,7 +528,7 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
     const t = k0 + kT + kS;
     const txt = good.map((q) => {
       const base = `SKU ${q.code}: обычный уровень ${fmtQ(q.bl.B)} шт/день при цене ${fmt(q.bl.p0)} ₸ (${q.bl.how}, ${q.bl.n} дн.)`;
-      const tailTxt = q.kS >= 1 ? `; шлейф ${fmt(q.kS)} ₸ (≈${fmtQ(q.uS)} шт за ${q.tailDays} дн.: 50% подъёма над уровнем до кампании ≈${fmtQ(q.preLevel)} шт/день, поделено по охвату и затуханию)` : "";
+      const tailTxt = q.kS >= 1 ? `; шлейф ${fmt(q.kS)} ₸ (≈${fmtQ(q.uS)} шт за ${q.tailDays} дн.: 50% подъёма над уровнем до кампании ≈${fmtQ(q.preLevel)} шт/день с учётом фона магазина${q.ctrlIdx && Math.abs(q.ctrlIdx - 1) >= 0.05 ? ` ×${q.ctrlIdx.toFixed(2)}` : ""}, без дней скидок; поделено по охвату и затуханию)` : "";
       if (!q.parts.length) return `${base}; в день выхода ${fmtQ(q.q0)} шт — пика над обычным уровнем нет` + (q.priceGap ? " (в дни с другой ценой влияние цены по истории не определить — не считали)" : "") + tailTxt;
       const ds = q.parts.map((r) => `${ddmmD(r.d)}: ${fmtQ(r.q)} шт при ожидаемых ${fmtQ(r.exp)}${Math.abs(r.price / q.bl.p0 - 1) > PRICE_DRIFT_TOLERANCE ? ` (цена ${fmt(r.price)} ₸ — ожидание с учётом цены)` : ""} → +${fmtQ(r.ex)}` +
         (r.sh < 0.999 ? `, доля по охвату ${Math.round(r.sh * 100)}% (в этот день также ${r.others.slice(0, 3).join(", ")}${r.others.length > 3 ? "…" : ""})` : "") +
@@ -653,8 +691,22 @@ async function runDailyAttribution(pgPool, { log = console.log } = {}) {
     }
   }
 
+  // 3б. Контрольная группа (v12): штук в день по ВСЕМ товарам, которые блогеры не рекламировали (без отмен и
+  //     возвратов), за 120 дней. Показывает общий фон магазина: сезон, реклама Kaspi, распродажи площадки.
+  const control = new Map();
+  {
+    const promoted = [...new Set([...allRaw, ...liveCodes])];
+    const sql = `WITH ${LINES_CTE.replace("%WHERE%", () => "e.order_date >= ($1::date - 120) AND NOT (e.offer_code = ANY($2::text[]))").replace(/\$EXCL/g, () => "$3")}
+      SELECT order_date::text AS d, COALESCE(sum(quantity), 0)::float8 AS qty
+      FROM f WHERE NOT is_cancelled AND NOT is_returned GROUP BY 1`;
+    try {
+      const { rows } = await pgPool.query(sql, [today, promoted, EXCLUDED_ORDER_STATUSES]);
+      for (const r of rows) if (r.d <= lastCompleteDay) control.set(r.d, Number(r.qty));
+    } catch (e) { log(`[attribution] контрольная группа не загружена (шлейф без поправки на фон): ${e.message}`); }
+  }
+
   // 4. Расчёт и запись.
-  const plan = planAttribution({ placements, resolution, daily, weekdayFactor, listedSince, feedStart, lastCompleteDay });
+  const plan = planAttribution({ placements, resolution, daily, weekdayFactor, listedSince, feedStart, lastCompleteDay, control });
   const ids = [], units = [], kzts = [], statuses = [], notes = [];
   for (const p of placements) {
     const r = plan.results.get(String(p.id)) || { status: "compute_error", units: null, kzt: null, note: `Строка не попала в расчёт. [${PARAMS_VERSION}]` };
