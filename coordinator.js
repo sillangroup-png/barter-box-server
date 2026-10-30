@@ -339,17 +339,29 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       const deals = await bitrix("crm.deal.list", { filter: { CONTACT_ID: cid }, select: ["ID"], order: { ID: "DESC" } }).catch(() => []);
       found.deal.push(...(Array.isArray(deals) ? deals : []).slice(0, 5).map((x) => Number(x.ID)));
     }
-    let best = null;
+    const all = [];
     for (const type of ["contact", "deal", "lead", "company"]) {
       for (const id of found[type]) {
         const chats = await bitrix("imopenlines.crm.chat.get", { CRM_ENTITY_TYPE: type, CRM_ENTITY: id, ACTIVE_ONLY: "N" }).catch(() => []);
         for (const ch of Array.isArray(chats) ? chats : []) {
           const chatId = Number(ch.CHAT_ID || ch.chatId);
-          if (chatId && (!best || chatId > best.chatId)) best = { chatId, type, id, connector: ch.CONNECTOR_TITLE || ch.CONNECTOR_ID || "" };
+          if (chatId && !all.some((x) => x.chatId === chatId)) all.push({ chatId, type, id, connector: ch.CONNECTOR_TITLE || ch.CONNECTOR_ID || "" });
         }
       }
     }
-    const summary = `контакты: ${found.contact.join(",") || "—"}; сделки: ${found.deal.join(",") || "—"}; лиды: ${found.lead.join(",") || "—"}`;
+    all.sort((a, b) => b.chatId - a.chatId);
+    // Только чат нужной открытой линии (COORD_LINE_ID, например 52 — линия с WhatsApp): у блогера могут быть чаты и в других линиях.
+    const lineId = String(process.env.COORD_LINE_ID || "").trim();
+    let best = null; const lines = [];
+    for (const ch of all) {
+      const dlg = await bitrix("imopenlines.dialog.get", { CHAT_ID: ch.chatId }).catch(() => null);
+      const ent = String((dlg && (dlg.entity_id || dlg.ENTITY_ID)) || "");
+      const ln = String((dlg && (dlg.config_id || dlg.CONFIG_ID || dlg.line_id)) || ent.split("|")[1] || "");
+      ch.line = ln; ch.owner = dlg && Number(dlg.owner || dlg.OWNER) || 0;
+      lines.push(`чат ${ch.chatId} — линия ${ln || "?"}`);
+      if (!lineId || ln === lineId) { best = ch; break; }
+    }
+    const summary = `контакты: ${found.contact.join(",") || "—"}; сделки: ${found.deal.join(",") || "—"}; лиды: ${found.lead.join(",") || "—"}${lines.length ? "; " + lines.slice(0, 5).join(", ") : ""}${lineId ? `; нужна линия ${lineId}` : ""}`;
     return { best, summary };
   }
   async function sendViaBitrix(d, text) {
@@ -359,11 +371,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const { best, summary } = await findOpenlineChat(n);
     if (!best) throw fail(`в Битриксе не найден чат открытой линии с номером +${n} (${summary}) — напишите блогеру вручную`);
     d.coordChatId = best.chatId; d.coordCrm = { type: best.type, id: best.id };
-    let userId = k.senderId;
-    if (!userId) {
-      const dlg = await bitrix("imopenlines.dialog.get", { CHAT_ID: best.chatId }).catch(() => null);
-      userId = dlg && Number(dlg.owner || dlg.OWNER) || 0;
-    }
+    let userId = k.senderId || best.owner || 0;
     if (!userId) throw fail("не понятно, от чьего имени писать (у чата нет ответственного) — задайте COORD_SENDER_USER_ID");
     await bitrix("imopenlines.crm.message.add", { CRM_ENTITY_TYPE: best.type, CRM_ENTITY: best.id, USER_ID: userId, CHAT_ID: best.chatId, MESSAGE: text });
     return { chatId: best.chatId, contactId: `${best.type} ${best.id}`, userId };
