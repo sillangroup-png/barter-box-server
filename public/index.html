@@ -5874,7 +5874,20 @@ function modalMyReminders(team){
       const arrow = l.dir==="out" ? "→" : l.dir==="in" ? "←" : "·";
       return `<div>${escapeHtml(when)} ${arrow} ${d ? `<b>${escapeHtml(d.blogerName||"")}</b>: ` : ""}${escapeHtml(l.text||"")}</div>`;
     }).join("");
-    box.innerHTML = `<div style="border-top:1px solid var(--line);padding-top:8px"><b>🤖 Координатор WhatsApp: ${mode}</b>${st.manager ? ` · тест: ${escapeHtml(st.manager)}` : ""}${st.phones && st.phones.length ? ` · номера: ${st.phones.length}` : ""} · в очереди ${st.queue||0}${st.mode!=="off" && !st.wazzup ? " · нет ключа Wazzup" : ""}${st.wazzup ? ` · <a href="#" id="wz-info">каналы и шаблоны Wazzup</a>` : ""}</div><div id="wz-info-box"></div>${logHtml ? `<div style="margin-top:6px;max-height:160px;overflow:auto">${logHtml}</div>` : ""}`;
+    box.innerHTML = `<div style="border-top:1px solid var(--line);padding-top:8px"><b>🤖 Координатор WhatsApp: ${mode}</b>${st.manager ? ` · тест: ${escapeHtml(st.manager)}` : ""}${st.phones && st.phones.length ? ` · номера: ${st.phones.length}` : ""} · в очереди ${st.queue||0}${st.mode!=="off" && !st.wazzup ? " · нет ключа Wazzup" : ""}${st.wazzup ? ` · <a href="#" id="wz-info">каналы и шаблоны Wazzup</a>` : ""} · <a href="#" id="bx-info">Битрикс: линии</a></div><div id="wz-info-box"></div>${logHtml ? `<div style="margin-top:6px;max-height:160px;overflow:auto">${logHtml}</div>` : ""}`;
+    const bx = document.getElementById("bx-info");
+    if(bx) bx.onclick = async (e)=>{
+      e.preventDefault();
+      const b = document.getElementById("wz-info-box");
+      b.innerHTML = "загружаю…";
+      try{
+        const r = await apiFetch("/api/coord/bitrix-info");
+        const sc = r.scope ? `<div>права вебхука: <b>${escapeHtml((r.scope||[]).join(", "))}</b></div>` : `<div>права: ${escapeHtml(r.scopeError||"")}</div>`;
+        const ln = (r.lines||[]).map(l=>`<div>линия <b>ID ${escapeHtml(String(l.id))}</b> — ${escapeHtml(l.name||"")} ${l.active==="Y"?"(активна)":"(выключена)"}</div>`).join("") || (r.linesError ? `<div>линии: ${escapeHtml(r.linesError)}</div>` : "<div>линий нет</div>");
+        const bt = (r.bots||[]).map(x=>`<div>бот ${escapeHtml(String(x.id))} · ${escapeHtml(x.code||"")} · ${escapeHtml(x.type||"")}</div>`).join("") || (r.botsError ? `<div>боты: ${escapeHtml(r.botsError)}</div>` : "<div>ботов нет</div>");
+        b.innerHTML = `<div style="margin-top:6px;padding:6px;border:1px solid var(--line);border-radius:8px;user-select:text">${sc}${ln}${bt}</div>`;
+      }catch(err){ b.innerHTML = escapeHtml(err.message); }
+    };
     const wz = document.getElementById("wz-info");
     if(wz) wz.onclick = async (e)=>{
       e.preventDefault();
