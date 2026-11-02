@@ -137,10 +137,21 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   function addDays(ymd, n) { const t = new Date(ymd + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); }
 
   // ---------- Отправка (очередь) ----------
-  const TEXTS = {
-    soon: (v) => `Здравствуйте, ${v[0]}! Напоминаем: публикация по ${v[1]} запланирована на ${v[2]}. Всё в силе?`,
-    today: (v) => `${v[0]}, сегодня дата публикации по ${v[1]}. Пришлите, пожалуйста, ссылку на видео, когда выложите.`,
-    overdue: (v) => `${v[0]}, публикация по ${v[1]} была запланирована на ${v[2]}. Подскажите, пожалуйста, когда планируете выложить?`,
+  // Тексты напоминаний (обычный WhatsApp — пишем свободным текстом). Можно заменить своими в Render:
+  // COORD_TEXT_SOON / COORD_TEXT_TODAY / COORD_TEXT_OVERDUE, подстановки {имя} {товар} {дата}.
+  const cap = (x) => { x = String(x || "").trim(); if (!x || x === "здравствуйте") return ""; return /^[а-яё]/.test(x) ? x[0].toUpperCase() + x.slice(1) : x; }; // логины (aru_beauty) не трогаем
+  const prodPh = (p) => (p && p !== "интеграции" ? ` с продуктом «${p}»` : "");
+  const DEFAULT_TEXTS = {
+    soon: (v) => `Здравствуйте${cap(v[0]) ? ", " + cap(v[0]) : ""}! 😊 Это MIXIT 💚\nНапоминаем, что публикация${prodPh(v[1])} запланирована на ${v[2]} 📅\nВсё в силе? Если планы поменялись — просто напишите, подстроимся 🙌`,
+    today: (v) => `${cap(v[0]) ? cap(v[0]) + ", д" : "Д"}обрый день! ☀️ Это MIXIT 💚\nСегодня день публикации${prodPh(v[1])} 🎬\nКогда выложите, пришлите, пожалуйста, ссылку на видео — очень ждём! ✨`,
+    overdue: (v) => `${cap(v[0]) ? cap(v[0]) + ", з" : "З"}дравствуйте! 😊 Это MIXIT 💚\nПубликация${prodPh(v[1])} была запланирована на ${v[2]}. Подскажите, пожалуйста, когда её можно ожидать? 🙏\nЕсли что-то мешает или нужна помощь — пишите, мы на связи 🤍`,
+  };
+  const envText = { soon: "COORD_TEXT_SOON", today: "COORD_TEXT_TODAY", overdue: "COORD_TEXT_OVERDUE" };
+  const TEXTS = {};
+  for (const kind of Object.keys(DEFAULT_TEXTS)) TEXTS[kind] = (v) => {
+    const own = String(process.env[envText[kind]] || "").trim();
+    if (!own) return DEFAULT_TEXTS[kind](v);
+    return own.replace(/\\n/g, "\n").replace(/\{имя\}/g, cap(v[0])).replace(/\{товар\}/g, v[1] && v[1] !== "интеграции" ? v[1] : "").replace(/\{дата\}/g, v[2] || "");
   };
   // Канал WhatsApp: из WAZZUP_CHANNEL_ID или, если не задан, единственный WhatsApp/WABA-канал аккаунта (GET /channels).
   let channelCache = null;
