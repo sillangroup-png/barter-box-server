@@ -291,14 +291,17 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (!m[3] && ymd < addDays(today, -60)) ymd = `${y + 1}${ymd.slice(4)}`;
     return ymd;
   }
-  function handleIncoming(msg) {
+  function handleIncoming(msg, ourChannel) {
+    // Адрес вебхука один на весь аккаунт Wazzup (24 номера Sillan, Masterok…): сюда приходят сообщения ВСЕХ клиентов.
+    // Берём только наш канал (WAZZUP_CHANNEL_ID), входящие, от номеров из теста. Всё остальное — сразу мимо, ничего не сохраняем.
+    if (!msg || !ourChannel || String(msg.channelId || "") !== ourChannel) return false;
+    if (msg.isEcho || String(msg.chatType || "whatsapp") !== "whatsapp") return false;
+    const chatId = waNumber(msg.chatId);
+    if (!chatId) return false;
     const st = getState(), c = C();
     const id = String(msg.messageId || "");
     if (!id || c.seen[id]) return false; // дубль
     c.seen[id] = Date.now();
-    if (msg.isEcho) return false;        // наше же исходящее или менеджера
-    const chatId = waNumber(msg.chatId);
-    if (!chatId) return false;
     // Через Wazzup идёт вся переписка компании — берём только номера из теста, остальное не трогаем и не пишем в журнал.
     const cands = (st.microInfluencerDeals || []).filter((d) => inPilot(d) && waNumber(d.phone) === chatId);
     if (!cands.length) { delete c.seen[id]; return false; }
@@ -348,17 +351,21 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     log(d.id, "sys", "неясное сообщение / вопрос — менеджеру, напоминания на паузе 24 ч");
     return true;
   }
-  app.post("/api/wazzup/webhook/:secret", (req, res) => {
+  app.post("/api/wazzup/webhook/:secret", async (req, res) => {
     const k = cfg();
     if (k.secret.length < 16 || req.params.secret !== k.secret) return res.status(404).end();
+    res.status(200).json({ ok: true }); // Wazzup ждёт быстрый ответ; разбираем после
     const b = req.body || {};
+    const msgs = Array.isArray(b.messages) ? b.messages : [];
+    const sts = Array.isArray(b.statuses) ? b.statuses : [];
+    if (!msgs.length && !sts.length) return;
     let changed = false;
     try {
-      for (const m of Array.isArray(b.messages) ? b.messages : []) if (handleIncoming(m)) changed = true;
-      if (Array.isArray(b.statuses)) for (const s of b.statuses) if (s && s.status === "error" && C().seen[`out:${s.messageId}`]) { log(null, "sys", `Wazzup: ошибка доставки сообщения ${s.messageId || ""}`); changed = true; }
+      const our = k.apiKey ? (await chanInfo()).id : "";
+      for (const m of msgs) if (handleIncoming(m, our)) changed = true;
+      for (const s of sts) if (s && s.status === "error" && C().seen[`out:${s.messageId}`]) { log(null, "sys", "Wazzup: ошибка доставки нашего напоминания"); changed = true; }
     } catch (e) { console.error("Wazzup webhook:", e.message); }
     if (changed) persist();
-    res.status(200).json({ ok: true });
   });
 
   // ---------- Битрикс24: отправка и бот ----------
@@ -569,9 +576,9 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     try {
       const cur = await wazzupGet("/webhooks").catch(() => null);
       const curUri = String((cur && cur.webhooksUri) || "");
-      if (curUri && curUri !== url) {
+      if (curUri && curUri !== url && !(req.body && req.body.replace === true)) {
         let host = ""; try { host = new URL(curUri).host; } catch (e) { host = "?"; }
-        return res.status(409).json({ error: `В Wazzup уже указан другой адрес для вебхуков (${host}) — его использует другая интеграция, не перезаписываю. Спросите разработчика.` });
+        return res.status(409).json({ error: `В Wazzup уже указан другой адрес для вебхуков (${host}).`, host, canReplace: true });
       }
       const r = await fetch(`${WAZZUP}/webhooks`, { method: "PATCH", headers: { Authorization: `Bearer ${k.apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({ webhooksUri: url, subscriptions: { messagesAndStatuses: true } }) });
