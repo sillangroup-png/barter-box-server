@@ -5895,8 +5895,14 @@ function modalMyReminders(team){
     const wzHook = document.getElementById("wz-hook");
     if(wzHook) wzHook.onclick = async (e)=>{
       e.preventDefault(); showBox("подключаю…");
-      try{ await apiFetch("/api/coord/wazzup/connect", {method:"POST"}); showBox("✅ Готово: ответы блогеров из Wazzup теперь приходят в Barter Box (только номера из теста, остальная переписка не трогается)."); }
-      catch(err){ showBox("❌ " + escapeHtml(err.message)); }
+      const done = ()=> showBox("✅ Готово: ответы блогеров из Wazzup теперь приходят в Barter Box. Берутся только сообщения с номера MIXIT от блогеров из теста — переписка остальных номеров не читается и не сохраняется.");
+      try{ await apiFetch("/api/coord/wazzup/connect", {method:"POST"}); done(); }
+      catch(err){
+        if(/уже указан другой адрес/.test(err.message) && confirm(err.message + "\n\nЗаменить его на адрес Barter Box? (Разработчик подтвердил, что старый адрес не нужен.)")){
+          try{ await apiFetch("/api/coord/wazzup/connect", {method:"POST", headers:jsonHeaders, body:JSON.stringify({replace:true})}); done(); }
+          catch(e2){ showBox("❌ " + escapeHtml(e2.message)); }
+        } else showBox("❌ " + escapeHtml(err.message));
+      }
     };
     const bxTest = document.getElementById("bx-test");
     if(bxTest) bxTest.onclick = async (e)=>{
