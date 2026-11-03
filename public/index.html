@@ -6503,7 +6503,13 @@ function videoStageOf(d){
 // Разбор ИИ (Gemini) присланного видео — сворачиваемый блок.
 function aiReviewHtml(d, open){
   const r = d && d.vreview;
-  if(!r) return "";
+  if(!r){
+    const media = d && Array.isArray(d.coordMedia) ? d.coordMedia.slice().reverse().find(m=> m.url) : null;
+    const st = videoStageOf(d);
+    if(st !== "received" && st !== "lead") return "";
+    if(!media) return `<div class="ai-review" style="color:var(--ink-mute)">🤖 ИИ не разбирал: видео нет в WhatsApp-переписке бота (отмечено вручную) — посмотрите сами</div>`;
+    return `<div class="ai-review">🤖 ИИ ещё не разбирал это видео ${UI.readOnly ? "" : `<button class="btn btn-ghost btn-sm vstage-btn" data-id="${d.id}" data-action="ai_review">Разобрать сейчас</button>`}</div>`;
+  }
   if(r.status === "running") return `<div class="ai-review">🤖 ИИ разбирает видео…</div>`;
   if(r.status === "error") return `<div class="ai-review" style="color:var(--bad)">🤖 ИИ не смог разобрать: ${escapeHtml(r.error||"")}</div>`;
   const col = r.decision === "ПУБЛИКАЦИЯ" ? "#087f5b" : r.decision === "ПРАВКИ" ? "#e67700" : "#c92a2a";
