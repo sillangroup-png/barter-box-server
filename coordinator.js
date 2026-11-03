@@ -765,23 +765,23 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (action === "approve") {
       if (!pd || pd < today) moveDeal(d, today, "одобрено после плановой даты — публикация сегодня");
       // Утром перенесли с сегодня (видео не было к 10:00), а днём прислали и одобрили — возвращаем на сегодня («сверх плана»).
-      else if (pd > today && d.vmoved && d.vmoved.from === today) moveDeal(d, today, "одобрено днём — вернули на сегодня");
+      else if (pd > today && d.vmoved && d.vmoved.from === today && /к утру/.test(d.vmoved.why || "")) moveDeal(d, today, "одобрено днём — вернули на сегодня");
       d.vstage = "approved"; d.vstageAt = now; d.vmissed = 0; d.vdueMissed = null;
       const npd = String(d.plannedDate).slice(0, 10);
       log(d.id, "sys", `менеджер одобрил видео, публикация ${ddmm(npd)}`);
       sent = await tellBlogger(d, "approved", [nameOf(d), d.product || "", npd === today ? "сегодня" : ddmm(npd)]);
     } else if (action === "revise" || action === "reshoot") {
       const days = Math.max(1, Math.min(10, Number(b.days) || (action === "revise" ? 1 : 2)));
-      const base = pd && pd > today ? pd : today;
-      const to = addWorkdays(base, days);
-      moveDeal(d, to, action === "revise" ? "правки" : "пересъём");
-      const pw = prevWorkday(to);
+      // Исправленное видео ждём через N рабочих дней от сегодня; публикацию двигаем, только если она раньше,
+      // чем рабочий день после нового срока (видео пришло заранее — дата публикации остаётся).
+      const due = addWorkdays(today, days);
+      const minPub = nextWorkday(due);
+      if (!pd || pd < minPub) moveDeal(d, minPub, action === "revise" ? "правки" : "пересъём");
       d.vstage = action; d.vstageAt = now; d.vepoch = now; d.vmissed = 0; d.vdueMissed = null;
-      d.vdue = pw < today ? today : pw; d.vcomment = comment || null; d.vrounds = (Number(d.vrounds) || 0) + 1;
+      d.vdue = due; d.vcomment = comment || null; d.vrounds = (Number(d.vrounds) || 0) + 1;
       // Сами правки менеджер пишет блогеру в чате — бот их не отправляет. Если новый срок уже сегодня, не дёргаем блогера
       // напоминанием сразу после разговора с менеджером.
-      if (inPilot(d) && d.vdue === today) C().keys[`${d.id}:due_today:${d.vdue}`] = now;
-      log(d.id, "sys", `${action === "revise" ? "правки" : "пересъём"}: новый срок видео ${ddmm(d.vdue)}, публикация ${ddmm(to)}`);
+      log(d.id, "sys", `${action === "revise" ? "правки" : "пересъём"}: исправленное видео ждём ${ddmm(d.vdue)}, публикация ${ddmm(String(d.plannedDate).slice(0, 10))}`);
     } else if (action === "received") {
       d.vstage = "received"; d.vstageAt = now; d.vreceivedAt = now;
       log(d.id, "sys", "менеджер отметил: видео пришло");
