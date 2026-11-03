@@ -23,6 +23,7 @@
 // передаёт чат менеджеру (imopenlines.bot.session.operator) — работа менеджеров в Битриксе не меняется.
 // Лимит: COORD_DAILY_CAP сообщений в день на всех (по умолчанию 30).
 const crypto = require("crypto");
+const { reviewVideo } = require("./video-review.js");
 
 const H = 3600 * 1000;
 const WAZZUP = "https://api.wazzup24.com/v3";
@@ -81,6 +82,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     c.events.push(Object.assign({ id: crypto.randomBytes(6).toString("hex"), at: new Date().toISOString(), dealId: d ? d.id : null,
       to: d ? (d.responsible || cfg().manager) : cfg().manager, blogger: d ? d.blogerName : "", kind, text: String(text).slice(0, 600), read: false }, extra || {}));
     if (c.events.length > MAX_EVENTS) c.events.splice(0, c.events.length - MAX_EVENTS);
+    return c.events[c.events.length - 1];
   };
   const inPilot = (d) => {
     const k = cfg();
@@ -100,7 +102,17 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   const prevWorkday = (ymd) => { let x = addDays(ymd, -1); while (!isWd(x)) x = addDays(x, -1); return x; };
   const addWorkdays = (ymd, n) => { let x = ymd; for (let i = 0; i < n; i++) x = nextWorkday(x); return x; };
   const isDone = (d) => isPublished(d) || !!d.publishDate;
-  const stageOf = (d) => (isDone(d) ? "published" : ["received", "revise", "reshoot", "approved"].includes(d.vstage) ? d.vstage : "wait");
+  const stageOf = (d) => (isDone(d) ? "published" : ["received", "lead", "revise", "reshoot", "approved"].includes(d.vstage) ? d.vstage : "wait");
+  // Тимлиды (как в Barter Box: группы менеджеров). Чужой/неизвестный менеджер — к COORD_TEAMLEAD (по умолчанию Нина).
+  const TEAM_GROUPS = [
+    { lead: "Нина", members: ["Мадина", "Марина", "Зарина", "Камила"] },
+    { lead: "Сая", members: ["Надира", "Анеля", "Анастасия", "Сабрина", "Оксана"] },
+  ];
+  const leadOf = (resp) => {
+    const k = personKey(resp);
+    const g = TEAM_GROUPS.find((x) => personKey(x.lead) === k || x.members.some((m) => personKey(m) === k));
+    return g ? g.lead : String(process.env.COORD_TEAMLEAD || "Нина");
+  };
   // Срок сдачи видео на согласование: после правок — свой (vdue), иначе рабочий день до публикации.
   const dueOf = (d) => { const pd = String(d.plannedDate || "").slice(0, 10); if (!pd) return ""; return (d.vstage === "revise" || d.vstage === "reshoot") && d.vdue ? d.vdue : prevWorkday(pd); };
   const nameOf = (d) => String(d.blogerName || "").replace(/@/g, "").trim() || "здравствуйте";
@@ -127,7 +139,10 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       if (d.coordStop) next = { text: "автонапоминания выключены (стоп)" };
       else if (stage === "published") next = { text: "опубликовано — напоминаний нет" };
       else if (!pd) next = { text: "нет плановой даты" };
-      else if (stage === "received") {
+      else if (stage === "lead") {
+        next = { text: "видео у тимлида на согласовании — блогеру не пишем" };
+        if (d.vleadAt && Date.now() - Date.parse(d.vleadAt) > 24 * H) mgrOnce(d, `${d.id}:lead-check:${d.vleadAt}`, "lead", "Видео ждёт согласования тимлида больше суток");
+      } else if (stage === "received") {
         next = { text: "видео у менеджера на проверке — блогеру не пишем" };
         if (d.vreceivedAt && Date.now() - Date.parse(d.vreceivedAt) > 24 * H) mgrOnce(d, `${d.id}:mgr-check:${d.vreceivedAt}`, "media", "Видео ждёт проверки больше суток — одобрите или отправьте правки");
       } else if (stage === "approved") {
@@ -192,7 +207,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         const due = dueOf(d);
         if (due && due <= today) { if (!d.vmissed) d.vdueMissed = due; d.vmissed = (Number(d.vmissed) || 0) + 1; }
       }
-      moveDeal(d, to, stage === "received" ? "видео не проверено к утру" : "видео не готово к утру");
+      moveDeal(d, to, stage === "received" ? "видео не проверено к утру" : stage === "lead" ? "видео не согласовано к утру" : "видео не готово к утру");
       if (d.vstage === "revise" || d.vstage === "reshoot") d.vdue = today; // правки так и не пришли — ждём сегодня
       log(d.id, "sys", `план дня: не готово к утру — перенесено ${ddmm(pd)} → ${ddmm(to)}`);
       if (stage === "received") event(d, "media", `Видео не проверено к утру — перенесено на ${ddmm(to)}. Одобрите, чтобы вернуть в план`);
@@ -401,7 +416,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       if (isVideo && ["wait", "revise", "reshoot"].includes(stageOf(d))) {
         d.vstage = "received"; d.vreceivedAt = new Date().toISOString();
         log(d.id, "sys", "видео пришло — статус «📥 проверить»");
-        event(d, "media", "Блогер прислал видео на согласование — посмотрите и одобрите или отправьте правки", { url: u, review: true });
+        const ev = event(d, "media", process.env.GEMINI_API_KEY ? "Блогер прислал видео на согласование — 🤖 ИИ разбирает (1–2 мин)" : "Блогер прислал видео на согласование — посмотрите и отправьте тимлиду", { url: u, review: true });
+        if (process.env.GEMINI_API_KEY && u) startReview(d, u, ev && ev.id);
       } else event(d, "media", `Блогер прислал ${type === "video" ? "видео" : type === "image" ? "фото" : "файл"} — посмотрите${u ? "" : " в переписке"}`, { url: u });
       return true;
     }
@@ -742,6 +758,59 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   });
   // Кнопки менеджера по видео: approve / revise / reshoot / received / wait. Дату двигает сама (рабочие дни),
   // блогеру пишет только в тесте (inPilot) и если координатор включён; в режиме dry — только в журнал.
+  // ---------- ИИ-разбор видео (Gemini, наставления как у Telegram-бота) ----------
+  // По одному видео за раз. Результат — d.vreview {status, text, decision, score}; уведомление менеджеру обновляется.
+  const reviewQueue = [];
+  let reviewing = false;
+  function startReview(d, url, eventId) {
+    d.vreview = { status: "running", at: new Date().toISOString(), url };
+    reviewQueue.push({ dealId: d.id, url, eventId });
+    runReviews();
+  }
+  async function runReviews() {
+    if (reviewing) return;
+    reviewing = true;
+    try {
+      while (reviewQueue.length) {
+        const job = reviewQueue.shift();
+        const find = () => (getState().microInfluencerDeals || []).find((x) => x.id === job.dealId);
+        let res = null, err = null;
+        try { res = await reviewVideo(job.url); } catch (e) { err = e.message; }
+        const d = find();
+        if (!d) continue;
+        const ev = job.eventId ? C().events.find((e) => e.id === job.eventId) : null;
+        if (res) {
+          d.vreview = { status: "done", at: new Date().toISOString(), url: job.url, text: String(res.text).slice(0, 12000), decision: res.decision, score: res.score, formal: res.formal, model: res.model };
+          const head = `🤖 ИИ: ${res.decision || "разбор готов"}${res.score != null ? ` · ${res.score}/9` : ""}`;
+          log(d.id, "sys", `ИИ разобрал видео: ${res.decision || "?"}${res.score != null ? " " + res.score + "/9" : ""}`);
+          if (ev) { ev.text = `Блогер прислал видео на согласование. ${head} — посмотрите разбор и отправьте тимлиду`; ev.read = false; }
+          else event(d, "media", `${head} — посмотрите разбор и отправьте тимлиду`, { url: job.url, review: true });
+        } else {
+          d.vreview = { status: "error", at: new Date().toISOString(), url: job.url, error: String(err).slice(0, 300) };
+          log(d.id, "sys", `ИИ не разобрал видео: ${err}`);
+          if (ev) { ev.text = `Блогер прислал видео на согласование. ИИ не смог разобрать (${String(err).slice(0, 150)}) — посмотрите сами`; ev.read = false; }
+        }
+        persist();
+      }
+    } finally { reviewing = false; }
+  }
+  const actorName = (req) => {
+    const s = req.session || {};
+    if (s.name) return s.name;
+    try { return decodeURIComponent(String(req.headers["x-actor"] || "")).trim().slice(0, 60); } catch (e) { return ""; }
+  };
+  app.post("/api/coord/deal/:id/ai-review", requireAuth, (req, res) => {
+    if (!staff(req, res)) return;
+    const d = (getState().microInfluencerDeals || []).find((x) => x.id === +req.params.id);
+    if (!d) return res.status(404).json({ error: "не найдено" });
+    if (!process.env.GEMINI_API_KEY) return res.status(400).json({ error: "В Render не задан GEMINI_API_KEY" });
+    const media = (Array.isArray(d.coordMedia) ? d.coordMedia : []).slice().reverse().find((m) => m.url);
+    const url = String((req.body && req.body.url) || (media && media.url) || "").trim();
+    if (!/^https?:\/\//.test(url)) return res.status(400).json({ error: "Нет присланного видео (ссылки на файл) для проверки" });
+    startReview(d, url, null);
+    persist();
+    res.json({ ok: true, status: "running" });
+  });
   async function tellBlogger(d, kind, vals) {
     const k = cfg();
     if (k.mode === "off" || !inPilot(d) || transport() === "none" || d.coordStop) return "";
@@ -762,6 +831,21 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const pd = String(d.plannedDate || "").slice(0, 10);
     if (isDone(d) && action !== "wait") return res.status(400).json({ error: "Уже опубликовано" });
     let sent = "";
+    const wasLead = stageOf(d) === "lead";
+    const who = actorName(req) || "менеджер";
+    const closeEvents = () => { for (const e of C().events) if (e.dealId === d.id && (e.kind === "media" || e.kind === "lead") && !e.read) { e.read = true; e.readAt = now; } };
+    if (action === "to_lead") {
+      const lead = leadOf(d.responsible);
+      d.vstage = "lead"; d.vstageAt = now; d.vleadAt = now; d.vleadComment = comment || null; d.vleadFrom = who; d.vlead = lead;
+      closeEvents();
+      const r = d.vreview && d.vreview.status === "done" ? ` · 🤖 ${d.vreview.decision || ""}${d.vreview.score != null ? " " + d.vreview.score + "/9" : ""}` : "";
+      const media = (Array.isArray(d.coordMedia) ? d.coordMedia : []).slice().reverse().find((m) => m.url);
+      event(d, "lead", `На согласование от ${who}${r}${comment ? ` · комментарий: ${comment}` : ""}`, { to: lead, review: true, lead: true, url: media ? media.url : "" });
+      log(d.id, "sys", `${who} отправил(а) видео на согласование тимлиду (${lead})`);
+      try { planReminders(); } catch (er) {}
+      persist();
+      return res.json({ ok: true, stage: "lead", lead, plannedDate: d.plannedDate });
+    }
     if (action === "approve") {
       if (!pd || pd < today) moveDeal(d, today, "одобрено после плановой даты — публикация сегодня");
       // Утром перенесли с сегодня (видео не было к 10:00), а днём прислали и одобрили — возвращаем на сегодня («сверх плана»).
@@ -789,8 +873,13 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       d.vstage = "wait"; d.vstageAt = now; d.vepoch = now; d.vmissed = 0; d.vdueMissed = null; d.vdue = null;
       log(d.id, "sys", "менеджер вернул в «ждём видео»");
     } else return res.status(400).json({ error: "неизвестное действие" });
-    // Закрываем уведомления «прислал видео» по этой строке.
-    for (const e of C().events) if (e.dealId === d.id && e.kind === "media" && !e.read) { e.read = true; e.readAt = now; }
+    // Закрываем уведомления «прислал видео» / «на согласование» по этой строке.
+    closeEvents();
+    // Решение тимлида — менеджеру строки (если решал не он сам).
+    if (wasLead && ["approve", "revise", "reshoot"].includes(action) && personKey(who) !== personKey(d.responsible)) {
+      const verdict = action === "approve" ? "✅ одобрил(а) видео" : action === "revise" ? "✏️ вернул(а) на правки" : "🔁 просит переснять";
+      event(d, action === "approve" ? "info" : "question", `${who} ${verdict}${comment ? `: ${comment}` : ""}${action !== "approve" ? " — напишите блогеру правки" : ""}`, action === "approve" ? { info: true } : {});
+    }
     // Одобрено днём на сегодня после фиксации плана — «сверх плана» (видно в планере).
     try { planReminders(); } catch (er) {}
     persist();
