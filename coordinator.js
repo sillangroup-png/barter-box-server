@@ -769,17 +769,17 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       log(d.id, "sys", `менеджер одобрил видео, публикация ${ddmm(npd)}`);
       sent = await tellBlogger(d, "approved", [nameOf(d), d.product || "", npd === today ? "сегодня" : ddmm(npd)]);
     } else if (action === "revise" || action === "reshoot") {
-      if (!comment) return res.status(400).json({ error: action === "revise" ? "Напишите, что поправить" : "Напишите, что не так и что переснять" });
       const days = Math.max(1, Math.min(10, Number(b.days) || (action === "revise" ? 1 : 2)));
       const base = pd && pd > today ? pd : today;
       const to = addWorkdays(base, days);
       moveDeal(d, to, action === "revise" ? "правки" : "пересъём");
       const pw = prevWorkday(to);
       d.vstage = action; d.vstageAt = now; d.vepoch = now; d.vmissed = 0; d.vdueMissed = null;
-      d.vdue = pw < today ? today : pw; d.vcomment = comment; d.vrounds = (Number(d.vrounds) || 0) + 1;
-      if (inPilot(d)) C().keys[`${d.id}:due_today:${d.vdue}`] = now; // в сообщении о правках срок уже есть
+      d.vdue = pw < today ? today : pw; d.vcomment = comment || null; d.vrounds = (Number(d.vrounds) || 0) + 1;
+      // Сами правки менеджер пишет блогеру в чате — бот их не отправляет. Если новый срок уже сегодня, не дёргаем блогера
+      // напоминанием сразу после разговора с менеджером.
+      if (inPilot(d) && d.vdue === today) C().keys[`${d.id}:due_today:${d.vdue}`] = now;
       log(d.id, "sys", `${action === "revise" ? "правки" : "пересъём"}: новый срок видео ${ddmm(d.vdue)}, публикация ${ddmm(to)}`);
-      sent = await tellBlogger(d, action, [nameOf(d), d.product || "", d.vdue === today ? "сегодня" : ddmm(d.vdue), comment]);
     } else if (action === "received") {
       d.vstage = "received"; d.vstageAt = now; d.vreceivedAt = now;
       log(d.id, "sys", "менеджер отметил: видео пришло");
