@@ -86,7 +86,9 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   };
   const inPilot = (d) => {
     const k = cfg();
-    if (!k.manager || personKey(d.responsible) !== personKey(k.manager)) return false;
+    // COORD_PILOT_MANAGER — одно имя или несколько через запятую: «Марина, Камила».
+    const mgrs = k.manager.split(/[,;]+/).map((x) => personKey(x)).filter(Boolean);
+    if (!mgrs.length || !mgrs.includes(personKey(d.responsible))) return false;
     const n = waNumber(d.phone);
     if (!n) return false;
     return !k.phones.length || k.phones.includes(n);
