@@ -6518,35 +6518,18 @@ function videoStageBlock(d){
   </div>`;
 }
 async function videoAction(id, action, after){
-  const d = (DataManager.state.microInfluencerDeals||[]).find(x=> x.id === id);
-  if(action === "revise" || action === "reshoot"){ closeModal(); return modalVideoComment(d, action, after); }
+  // ✏️ правки: +1 рабочий день, 🔁 пересъём: +2. Сами правки менеджер пишет блогеру в чате; дату можно поправить в карточке.
   try{
-    const r = await apiFetch("/api/coord/deal/"+id+"/video", {method:"POST", headers:jsonHeaders, body:JSON.stringify({action})});
-    toast(`${VIDEO_STAGE[r.stage]?.icon||""} ${VIDEO_STAGE[r.stage]?.label||"готово"}${r.sent ? " · " + r.sent : ""}`);
+    const body = {action};
+    if(action === "revise") body.days = 1;
+    if(action === "reshoot") body.days = 2;
+    const r = await apiFetch("/api/coord/deal/"+id+"/video", {method:"POST", headers:jsonHeaders, body:JSON.stringify(body)});
+    const S = VIDEO_STAGE[r.stage] || {};
+    const dates = (action === "revise" || action === "reshoot") ? `: видео ждём ${ddmmStr(r.vdue)}, публикация ${ddmmStr(r.plannedDate)}` : "";
+    toast(`${S.icon||""} ${S.label||"готово"}${dates}${r.sent ? " · " + r.sent : ""}`);
     await DataManager.refresh();
     if(after) after(); else render();
   }catch(err){ toast(err.message, true); }
-}
-function modalVideoComment(d, action, after){
-  const isRe = action === "reshoot";
-  openModal(`
-    <h3>${isRe ? "🔁 Пересъём" : "✏️ Правки"} — ${escapeHtml(d ? d.blogerName||"" : "")}</h3>
-    <div class="field"><label>${isRe ? "Что не так и что переснять" : "Что поправить"} (уйдёт блогеру в WhatsApp, если строка в тесте бота)</label>
-      <textarea id="vc-text" rows="4" placeholder="${isRe ? "Например: нужен дневной свет, товар в кадре с первых секунд" : "Например: убрать музыку в начале, добавить крупный план"}"></textarea></div>
-    <div class="field"><label>Сколько рабочих дней на ${isRe ? "пересъём" : "правки"} (на столько сдвинется дата публикации)</label>
-      <select id="vc-days">${[1,2,3,4,5].map(n=>`<option value="${n}" ${n===(isRe?2:1)?"selected":""}>${n}</option>`).join("")}</select></div>
-    <div class="modal-actions"><button class="btn btn-ghost" id="vc-cancel">Отмена</button><button class="btn btn-primary" id="vc-ok">Отправить</button></div>`);
-  document.getElementById("vc-cancel").onclick = closeModal;
-  document.getElementById("vc-ok").onclick = async ()=>{
-    const btn = document.getElementById("vc-ok");
-    const comment = document.getElementById("vc-text").value.trim();
-    if(!comment){ toast("Напишите, что поправить", true); return; }
-    try{
-      const r = await withBusy(btn, ()=> apiFetch("/api/coord/deal/"+d.id+"/video", {method:"POST", headers:jsonHeaders, body:JSON.stringify({action, comment, days: +document.getElementById("vc-days").value})}));
-      toast(`${isRe ? "🔁 Пересъём" : "✏️ Правки"}: видео до ${ddmmStr(r.vdue)}, публикация ${ddmmStr(r.plannedDate)}${r.sent ? " · " + r.sent : ""}`);
-      closeModal(); await DataManager.refresh(); if(after) after(); else render();
-    }catch(err){ toast(err.message, true); }
-  };
 }
 function bindVideoStageButtons(after){
   document.querySelectorAll(".vstage-btn").forEach(b=>{ b.onclick = async (e)=>{
