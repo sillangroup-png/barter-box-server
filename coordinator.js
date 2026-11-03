@@ -117,6 +117,9 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   };
   // Срок сдачи видео на согласование: после правок — свой (vdue), иначе рабочий день до публикации.
   const dueOf = (d) => { const pd = String(d.plannedDate || "").slice(0, 10); if (!pd) return ""; return (d.vstage === "revise" || d.vstage === "reshoot") && d.vdue ? d.vdue : prevWorkday(pd); };
+  // «завтра» или «в понедельник (09.11)» (если между сегодня и сроком выходные).
+  const WD = ["в воскресенье", "в понедельник", "во вторник", "в среду", "в четверг", "в пятницу", "в субботу"];
+  const whenWord = (today, ymd) => (daysBetween(today, ymd) === 1 ? "завтра" : `${WD[new Date(ymd + "T00:00:00Z").getUTCDay()]} (${ddmm(ymd)})`);
   const nameOf = (d) => String(d.blogerName || "").replace(/@/g, "").trim() || "здравствуйте";
   function planReminders() {
     const k = cfg();
@@ -159,7 +162,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
           let kind = null, key = null, ds = ddmm(due);
           if (missed >= 1) { kind = "overdue"; key = `${d.id}:overdue:${ep}`; ds = ddmm(d.vdueMissed || due); }
           else if (today === due) { kind = "due_today"; key = `${d.id}:due_today:${due}`; }
-          else if (today === prevWorkday(due) || (today < due && daysBetween(today, due) === 1)) { kind = "due_soon"; key = `${d.id}:due_soon:${due}`; }
+          else if (today === prevWorkday(due) || (today < due && daysBetween(today, due) === 1)) { kind = "due_soon"; key = `${d.id}:due_soon:${due}`; ds = whenWord(today, due); }
           if (kind && !c.keys[key]) queue(d, kind, key, ds);
         }
         if (!next) next = { text: pausedTill ? `пауза до ${new Date(d.coordPausedUntil).toLocaleString("ru-RU", { timeZone: "Asia/Almaty" })}`
@@ -231,11 +234,12 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   const DEFAULT_TEXTS = { // без имени и товара — коротко и сразу про видео
     soon: (v) => `Здравствуйте! 😊 Это MIXIT 💚\nПубликация видео запланирована на ${v[2]} 📅 Всё в силе?`,
     today: (v) => `Здравствуйте! 😊 Это MIXIT 💚\nНапоминаем, что публикация видео запланирована на сегодня 🎬`,
-    overdue: (v) => `Здравствуйте! 😊 Это MIXIT 💚\nВидео на согласование ждали ${v[2]}. Подскажите, пожалуйста, когда сможете прислать? 🙏`,
-    due_soon: (v) => `Здравствуйте! 😊 Это MIXIT 💚\nНапоминаем: видео на согласование ждём ${v[2]} 📅`,
-    due_today: (v) => `Здравствуйте! 😊 Это MIXIT 💚\nСегодня ждём видео на согласование 🎬 Пришлите его, пожалуйста, сюда, когда будет готово 🙏`,
-    link_ask: (v) => `Здравствуйте! 😊 Это MIXIT 💚\nСегодня день публикации 🎬 Когда выложите, пришлите, пожалуйста, ссылку 💚`,
-    approved: (v) => `Спасибо! 💚 Видео согласовано ✅\nПубликация ${v[2]} — когда выложите, пришлите, пожалуйста, ссылку 🙏`,
+    // Тексты утверждены Ниной 03.11.2026 (без «Это MIXIT» — блогеры и так знают, кто пишет).
+    overdue: (v) => `Здравствуйте! Видео на согласование ждали ${v[2]}. Подскажите, пожалуйста, когда сможете прислать? 🙏`,
+    due_soon: (v) => `Добрый день! 🌸 Ожидаем ${v[2]} видео на согласование 🤍`,
+    due_today: (v) => `Здравствуйте! 😊 Сегодня ждём видео на согласование 🎬 Пришлите его, пожалуйста, сюда, когда будет готово 🙏`,
+    link_ask: (v) => `Здравствуйте! Сегодня день публикации 🎬 Когда выложите, пришлите, пожалуйста, ссылку 💚`,
+    approved: (v) => `Спасибо! 💚 Видео согласовано ✅ Публикация ${v[2]} - когда выложите, пришлите, пожалуйста, ссылку 🙏`,
     revise: (v) => `Спасибо за видео! 💚 Есть правки:\n${v[3]}\nПришлите, пожалуйста, исправленный вариант до ${v[2]} 🙏`,
     reshoot: (v) => `Спасибо за видео! 💚 К сожалению, нужно переснять:\n${v[3]}\nПришлите, пожалуйста, новый вариант до ${v[2]} 🙏`,
   };
@@ -743,7 +747,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     else if (!due) return res.status(400).json({ error: "Нет плановой даты" });
     else if ((Number(d.vmissed) || 0) >= 1 || today > due) { kind = "overdue"; ds = ddmm(d.vdueMissed || due); }
     else if (today === due) { kind = "due_today"; ds = ddmm(due); }
-    else { kind = "due_soon"; ds = ddmm(due); }
+    else { kind = "due_soon"; ds = whenWord(today, due); }
     const vals = [nameOf(d), d.product || "интеграции", ds];
     const text = TEXTS[kind](vals);
     try {
