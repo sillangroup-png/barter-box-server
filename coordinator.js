@@ -762,9 +762,9 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   // По одному видео за раз. Результат — d.vreview {status, text, decision, score}; уведомление менеджеру обновляется.
   const reviewQueue = [];
   let reviewing = false;
-  function startReview(d, url, eventId) {
+  function startReview(d, url, eventId, mode) {
     d.vreview = { status: "running", at: new Date().toISOString(), url };
-    reviewQueue.push({ dealId: d.id, url, eventId });
+    reviewQueue.push({ dealId: d.id, url, eventId, mode: mode || "" });
     runReviews();
   }
   async function runReviews() {
@@ -783,12 +783,14 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
           d.vreview = { status: "done", at: new Date().toISOString(), url: job.url, text: String(res.text).slice(0, 12000), decision: res.decision, score: res.score, formal: res.formal, model: res.model };
           const head = `🤖 ИИ: ${res.decision || "разбор готов"}${res.score != null ? ` · ${res.score}/9` : ""}`;
           log(d.id, "sys", `ИИ разобрал видео: ${res.decision || "?"}${res.score != null ? " " + res.score + "/9" : ""}`);
-          if (ev) { ev.text = `Блогер прислал видео на согласование. ${head} — посмотрите разбор и отправьте тимлиду`; ev.read = false; }
+          if (ev && job.mode === "lead") { ev.text = `${ev.text.replace(/ · 🤖 ИИ разбирает…$/, "")} · ${head}`; ev.read = false; }
+          else if (ev) { ev.text = `Блогер прислал видео на согласование. ${head} — посмотрите разбор и отправьте тимлиду`; ev.read = false; }
           else event(d, "media", `${head} — посмотрите разбор и отправьте тимлиду`, { url: job.url, review: true });
         } else {
           d.vreview = { status: "error", at: new Date().toISOString(), url: job.url, error: String(err).slice(0, 300) };
           log(d.id, "sys", `ИИ не разобрал видео: ${err}`);
-          if (ev) { ev.text = `Блогер прислал видео на согласование. ИИ не смог разобрать (${String(err).slice(0, 150)}) — посмотрите сами`; ev.read = false; }
+          if (ev && job.mode === "lead") { ev.text = `${ev.text.replace(/ · 🤖 ИИ разбирает…$/, "")} · ИИ не смог разобрать (${String(err).slice(0, 120)})`; ev.read = false; }
+          else if (ev) { ev.text = `Блогер прислал видео на согласование. ИИ не смог разобрать (${String(err).slice(0, 150)}) — посмотрите сами`; ev.read = false; }
         }
         persist();
       }
@@ -840,7 +842,10 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       closeEvents();
       const r = d.vreview && d.vreview.status === "done" ? ` · 🤖 ${d.vreview.decision || ""}${d.vreview.score != null ? " " + d.vreview.score + "/9" : ""}` : "";
       const media = (Array.isArray(d.coordMedia) ? d.coordMedia : []).slice().reverse().find((m) => m.url);
-      event(d, "lead", `На согласование от ${who}${r}${comment ? ` · комментарий: ${comment}` : ""}`, { to: lead, review: true, lead: true, url: media ? media.url : "" });
+      // Разбора ещё нет (ключ добавили позже, видео отметили вручную) — запускаем сейчас, тимлид увидит результат в том же уведомлении.
+      const needAi = !(d.vreview && (d.vreview.status === "done" || d.vreview.status === "running")) && process.env.GEMINI_API_KEY && media && media.url;
+      const lev = event(d, "lead", `На согласование от ${who}${r}${comment ? ` · комментарий: ${comment}` : ""}${needAi ? " · 🤖 ИИ разбирает…" : ""}`, { to: lead, review: true, lead: true, url: media ? media.url : "" });
+      if (needAi) startReview(d, media.url, lev && lev.id, "lead");
       log(d.id, "sys", `${who} отправил(а) видео на согласование тимлиду (${lead})`);
       try { planReminders(); } catch (er) {}
       persist();
