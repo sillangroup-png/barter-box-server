@@ -764,6 +764,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     let sent = "";
     if (action === "approve") {
       if (!pd || pd < today) moveDeal(d, today, "одобрено после плановой даты — публикация сегодня");
+      // Утром перенесли с сегодня (видео не было к 10:00), а днём прислали и одобрили — возвращаем на сегодня («сверх плана»).
+      else if (pd > today && d.vmoved && d.vmoved.from === today) moveDeal(d, today, "одобрено днём — вернули на сегодня");
       d.vstage = "approved"; d.vstageAt = now; d.vmissed = 0; d.vdueMissed = null;
       const npd = String(d.plannedDate).slice(0, 10);
       log(d.id, "sys", `менеджер одобрил видео, публикация ${ddmm(npd)}`);
