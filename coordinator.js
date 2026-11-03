@@ -90,49 +90,119 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     return !k.phones.length || k.phones.includes(n);
   };
 
-  // ---------- Планировщик напоминаний ----------
+  // ---------- Этапы видео (03.11.2026) ----------
+  // Каждая строка микро: ⏳ wait (ждём видео) → 📥 received (прислали, проверить) → ✏️ revise / 🔁 reshoot (правки/пересъём,
+  // снова ждём) → ✅ approved (одобрено, в план дня) → 🎬 опубликовано (ссылка/факт-дата). Видео ждём на согласование
+  // за рабочий день до плановой даты публикации. Утром (DAYPLAN_HOUR, по умолчанию 10:00 Алматы) всё, что на сегодня не
+  // одобрено, переезжает на следующий рабочий день — в «сегодня» остаётся только то, что реально выйдет.
+  const isWd = (ymd) => { const g = new Date(ymd + "T00:00:00Z").getUTCDay(); return g !== 0 && g !== 6; };
+  const nextWorkday = (ymd) => { let x = addDays(ymd, 1); while (!isWd(x)) x = addDays(x, 1); return x; };
+  const prevWorkday = (ymd) => { let x = addDays(ymd, -1); while (!isWd(x)) x = addDays(x, -1); return x; };
+  const addWorkdays = (ymd, n) => { let x = ymd; for (let i = 0; i < n; i++) x = nextWorkday(x); return x; };
+  const isDone = (d) => isPublished(d) || !!d.publishDate;
+  const stageOf = (d) => (isDone(d) ? "published" : ["received", "revise", "reshoot", "approved"].includes(d.vstage) ? d.vstage : "wait");
+  // Срок сдачи видео на согласование: после правок — свой (vdue), иначе рабочий день до публикации.
+  const dueOf = (d) => { const pd = String(d.plannedDate || "").slice(0, 10); if (!pd) return ""; return (d.vstage === "revise" || d.vstage === "reshoot") && d.vdue ? d.vdue : prevWorkday(pd); };
+  const nameOf = (d) => String(d.blogerName || "").replace(/@/g, "").trim() || "здравствуйте";
   function planReminders() {
     const k = cfg();
     if (k.mode === "off") return;
-    const st = getState(), c = C(), today = almatyDate();
+    const st = getState(), c = C(), today = almatyDate(), hour = almatyHour();
     let changed = false;
+    const queue = (d, kind, key, dateStr, extra) => {
+      c.keys[key] = new Date().toISOString();
+      const vals = [nameOf(d), d.product || "интеграции", dateStr, extra || ""];
+      c.queue.push({ id: crypto.randomBytes(6).toString("hex"), key, dealId: d.id, kind, chatId: waNumber(d.phone), vals,
+        createdAt: new Date().toISOString(), nextTry: Date.now(), tries: 0, status: "pending" });
+      log(d.id, "plan", `в очереди: ${KIND_LABEL[kind] || kind}`);
+      changed = true;
+    };
+    const mgrOnce = (d, key, kind, text) => { if (c.keys[key]) return; c.keys[key] = new Date().toISOString(); event(d, kind, text); changed = true; };
     for (const d of st.microInfluencerDeals || []) {
       if (!inPilot(d)) continue;
       const pd = String(d.plannedDate || "").slice(0, 10);
+      const stage = stageOf(d);
+      const pausedTill = d.coordPausedUntil && Date.parse(d.coordPausedUntil) > Date.now();
       let next = null;
       if (d.coordStop) next = { text: "автонапоминания выключены (стоп)" };
-      else if (isPublished(d)) next = { text: "опубликовано — напоминаний нет" };
+      else if (stage === "published") next = { text: "опубликовано — напоминаний нет" };
       else if (!pd) next = { text: "нет плановой даты" };
-      else {
-        const diff = daysBetween(today, pd); // >0 — до даты, 0 — сегодня, <0 — просрочено
-        let kind = null;
-        if (diff > 0 && diff <= SOON_DAYS) kind = "soon";
-        else if (diff === 0) kind = "today";
-        else if (diff === -1 || diff === -3) kind = "overdue";
-        const sentForDate = Object.keys(c.keys).filter((x) => x.startsWith(`${d.id}:`) && x.endsWith(`:${pd}`) && !x.includes(":mgr-")).length;
-        const key = kind ? `${d.id}:${kind}${kind === "overdue" ? -diff : ""}:${pd}` : null;
-        const pausedTill = d.coordPausedUntil && Date.parse(d.coordPausedUntil) > Date.now();
-        if (kind && !c.keys[key] && sentForDate < MAX_REMINDERS_PER_DATE && !pausedTill) {
-          c.keys[key] = new Date().toISOString();
-          const vals = [String(d.blogerName || "").replace(/@/g, "").trim() || "здравствуйте", d.product || "интеграции", ddmm(pd)];
-          c.queue.push({ id: crypto.randomBytes(6).toString("hex"), key, dealId: d.id, kind, chatId: waNumber(d.phone), vals,
-            createdAt: new Date().toISOString(), nextTry: Date.now(), tries: 0, status: "pending" });
-          log(d.id, "plan", `в очереди: напоминание «${kind === "soon" ? "скоро" : kind === "today" ? "сегодня" : "просрочено"}» на ${ddmm(pd)}`);
-          changed = true;
+      else if (stage === "received") {
+        next = { text: "видео у менеджера на проверке — блогеру не пишем" };
+        if (d.vreceivedAt && Date.now() - Date.parse(d.vreceivedAt) > 24 * H) mgrOnce(d, `${d.id}:mgr-check:${d.vreceivedAt}`, "media", "Видео ждёт проверки больше суток — одобрите или отправьте правки");
+      } else if (stage === "approved") {
+        if (today === pd && hour >= 18 && !pausedTill) { const key = `${d.id}:link_ask:${pd}`; if (!c.keys[key]) queue(d, "link_ask", key, ddmm(pd)); }
+        if (today > pd) mgrOnce(d, `${d.id}:mgr-nolink:${pd}`, "overdue", `Видео одобрено на ${ddmm(pd)}, но ссылки на публикацию нет — уточните у блогера`);
+        next = { text: today < pd ? `одобрено, публикация ${ddmm(pd)}; вечером в день публикации попросим ссылку` : today === pd ? "одобрено, сегодня публикация; в 18:00 попросим ссылку, если её не будет" : "одобрено, но ссылки нет — менеджеру" };
+      } else {
+        // wait / revise / reshoot — ждём видео на согласование
+        const due = dueOf(d), missed = Number(d.vmissed) || 0, ep = d.vepoch || d.plannedDateOrig || pd;
+        if (missed >= 3) { next = { text: "молчит 3 дня — напоминания остановлены, нужен менеджер" }; mgrOnce(d, `${d.id}:mgr-silent:${ep}`, "overdue", `Видео не прислали уже ${missed} раб. дня после срока — блогеру больше не пишем, нужен менеджер`); }
+        else if (!pausedTill) {
+          let kind = null, key = null, ds = ddmm(due);
+          if (missed >= 1) { kind = "overdue"; key = `${d.id}:overdue:${ep}`; ds = ddmm(d.vdueMissed || due); }
+          else if (today === due) { kind = "due_today"; key = `${d.id}:due_today:${due}`; }
+          else if (today === prevWorkday(due) || (today < due && daysBetween(today, due) === 1)) { kind = "due_soon"; key = `${d.id}:due_soon:${due}`; }
+          if (kind && !c.keys[key]) queue(d, kind, key, ds);
         }
-        // Следующее напоминание — для показа в Barter Box.
-        const upcoming = diff > SOON_DAYS ? `за ${SOON_DAYS} дня до даты (${ddmm(addDays(pd, -SOON_DAYS))})` : diff > 0 ? `в день публикации (${ddmm(pd)})` : diff === 0 ? `через день, если ссылки не будет (${ddmm(addDays(pd, 1))})` : diff > -3 ? `${ddmm(addDays(pd, 3))}, если ссылки не будет` : "напоминаний больше нет — менеджеру";
-        next = { text: pausedTill ? `пауза до ${new Date(d.coordPausedUntil).toLocaleString("ru-RU", { timeZone: "Asia/Almaty" })}` : upcoming };
-        if (diff === -4 && !c.keys[`${d.id}:mgr-overdue:${pd}`]) {
-          c.keys[`${d.id}:mgr-overdue:${pd}`] = new Date().toISOString();
-          event(d, "overdue", `Срок ${ddmm(pd)} прошёл 4 дня назад, напоминания отправлены, ссылки нет — нужен менеджер`);
-          changed = true;
-        }
+        if (!next) next = { text: pausedTill ? `пауза до ${new Date(d.coordPausedUntil).toLocaleString("ru-RU", { timeZone: "Asia/Almaty" })}`
+          : missed >= 1 ? "срок сдачи прошёл — спросили, когда пришлёт" : today < due ? `видео на согласование ждём ${ddmm(due)}; напомним накануне` : `сегодня ждём видео на согласование` };
       }
       const nx = JSON.stringify(next);
       if (JSON.stringify(d.coordNext) !== nx) { d.coordNext = next; changed = true; }
     }
     if (changed) persist();
+  }
+  const KIND_LABEL = { soon: "скоро", today: "сегодня", overdue: "срок прошёл", due_soon: "завтра ждём видео", due_today: "сегодня ждём видео",
+    link_ask: "просим ссылку", approved: "видео согласовано", revise: "правки", reshoot: "пересъём" };
+
+  // Утро: план дня. Неодобренное на сегодня (и забытое за прошлые дни с момента запуска) — на следующий рабочий день.
+  // DAYPLAN_SCOPE: pilot (по умолчанию — только строки теста, как у бота) | all | off.
+  function dayplanScope(d) {
+    const sc = String(process.env.DAYPLAN_SCOPE || "pilot").toLowerCase();
+    if (sc === "off") return false;
+    if (sc === "all") return true;
+    return inPilot(d);
+  }
+  function moveDeal(d, to, why) {
+    const from = String(d.plannedDate || "").slice(0, 10);
+    if (!d.plannedDateOrig && from) d.plannedDateOrig = from;
+    d.plannedDate = to;
+    d.vmoved = { from, to, why, at: new Date().toISOString() };
+    d.vmoves = (Number(d.vmoves) || 0) + 1;
+  }
+  function runDayPlan(force) {
+    const sc = String(process.env.DAYPLAN_SCOPE || "pilot").toLowerCase();
+    if (sc === "off") return false;
+    const st = getState(), today = almatyDate();
+    const hourFix = Number(process.env.DAYPLAN_HOUR) || 10;
+    st.dayPlan = st.dayPlan && typeof st.dayPlan === "object" ? st.dayPlan : {};
+    if (!force && (st.dayPlan[today] || almatyHour() < hourFix)) return false;
+    if (!st.dayPlanStart) st.dayPlanStart = today;
+    const start = st.dayPlanStart;
+    let moved = 0;
+    for (const d of st.microInfluencerDeals || []) {
+      if (!dayplanScope(d)) continue;
+      const pd = String(d.plannedDate || "").slice(0, 10);
+      if (!pd || pd > today || pd < start) continue;
+      const stage = stageOf(d);
+      if (stage === "published" || stage === "approved") continue;
+      const to = nextWorkday(today);
+      if (stage === "wait" || stage === "revise" || stage === "reshoot") {
+        const due = dueOf(d);
+        if (due && due <= today) { if (!d.vmissed) d.vdueMissed = due; d.vmissed = (Number(d.vmissed) || 0) + 1; }
+      }
+      moveDeal(d, to, stage === "received" ? "видео не проверено к утру" : "видео не готово к утру");
+      if (d.vstage === "revise" || d.vstage === "reshoot") d.vdue = today; // правки так и не пришли — ждём сегодня
+      log(d.id, "sys", `план дня: не готово к утру — перенесено ${ddmm(pd)} → ${ddmm(to)}`);
+      if (stage === "received") event(d, "media", `Видео не проверено к утру — перенесено на ${ddmm(to)}. Одобрите, чтобы вернуть в план`);
+      moved++;
+    }
+    const ids = (st.microInfluencerDeals || []).filter((d) => dayplanScope(d) && String(d.plannedDate || "").slice(0, 10) === today && ["approved", "published"].includes(stageOf(d))).map((d) => d.id);
+    st.dayPlan[today] = { at: new Date().toISOString(), ids, moved, scope: sc };
+    for (const day of Object.keys(st.dayPlan)) if (daysBetween(day, today) > 120) delete st.dayPlan[day];
+    persist();
+    return true;
   }
   function addDays(ymd, n) { const t = new Date(ymd + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); }
 
@@ -144,14 +214,21 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   const DEFAULT_TEXTS = { // без имени и товара — коротко и сразу про видео
     soon: (v) => `Здравствуйте! 😊 Это MIXIT 💚\nПубликация видео запланирована на ${v[2]} 📅 Всё в силе?`,
     today: (v) => `Здравствуйте! 😊 Это MIXIT 💚\nНапоминаем, что публикация видео запланирована на сегодня 🎬`,
-    overdue: (v) => `Здравствуйте! 😊 Это MIXIT 💚\nПубликация видео была запланирована на ${v[2]}. Подскажите, пожалуйста, когда её можно ожидать? 🙏`,
+    overdue: (v) => `Здравствуйте! 😊 Это MIXIT 💚\nВидео на согласование ждали ${v[2]}. Подскажите, пожалуйста, когда сможете прислать? 🙏`,
+    due_soon: (v) => `Здравствуйте! 😊 Это MIXIT 💚\nНапоминаем: видео на согласование ждём ${v[2]} 📅`,
+    due_today: (v) => `Здравствуйте! 😊 Это MIXIT 💚\nСегодня ждём видео на согласование 🎬 Пришлите его, пожалуйста, сюда, когда будет готово 🙏`,
+    link_ask: (v) => `Здравствуйте! 😊 Это MIXIT 💚\nСегодня день публикации 🎬 Когда выложите, пришлите, пожалуйста, ссылку 💚`,
+    approved: (v) => `Спасибо! 💚 Видео согласовано ✅\nПубликация ${v[2]} — когда выложите, пришлите, пожалуйста, ссылку 🙏`,
+    revise: (v) => `Спасибо за видео! 💚 Есть правки:\n${v[3]}\nПришлите, пожалуйста, исправленный вариант до ${v[2]} 🙏`,
+    reshoot: (v) => `Спасибо за видео! 💚 К сожалению, нужно переснять:\n${v[3]}\nПришлите, пожалуйста, новый вариант до ${v[2]} 🙏`,
   };
-  const envText = { soon: "COORD_TEXT_SOON", today: "COORD_TEXT_TODAY", overdue: "COORD_TEXT_OVERDUE" };
+  // Свой текст для любого вида: COORD_TEXT_<ВИД> (SOON, TODAY, OVERDUE, DUE_SOON, DUE_TODAY, LINK_ASK, APPROVED, REVISE, RESHOOT).
+  const envText = Object.fromEntries(Object.keys(DEFAULT_TEXTS).map((x) => [x, "COORD_TEXT_" + x.toUpperCase()]));
   const TEXTS = {};
   for (const kind of Object.keys(DEFAULT_TEXTS)) TEXTS[kind] = (v) => {
     const own = String(process.env[envText[kind]] || "").trim();
     if (!own) return DEFAULT_TEXTS[kind](v);
-    return own.replace(/\\n/g, "\n").replace(/\{имя\}/g, cap(v[0])).replace(/\{товар\}/g, v[1] && v[1] !== "интеграции" ? v[1] : "").replace(/\{дата\}/g, v[2] || "");
+    return own.replace(/\\n/g, "\n").replace(/\{имя\}/g, cap(v[0])).replace(/\{товар\}/g, v[1] && v[1] !== "интеграции" ? v[1] : "").replace(/\{дата\}/g, v[2] || "").replace(/\{правки\}/g, v[3] || "");
   };
   // Канал WhatsApp: из WAZZUP_CHANNEL_ID или, если не задан, единственный WhatsApp/WABA-канал аккаунта (GET /channels).
   let channelCache = null;
@@ -273,6 +350,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
 
   // ---------- Входящие (вебхук Wazzup) ----------
   const RE_LINK = /(https?:\/\/[^\s]*(instagram\.com|tiktok\.com)[^\s]*)/i;
+  const RE_DRAFT = /(https?:\/\/[^\s]*(drive\.google\.com|disk\.yandex|yadi\.sk|dropbox\.com|cloud\.mail\.ru|wetransfer\.com|we\.tl)[^\s]*)/i; // черновик на согласование
   const RE_STOP = /(^|\s)(стоп|не пишите|отпиш|хватит писать)/i;
   const RE_YES = /^(да|да,? в силе|в силе|все в силе|всё в силе|ок|окей|хорошо|\+)[.!\s]*$/i;
   const RE_MOVE = /(перенес|перенос|позже|задерж|не успева|не успею|нужно перенести|выложу позже)/i;
@@ -315,9 +393,16 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   function processReply(d, text, type, url) {
     const today = almatyDate();
     log(d.id, "in", type === "text" ? text : `[${type}] ${url || ""} ${text}`.trim());
-    if (["video", "image", "document", "file"].includes(type)) {
-      d.coordMedia = (Array.isArray(d.coordMedia) ? d.coordMedia : []).concat([{ at: new Date().toISOString(), type, url: url || "" }]).slice(-20);
-      event(d, "media", `Блогер прислал ${type === "video" ? "видео" : type === "image" ? "фото" : "файл"} — посмотрите${url ? "" : " в переписке"}`, { url: url || "" });
+    const draft = text.match(RE_DRAFT);
+    if (["video", "image", "document", "file"].includes(type) || draft) {
+      const u = url || (draft ? draft[1] : "");
+      d.coordMedia = (Array.isArray(d.coordMedia) ? d.coordMedia : []).concat([{ at: new Date().toISOString(), type: draft ? "link" : type, url: u }]).slice(-20);
+      const isVideo = type === "video" || type === "document" || type === "file" || !!draft;
+      if (isVideo && ["wait", "revise", "reshoot"].includes(stageOf(d))) {
+        d.vstage = "received"; d.vreceivedAt = new Date().toISOString();
+        log(d.id, "sys", "видео пришло — статус «📥 проверить»");
+        event(d, "media", "Блогер прислал видео на согласование — посмотрите и одобрите или отправьте правки", { url: u, review: true });
+      } else event(d, "media", `Блогер прислал ${type === "video" ? "видео" : type === "image" ? "фото" : "файл"} — посмотрите${u ? "" : " в переписке"}`, { url: u });
       return true;
     }
     const link = text.match(RE_LINK);
@@ -616,7 +701,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (!e || !e.proposedDate) return res.status(404).json({ error: "нет предложенной даты" });
     const d = (getState().microInfluencerDeals || []).find((x) => x.id === e.dealId);
     if (!d) return res.status(404).json({ error: "строка удалена" });
-    d.plannedDate = e.proposedDate; d.coordPausedUntil = null;
+    moveDeal(d, e.proposedDate, "блогер попросил перенос"); d.coordPausedUntil = null;
+    if (stageOf(d) !== "approved") { d.vmissed = 0; d.vepoch = new Date().toISOString(); if (d.vstage === "revise" || d.vstage === "reshoot") d.vdue = prevWorkday(e.proposedDate) < almatyDate() ? almatyDate() : prevWorkday(e.proposedDate); }
     e.read = true; e.readAt = new Date().toISOString();
     log(d.id, "sys", `менеджер принял новую дату ${ddmm(e.proposedDate)}`);
     try { planReminders(); } catch (er) {}
@@ -631,9 +717,16 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (!inPilot(d)) return res.status(400).json({ error: "Строка не в тесте: ответственный должен быть " + (cfg().manager || "(не задан COORD_PILOT_MANAGER)") + ", номер — из COORD_PILOT_PHONES" });
     if (transport() === "none") return res.status(400).json({ error: "Отправка не настроена: в Render нет WAZZUP_API_KEY / BITRIX_WEBHOOK_URL" });
     const pd = String(d.plannedDate || "").slice(0, 10), today = almatyDate();
-    const diff = pd ? daysBetween(today, pd) : 1;
-    const kind = diff > 0 ? "soon" : diff === 0 ? "today" : "overdue";
-    const vals = [String(d.blogerName || "").replace(/@/g, "").trim() || "здравствуйте", d.product || "интеграции", ddmm(pd)];
+    const stage = stageOf(d), due = dueOf(d);
+    let kind, ds;
+    if (stage === "approved") { kind = "link_ask"; ds = ddmm(pd); }
+    else if (stage === "received") return res.status(400).json({ error: "Видео уже пришло и ждёт проверки — блогеру напоминать не нужно" });
+    else if (stage === "published") return res.status(400).json({ error: "Уже опубликовано" });
+    else if (!due) return res.status(400).json({ error: "Нет плановой даты" });
+    else if ((Number(d.vmissed) || 0) >= 1 || today > due) { kind = "overdue"; ds = ddmm(d.vdueMissed || due); }
+    else if (today === due) { kind = "due_today"; ds = ddmm(due); }
+    else { kind = "due_soon"; ds = ddmm(due); }
+    const vals = [nameOf(d), d.product || "интеграции", ds];
     const text = TEXTS[kind](vals);
     try {
       const r = await sendNow(d, text);
@@ -647,6 +740,67 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       res.status(400).json({ error: e.message });
     }
   });
+  // Кнопки менеджера по видео: approve / revise / reshoot / received / wait. Дату двигает сама (рабочие дни),
+  // блогеру пишет только в тесте (inPilot) и если координатор включён; в режиме dry — только в журнал.
+  async function tellBlogger(d, kind, vals) {
+    const k = cfg();
+    if (k.mode === "off" || !inPilot(d) || transport() === "none" || d.coordStop) return "";
+    const text = TEXTS[kind](vals);
+    if (k.mode === "dry") { log(d.id, "out", `[ТЕСТ, не отправлено] ${text}`); return "тест: не отправлено"; }
+    try { const r = await sendNow(d, text); log(d.id, "out", `${r.via}: ${text}`); return "отправлено блогеру"; }
+    catch (e) { log(d.id, "sys", `не отправлено: ${e.message}`); event(d, "error", `Не удалось написать блогеру: ${e.message}`); return "не отправлено: " + e.message; }
+  }
+  app.post("/api/coord/deal/:id/video", requireAuth, async (req, res) => {
+    if (!staff(req, res)) return;
+    if (req.session && req.session.readOnly) return res.status(403).json({ error: "только просмотр" });
+    const d = (getState().microInfluencerDeals || []).find((x) => x.id === +req.params.id);
+    if (!d) return res.status(404).json({ error: "не найдено" });
+    const b = req.body || {};
+    const action = String(b.action || "");
+    const comment = String(b.comment || "").trim().slice(0, 1500);
+    const today = almatyDate(), now = new Date().toISOString();
+    const pd = String(d.plannedDate || "").slice(0, 10);
+    if (isDone(d) && action !== "wait") return res.status(400).json({ error: "Уже опубликовано" });
+    let sent = "";
+    if (action === "approve") {
+      if (!pd || pd < today) moveDeal(d, today, "одобрено после плановой даты — публикация сегодня");
+      d.vstage = "approved"; d.vstageAt = now; d.vmissed = 0; d.vdueMissed = null;
+      const npd = String(d.plannedDate).slice(0, 10);
+      log(d.id, "sys", `менеджер одобрил видео, публикация ${ddmm(npd)}`);
+      sent = await tellBlogger(d, "approved", [nameOf(d), d.product || "", npd === today ? "сегодня" : ddmm(npd)]);
+    } else if (action === "revise" || action === "reshoot") {
+      if (!comment) return res.status(400).json({ error: action === "revise" ? "Напишите, что поправить" : "Напишите, что не так и что переснять" });
+      const days = Math.max(1, Math.min(10, Number(b.days) || (action === "revise" ? 1 : 2)));
+      const base = pd && pd > today ? pd : today;
+      const to = addWorkdays(base, days);
+      moveDeal(d, to, action === "revise" ? "правки" : "пересъём");
+      const pw = prevWorkday(to);
+      d.vstage = action; d.vstageAt = now; d.vepoch = now; d.vmissed = 0; d.vdueMissed = null;
+      d.vdue = pw < today ? today : pw; d.vcomment = comment; d.vrounds = (Number(d.vrounds) || 0) + 1;
+      if (inPilot(d)) C().keys[`${d.id}:due_today:${d.vdue}`] = now; // в сообщении о правках срок уже есть
+      log(d.id, "sys", `${action === "revise" ? "правки" : "пересъём"}: новый срок видео ${ddmm(d.vdue)}, публикация ${ddmm(to)}`);
+      sent = await tellBlogger(d, action, [nameOf(d), d.product || "", d.vdue === today ? "сегодня" : ddmm(d.vdue), comment]);
+    } else if (action === "received") {
+      d.vstage = "received"; d.vstageAt = now; d.vreceivedAt = now;
+      log(d.id, "sys", "менеджер отметил: видео пришло");
+    } else if (action === "wait") {
+      d.vstage = "wait"; d.vstageAt = now; d.vepoch = now; d.vmissed = 0; d.vdueMissed = null; d.vdue = null;
+      log(d.id, "sys", "менеджер вернул в «ждём видео»");
+    } else return res.status(400).json({ error: "неизвестное действие" });
+    // Закрываем уведомления «прислал видео» по этой строке.
+    for (const e of C().events) if (e.dealId === d.id && e.kind === "media" && !e.read) { e.read = true; e.readAt = now; }
+    // Одобрено днём на сегодня после фиксации плана — «сверх плана» (видно в планере).
+    try { planReminders(); } catch (er) {}
+    persist();
+    res.json({ ok: true, stage: stageOf(d), plannedDate: d.plannedDate, vdue: d.vdue || null, sent });
+  });
+  app.post("/api/coord/dayplan/run", requireAuth, (req, res) => {
+    if (!staff(req, res)) return;
+    const s = req.session || {};
+    if (s.role !== "manager" || s.readOnly) return res.status(403).json({ error: "только менеджер" });
+    const done = runDayPlan(true);
+    res.json({ ok: done, today: almatyDate(), plan: (getState().dayPlan || {})[almatyDate()] || null });
+  });
   app.post("/api/coord/deal/:id/stop", requireAuth, (req, res) => {
     if (!staff(req, res)) return;
     const d = (getState().microInfluencerDeals || []).find((x) => x.id === +req.params.id);
@@ -659,5 +813,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   setInterval(() => { try { planReminders(); } catch (e) { console.error("Координатор (план):", e.message); } }, 10 * 60 * 1000);
   setInterval(() => { processQueue().catch((e) => console.error("Координатор (отправка):", e.message)); }, 60 * 1000);
   setTimeout(() => { try { planReminders(); } catch (e) {} }, 15000);
-  return { planReminders, processQueue, handleIncoming, parseDate, waNumber };
+  setInterval(() => { try { runDayPlan(false); } catch (e) { console.error("План дня:", e.message); } }, 5 * 60 * 1000);
+  setTimeout(() => { try { runDayPlan(false); } catch (e) {} }, 20000);
+  return { planReminders, processQueue, handleIncoming, parseDate, waNumber, runDayPlan, stageOf };
 };
