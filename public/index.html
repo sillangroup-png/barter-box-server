@@ -6513,14 +6513,32 @@ function aiReviewHtml(d, open){
   if(r.status === "running") return `<div class="ai-review">🤖 ИИ разбирает видео…</div>`;
   if(r.status === "error") return `<div class="ai-review" style="color:var(--bad)">🤖 ИИ не смог разобрать: ${escapeHtml(r.error||"")}</div>`;
   const col = r.decision === "ПУБЛИКАЦИЯ" ? "#087f5b" : r.decision === "ПРАВКИ" ? "#e67700" : "#c92a2a";
-  return `<details class="ai-review" ${open?"open":""}><summary>🤖 Разбор ИИ: <span style="color:${col}">${escapeHtml(r.decision||"готов")}</span>${r.score!=null?` · ${r.score}/9`:""}</summary><pre>${escapeHtml(r.text||"")}</pre></details>`;
+  const copyBtns = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px"><button class="btn btn-ghost btn-sm ai-copy" data-id="${d.id}" data-part="blogger">📋 Скопировать правки</button><button class="btn btn-ghost btn-sm ai-copy" data-id="${d.id}" data-part="all">📋 Скопировать весь разбор</button></div>`;
+  return `<details class="ai-review" ${open?"open":""}><summary>🤖 Разбор ИИ: <span style="color:${col}">${escapeHtml(r.decision||"готов")}</span>${r.score!=null?` · ${r.score}/9`:""}</summary><pre>${escapeHtml(r.text||"")}</pre>${copyBtns}</details>`;
 }
+// «📋 Скопировать»: правки (блок «что сказать блогеру») или весь разбор — менеджер сам отправит тимлиду/блогеру в WhatsApp.
+function aiReviewCopyText(d, part){
+  const t = String((d && d.vreview && d.vreview.text) || "");
+  if(part !== "blogger") return t;
+  const i = t.search(/-{2,}\s*ЧТО СКАЗАТЬ БЛОГЕРУ\s*-{2,}/i);
+  return (i >= 0 ? t.slice(i).replace(/^-{2,}\s*ЧТО СКАЗАТЬ БЛОГЕРУ\s*-{2,}\s*/i, "") : t).trim();
+}
+if(typeof document !== "undefined") document.addEventListener("click", async (e)=>{
+  const b = e.target && e.target.closest ? e.target.closest(".ai-copy") : null;
+  if(!b) return;
+  e.preventDefault(); e.stopPropagation();
+  const d = (DataManager.state.microInfluencerDeals||[]).find(x=> x.id === parseInt(b.dataset.id,10));
+  const text = aiReviewCopyText(d, b.dataset.part);
+  try{ await navigator.clipboard.writeText(text); toast("Скопировано — вставьте в WhatsApp"); }
+  catch(err){ const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select(); try{ document.execCommand("copy"); toast("Скопировано"); }catch(x){ toast("Не удалось скопировать — выделите текст вручную", true); } ta.remove(); }
+});
 // Кнопки по видео: у менеджера после «пришло» — «тимлиду», у тимлида — решение.
 function videoButtonsHtml(d, compact){
   const st = videoStageOf(d);
   if(UI.readOnly || st === "published") return "";
   const b = (a, full, short, cls)=> compact ? `<button class="vstage-btn" data-id="${d.id}" data-action="${a}" title="${full}">${short}</button>` : `<button class="btn btn-sm ${cls||"btn-ghost"} vstage-btn" data-id="${d.id}" data-action="${a}">${full}</button>`;
-  if(st === "received") return [b("to_lead","📤 На согласование тимлиду","📤","btn-primary"), b("approve","✅ Одобрить","✅"), b("revise","✏️ Правки","✏️"), b("reshoot","🔁 Пересъём","🔁")].join(compact?"":" ");
+  // Согласование с тимлидом — как раньше, в личке WhatsApp; здесь менеджер отмечает итог.
+  if(st === "received") return [b("approve","✅ Одобрено","✅","btn-primary"), b("revise","✏️ Правки","✏️"), b("reshoot","🔁 Пересъём","🔁")].join(compact?"":" ");
   if(st === "lead") return [b("approve","✅ Одобрить","✅","btn-primary"), b("revise","✏️ Правки","✏️"), b("reshoot","🔁 Пересъём","🔁")].join(compact?"":" ");
   return "";
 }
@@ -9150,12 +9168,14 @@ async function runSelfTests(){
       if(!html.includes("st-received") || !html.includes("st-wait") || !html.includes("st-approved")) throw new Error("нет классов этапов");
       if(!html.includes("🎬 вышло <b>1</b> · ✅ одобрено <b>2</b> · ⏳ ждём <b>2</b>")) throw new Error("месяц: нет разбивки");
       const blk = videoStageBlock(DataManager.state.microInfluencerDeals[3]);
-      if(!blk.includes("пришло — проверить") || !blk.includes("✅ Одобрить")) throw new Error("блок в карточке: "+blk.slice(0,200));
+      if(!blk.includes("пришло — проверить") || !blk.includes("✅ Одобрено")) throw new Error("блок в карточке: "+blk.slice(0,200));
       const ld = {id:79406, blogerName:"ld", vstage:"lead", vlead:"Нина", vleadFrom:"Марина", vleadComment:"норм", vreview:{status:"done", decision:"ПРАВКИ", score:6, text:"РЕШЕНИЕ: ПРАВКИ\n- нет CTA"}};
       const lb = videoStageBlock(ld);
       if(!lb.includes("у тимлида") || !lb.includes("Разбор ИИ") || !lb.includes("ПРАВКИ") || !lb.includes('data-action="approve"') || lb.includes('data-action="to_lead"')) throw new Error("тимлид: "+lb.slice(0,300));
       const rb = videoButtonsHtml({id:1, vstage:"received"});
-      if(!rb.includes('data-action="to_lead"')) throw new Error("у менеджера должна быть кнопка «тимлиду»");
+      if(!rb.includes('data-action="approve"') || rb.includes('data-action="to_lead"')) throw new Error("у менеджера: ✅ ✏️ 🔁 без «тимлиду»");
+      if(!lb.includes("Скопировать правки")) throw new Error("нет кнопки копирования");
+      if(aiReviewCopyText({vreview:{text:"--- ОЦЕНКА ---\nx\n--- ЧТО СКАЗАТЬ БЛОГЕРУ ---\n- нет CTA"}}, "blogger") !== "- нет CTA") throw new Error("копирование правок");
     } finally { DataManager.state.microInfluencerDeals = savedMicro; DataManager.state.dayPlan = savedDp; UI.calendarMonth = sM; UI.calendarSource = sS; UI.calendarResponsible = sR; UI.calendarHiddenBloggers = sH; }
   });
   TestSuite.test("D0: autoContributionCell показывает сумму только для ok/zero, у остальных статусов «—» без числа", ()=>{
