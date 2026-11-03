@@ -184,6 +184,10 @@ tr:hover td.sticky-col{background:#fef9fc}
 .planner-card .rm:hover{color:var(--bad)}
 .planner-card.st-wait,.planner-card.st-revise,.planner-card.st-reshoot{background:#fff !important;border:1px dashed var(--line-2);border-left:3px dashed var(--c,var(--action));opacity:.85}
 .planner-card.st-received{background:#fff4e5 !important;border-left-color:#f08c00}
+.planner-card.st-lead{background:#f3f0ff !important;border-left-color:#7048e8}
+.ai-review{margin-top:6px;font-size:12px}
+.ai-review summary{cursor:pointer;font-weight:600}
+.ai-review pre{white-space:pre-wrap;font-family:inherit;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:4px;max-height:320px;overflow:auto;user-select:text}
 .planner-card.st-approved{box-shadow:inset 0 0 0 1px rgba(16,150,90,.35)}
 .planner-card .vtag{font-size:10px;font-weight:700;border-radius:6px;padding:0 5px;margin-top:2px;display:inline-block}
 .planner-card .vtag.warn{background:#ffe3e3;color:#c92a2a}
@@ -5827,7 +5831,7 @@ function coordEventHtml(e){
   return `<div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--line)">
     <span>${COORD_EVENT_ICON[e.kind]||"•"}</span>
     <div style="flex:1;min-width:220px"><b>${escapeHtml(e.blogger||"")}</b> <span style="color:var(--ink-mute);font-size:11px">${escapeHtml(when)} · ${escapeHtml(e.to||"")}</span><br>${escapeHtml(e.text||"")}${e.url ? ` <a href="${escapeHtml(e.url)}" target="_blank" rel="noopener">открыть</a>` : ""}</div>
-    ${e.review && e.dealId && !UI.readOnly ? `<button class="btn btn-primary btn-sm vstage-btn" data-id="${e.dealId}" data-action="approve">✅ Одобрить</button><button class="btn btn-ghost btn-sm vstage-btn" data-id="${e.dealId}" data-action="revise">✏️ Правки</button><button class="btn btn-ghost btn-sm vstage-btn" data-id="${e.dealId}" data-action="reshoot">🔁 Пересъём</button>` : ""}
+    ${e.review && e.dealId ? (()=>{ const dd = (DataManager.state.microInfluencerDeals||[]).find(x=> x.id === e.dealId); return dd ? `<div style="flex-basis:100%">${aiReviewHtml(dd, false)}</div>${videoButtonsHtml(dd)}` : ""; })() : ""}
     ${e.proposedDate && !UI.readOnly ? `<button class="btn btn-primary btn-sm coord-accept" data-id="${e.id}">Принять дату ${escapeHtml(e.proposedDate.slice(8,10)+"."+e.proposedDate.slice(5,7))}</button>` : ""}
     ${e.dealId ? `<button class="btn btn-ghost btn-sm reminder-open" data-id="${e.dealId}">Открыть</button>` : ""}
     ${UI.readOnly ? "" : `<button class="btn btn-ghost btn-sm coord-read" data-id="${e.id}">Готово</button>`}
@@ -6487,14 +6491,32 @@ function calendarDeals(source){
 // ⏳ ждём видео → 📥 пришло, проверить → ✏️ правки / 🔁 пересъём → ✅ одобрено → 🎬 вышло. В «сегодня» после 10:00
 // остаётся только одобренное — остальное сервер переносит на следующий рабочий день (state.dayPlan — план дня).
 const VIDEO_STAGE = {
-  wait:{icon:"⏳", label:"ждём видео"}, received:{icon:"📥", label:"пришло — проверить"},
+  wait:{icon:"⏳", label:"ждём видео"}, received:{icon:"📥", label:"пришло — проверить"}, lead:{icon:"👀", label:"у тимлида"},
   revise:{icon:"✏️", label:"правки"}, reshoot:{icon:"🔁", label:"пересъём"},
   approved:{icon:"✅", label:"одобрено"}, published:{icon:"🎬", label:"вышло"},
 };
 function videoStageOf(d){
   if(!d) return "wait";
   if(d.publishDate || d.videoStatus === "опубликовано" || Number(d.factReachStories) > 0) return "published";
-  return ["received","revise","reshoot","approved"].includes(d.vstage) ? d.vstage : "wait";
+  return ["received","lead","revise","reshoot","approved"].includes(d.vstage) ? d.vstage : "wait";
+}
+// Разбор ИИ (Gemini) присланного видео — сворачиваемый блок.
+function aiReviewHtml(d, open){
+  const r = d && d.vreview;
+  if(!r) return "";
+  if(r.status === "running") return `<div class="ai-review">🤖 ИИ разбирает видео…</div>`;
+  if(r.status === "error") return `<div class="ai-review" style="color:var(--bad)">🤖 ИИ не смог разобрать: ${escapeHtml(r.error||"")}</div>`;
+  const col = r.decision === "ПУБЛИКАЦИЯ" ? "#087f5b" : r.decision === "ПРАВКИ" ? "#e67700" : "#c92a2a";
+  return `<details class="ai-review" ${open?"open":""}><summary>🤖 Разбор ИИ: <span style="color:${col}">${escapeHtml(r.decision||"готов")}</span>${r.score!=null?` · ${r.score}/9`:""}</summary><pre>${escapeHtml(r.text||"")}</pre></details>`;
+}
+// Кнопки по видео: у менеджера после «пришло» — «тимлиду», у тимлида — решение.
+function videoButtonsHtml(d, compact){
+  const st = videoStageOf(d);
+  if(UI.readOnly || st === "published") return "";
+  const b = (a, full, short, cls)=> compact ? `<button class="vstage-btn" data-id="${d.id}" data-action="${a}" title="${full}">${short}</button>` : `<button class="btn btn-sm ${cls||"btn-ghost"} vstage-btn" data-id="${d.id}" data-action="${a}">${full}</button>`;
+  if(st === "received") return [b("to_lead","📤 На согласование тимлиду","📤","btn-primary"), b("approve","✅ Одобрить","✅"), b("revise","✏️ Правки","✏️"), b("reshoot","🔁 Пересъём","🔁")].join(compact?"":" ");
+  if(st === "lead") return [b("approve","✅ Одобрить","✅","btn-primary"), b("revise","✏️ Правки","✏️"), b("reshoot","🔁 Пересъём","🔁")].join(compact?"":" ");
+  return "";
 }
 const ddmmStr = (ymd)=> ymd ? String(ymd).slice(8,10)+"."+String(ymd).slice(5,7) : "";
 function videoStageBlock(d){
@@ -6504,7 +6526,7 @@ function videoStageBlock(d){
   const extra = (st==="revise"||st==="reshoot") && d.vcomment ? `<div style="font-size:12px;color:var(--ink-soft);margin-top:4px">Правки: ${escapeHtml(d.vcomment)}${d.vdue?` · срок ${ddmmStr(d.vdue)}`:""}</div>` : "";
   const media = Array.isArray(d.coordMedia) && d.coordMedia.length ? d.coordMedia[d.coordMedia.length-1] : null;
   const btn = (a,t,cls)=> `<button class="btn btn-sm ${cls||"btn-ghost"} vstage-btn" data-id="${d.id}" data-action="${a}">${t}</button>`;
-  const btns = UI.readOnly || st==="published" ? "" : [
+  const btns = UI.readOnly || st==="published" ? "" : (st==="received"||st==="lead") ? videoButtonsHtml(d) + " " + btn("wait","↩ ждём видео") + (media && media.url ? " " + btn("ai_review","🤖 Разобрать ИИ ещё раз") : "") : [
     st!=="approved" ? btn("approve","✅ Одобрить","btn-primary") : "",
     btn("revise","✏️ Правки"), btn("reshoot","🔁 Пересъём"),
     st==="wait"||st==="revise"||st==="reshoot" ? btn("received","📥 Видео пришло") : "",
@@ -6514,22 +6536,48 @@ function videoStageBlock(d){
     <b>Видео: ${S.icon} ${S.label}</b><span style="font-size:12px;color:var(--ink-mute)">${moved}${orig}</span>
     ${media && media.url ? ` · <a href="${escapeHtml(media.url)}" target="_blank" rel="noopener">▶ смотреть присланное</a>` : ""}
     ${extra}
+    ${st==="lead" ? `<div style="font-size:12px;color:var(--ink-soft);margin-top:4px">У тимлида (${escapeHtml(d.vlead||"")})${d.vleadComment?` · от ${escapeHtml(d.vleadFrom||"")}: ${escapeHtml(d.vleadComment)}`:""}</div>` : ""}
+    ${aiReviewHtml(d, st==="received"||st==="lead")}
     ${btns ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${btns}</div>` : ""}
   </div>`;
 }
-async function videoAction(id, action, after){
+async function videoAction(id, action, after, comment){
   // ✏️ правки: +1 рабочий день, 🔁 пересъём: +2. Сами правки менеджер пишет блогеру в чате; дату можно поправить в карточке.
+  const d = (DataManager.state.microInfluencerDeals||[]).find(x=> x.id === id);
+  if(action === "ai_review"){
+    try{ await apiFetch("/api/coord/deal/"+id+"/ai-review", {method:"POST"}); toast("🤖 ИИ разбирает видео — 1–2 минуты"); await DataManager.refresh(); if(after) after(); else render(); }catch(err){ toast(err.message, true); }
+    return;
+  }
+  const needNote = action === "to_lead" || ((action === "revise" || action === "reshoot") && videoStageOf(d) === "lead");
+  if(needNote && comment === undefined) return modalVideoNote(d, action, after);
   try{
     const body = {action};
+    if(comment) body.comment = comment;
     if(action === "revise") body.days = 1;
     if(action === "reshoot") body.days = 2;
     const r = await apiFetch("/api/coord/deal/"+id+"/video", {method:"POST", headers:jsonHeaders, body:JSON.stringify(body)});
     const S = VIDEO_STAGE[r.stage] || {};
-    const dates = (action === "revise" || action === "reshoot") ? `: видео ждём ${ddmmStr(r.vdue)}, публикация ${ddmmStr(r.plannedDate)}` : "";
+    const dates = (action === "revise" || action === "reshoot") ? `: видео ждём ${ddmmStr(r.vdue)}, публикация ${ddmmStr(r.plannedDate)}` : action === "to_lead" ? ` (${r.lead||"тимлид"})` : "";
     toast(`${S.icon||""} ${S.label||"готово"}${dates}${r.sent ? " · " + r.sent : ""}`);
     await DataManager.refresh();
     if(after) after(); else render();
   }catch(err){ toast(err.message, true); }
+}
+function modalVideoNote(d, action, after){
+  const title = action === "to_lead" ? "📤 На согласование тимлиду" : action === "revise" ? "✏️ Правки" : "🔁 Пересъём";
+  const hint = action === "to_lead" ? "Комментарий для тимлида (необязательно)" : "Что поправить — увидит менеджер, блогеру не уходит (необязательно)";
+  closeModal();
+  openModal(`
+    <h3>${title} — ${escapeHtml(d ? d.blogerName||"" : "")}</h3>
+    ${d ? aiReviewHtml(d, false) : ""}
+    <div class="field" style="margin-top:8px"><label>${hint}</label><textarea id="vn-text" rows="3"></textarea></div>
+    <div class="modal-actions"><button class="btn btn-ghost" id="vn-cancel">Отмена</button><button class="btn btn-primary" id="vn-ok">${action === "to_lead" ? "Отправить" : "Готово"}</button></div>`);
+  document.getElementById("vn-cancel").onclick = ()=>{ closeModal(); if(after) after(); };
+  document.getElementById("vn-ok").onclick = async ()=>{
+    const t = document.getElementById("vn-text").value.trim();
+    closeModal();
+    await videoAction(d.id, action, after, t);
+  };
 }
 function bindVideoStageButtons(after){
   document.querySelectorAll(".vstage-btn").forEach(b=>{ b.onclick = async (e)=>{
@@ -6603,7 +6651,7 @@ function tplMicroCalendar(){
         Дата ячейки — плановая дата публикации, а если её ещё нет — фактическая дата выкладки.
         Клик по «+» на дне добавляет интеграцию сразу с этой плановой датой; клик по карточке — открывает её на редактирование;
         ✕ на карточке снимает интеграцию с плана (дата очищается, сама запись не удаляется).
-        ${source==="micro" ? `<br>Значки: ⏳ ждём видео (пунктир — ещё не точно) · 📥 прислали, надо проверить · ✏️ правки · 🔁 пересъём · ✅ одобрено — точно выйдет · 🎬 вышло. Видео на согласование ждём за рабочий день до публикации; в 10:00 неодобренное на сегодня переезжает на следующий рабочий день — в «сегодня» остаётся только то, что реально выйдет.` : ""}
+        ${source==="micro" ? `<br>Значки: ⏳ ждём видео (пунктир — ещё не точно) · 📥 прислали, надо проверить · 👀 у тимлида на согласовании · ✏️ правки · 🔁 пересъём · ✅ одобрено — точно выйдет · 🎬 вышло. Видео на согласование ждём за рабочий день до публикации; в 10:00 неодобренное на сегодня переезжает на следующий рабочий день — в «сегодня» остаётся только то, что реально выйдет.` : ""}
         ${!responsibles.length ? `<br><b>Ответственный пока никому не проставлен</b> в этой базе — заполните поле «Ответственный» в карточке интеграции, и здесь появится выбор менеджера.`
           : (withoutResp ? `<br>У ${withoutResp} интеграций ответственный не указан — они видны только при «Все менеджеры».` : "")}
       </div>
@@ -6638,7 +6686,7 @@ function tplMicroCalendar(){
                 r.vmoved && r.vmoved.to === dateStr && r.vmoved.from ? `<span class="vtag info">перенесено с ${ddmmStr(r.vmoved.from)}</span>` : "",
                 dp && (e.stage==="approved"||e.stage==="published") && !(dp.ids||[]).includes(e.id) ? `<span class="vtag plus">сверх плана</span>` : "",
               ].join(" ");
-              const quick = S && e.stage==="received" && !UI.readOnly ? `<div class="vbtns"><button class="vstage-btn" data-id="${e.id}" data-action="approve" title="Одобрить">✅</button><button class="vstage-btn" data-id="${e.id}" data-action="revise" title="Правки">✏️</button><button class="vstage-btn" data-id="${e.id}" data-action="reshoot" title="Пересъём">🔁</button></div>` : "";
+              const quick = S && (e.stage==="received"||e.stage==="lead") && !UI.readOnly ? `<div class="vbtns">${videoButtonsHtml(r, true)}</div>` : "";
               return `<div class="planner-card ${e.done?'done':''} ${S?`st-${e.stage}`:""}" style="--c:${col.c};${e.done?'':`background:${col.bg}`}" data-open-deal="${e.id}" data-source="${e.source}" ${S?`title="${S.icon} ${S.label}"`:""}>
                 <b>${S?`<span style="font-size:11px">${S.icon}</span>`:""}${nameHtml}</b>
                 <div class="prod">${escapeHtml(e.product||"—")}</div>
@@ -9097,6 +9145,11 @@ async function runSelfTests(){
       if(!html.includes("🎬 вышло <b>1</b> · ✅ одобрено <b>2</b> · ⏳ ждём <b>2</b>")) throw new Error("месяц: нет разбивки");
       const blk = videoStageBlock(DataManager.state.microInfluencerDeals[3]);
       if(!blk.includes("пришло — проверить") || !blk.includes("✅ Одобрить")) throw new Error("блок в карточке: "+blk.slice(0,200));
+      const ld = {id:79406, blogerName:"ld", vstage:"lead", vlead:"Нина", vleadFrom:"Марина", vleadComment:"норм", vreview:{status:"done", decision:"ПРАВКИ", score:6, text:"РЕШЕНИЕ: ПРАВКИ\n- нет CTA"}};
+      const lb = videoStageBlock(ld);
+      if(!lb.includes("у тимлида") || !lb.includes("Разбор ИИ") || !lb.includes("ПРАВКИ") || !lb.includes('data-action="approve"') || lb.includes('data-action="to_lead"')) throw new Error("тимлид: "+lb.slice(0,300));
+      const rb = videoButtonsHtml({id:1, vstage:"received"});
+      if(!rb.includes('data-action="to_lead"')) throw new Error("у менеджера должна быть кнопка «тимлиду»");
     } finally { DataManager.state.microInfluencerDeals = savedMicro; DataManager.state.dayPlan = savedDp; UI.calendarMonth = sM; UI.calendarSource = sS; UI.calendarResponsible = sR; UI.calendarHiddenBloggers = sH; }
   });
   TestSuite.test("D0: autoContributionCell показывает сумму только для ok/zero, у остальных статусов «—» без числа", ()=>{
