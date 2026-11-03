@@ -240,6 +240,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     due_today: (v) => `Здравствуйте! 😊 Сегодня ждём видео на согласование 🎬 Пришлите его, пожалуйста, сюда, когда будет готово 🙏`,
     link_ask: (v) => `Здравствуйте! Сегодня день публикации 🎬 Когда выложите, пришлите, пожалуйста, ссылку 💚`,
     approved: (v) => `Спасибо! 💚 Видео согласовано ✅ Публикация ${v[2]} - когда выложите, пришлите, пожалуйста, ссылку 🙏`,
+    received_ack: (v) => `Спасибо, видео получили! 🙌 Посмотрим и вернёмся с ответом ${v[2]}`,
+    link_thanks: (v) => `Спасибо! Ссылку получили 💚 Было приятно работать!`,
     revise: (v) => `Спасибо за видео! 💚 Есть правки:\n${v[3]}\nПришлите, пожалуйста, исправленный вариант до ${v[2]} 🙏`,
     reshoot: (v) => `Спасибо за видео! 💚 К сожалению, нужно переснять:\n${v[3]}\nПришлите, пожалуйста, новый вариант до ${v[2]} 🙏`,
   };
@@ -424,6 +426,11 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         log(d.id, "sys", "видео пришло — статус «📥 проверить»");
         const ev = event(d, "media", process.env.GEMINI_API_KEY ? "Блогер прислал видео на согласование — 🤖 ИИ разбирает (1–2 мин)" : "Блогер прислал видео на согласование — посмотрите и отправьте тимлиду", { url: u, review: true });
         if (process.env.GEMINI_API_KEY && u) startReview(d, u, ev && ev.id);
+        // Ответ блогеру «видео получили» — один раз на пачку (если шлёт несколько частей подряд).
+        if (!d.vackAt || Date.now() - Date.parse(d.vackAt) > 6 * H) {
+          d.vackAt = new Date().toISOString();
+          tellBlogger(d, "received_ack", [nameOf(d), d.product || "", almatyHour() >= 17 ? "завтра" : "сегодня"]).then(() => persist()).catch(() => {});
+        }
       } else event(d, "media", `Блогер прислал ${type === "video" ? "видео" : type === "image" ? "фото" : "файл"} — посмотрите${u ? "" : " в переписке"}`, { url: u });
       return true;
     }
@@ -437,6 +444,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       if (!d.publishDate) d.publishDate = today;
       log(d.id, "sys", `ссылка записана (${isTT ? "TikTok" : "Instagram"}), статус «опубликовано»`);
       event(d, "link", `Блогер прислал ссылку — записана, статус «опубликовано»: ${url}`, { info: true });
+      if (!d.vthanksAt) { d.vthanksAt = new Date().toISOString(); tellBlogger(d, "link_thanks", [nameOf(d), d.product || "", ""]).then(() => persist()).catch(() => {}); }
       return true;
     }
     if (RE_STOP.test(text)) {
