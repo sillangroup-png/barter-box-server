@@ -5857,7 +5857,13 @@ function modalMyReminders(team){
     <h3>🔔 Напоминания — ${escapeHtml(UI.actorName||"")}${team ? " и команда" : ""}</h3>
     <p style="color:var(--ink-soft);font-size:12px;margin-bottom:6px">Интеграции микро, где вы ответственная (по имени при входе), ещё не опубликованы и есть плановая дата.${isLead ? ` <a href="#" id="rem-team">${team ? "Только мои" : "Показать с командой"}</a>` : ""}</p>
     <div style="max-height:62vh;overflow:auto">
-      ${(()=>{ const ev = myCoordEvents(!!team); return ev.length ? `<div style="margin:6px 0 4px"><b>💬 От блогеров (WhatsApp)</b> <span style="color:var(--ink-mute)">${ev.length}</span></div>${ev.map(coordEventHtml).join("")}` : ""; })()}
+      ${(()=>{ const ev = myCoordEvents(!!team); if(!ev.length) return "";
+        // По блогерам: у каждого — выпадающий список его сообщений и «Готово все»; сверху — «Готово для всех».
+        const groups = []; const byKey = new Map();
+        ev.forEach(e=>{ const k = (e.blogger||"—") + "|" + (e.dealId||""); if(!byKey.has(k)){ const g = {name:e.blogger||"—", list:[]}; byKey.set(k, g); groups.push(g); } byKey.get(k).list.push(e); });
+        const allIds = ev.map(e=>e.id).join(",");
+        return `<div style="margin:6px 0 4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>💬 От блогеров (WhatsApp)</b> <span style="color:var(--ink-mute)">${ev.length}</span>${UI.readOnly ? "" : `<span style="flex:1"></span><button class="btn btn-ghost btn-sm coord-read-many" data-ids="${allIds}">✓ Готово для всех (${ev.length})</button>`}</div>
+          ${groups.map(g=> g.list.length === 1 ? coordEventHtml(g.list[0]) : `<details class="coord-group" style="border-bottom:1px solid var(--line);padding:4px 0"><summary style="cursor:pointer;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>${escapeHtml(g.name)}</b> <span style="color:var(--ink-mute);font-size:12px">${g.list.length} сообщ. · последнее: ${escapeHtml(String(g.list[0].text||"").slice(0,70))}</span>${UI.readOnly ? "" : `<span style="flex:1"></span><button class="btn btn-ghost btn-sm coord-read-many" data-ids="${g.list.map(e=>e.id).join(",")}">✓ Готово все</button>`}</summary><div style="padding-left:12px">${g.list.map(coordEventHtml).join("")}</div></details>`).join("")}`; })()}
       ${sec("⏰ Просрочено", r.overdue, `плановая дата прошла (до ${REMINDER_OVERDUE_MAX_DAYS} дней)`)}
       ${sec("📅 Сегодня", r.today)}
       ${sec("🔜 Скоро", r.soon, `в ближайшие ${REMINDER_SOON_DAYS} дня`)}
@@ -5886,6 +5892,11 @@ function modalMyReminders(team){
     try{ await withBusy(b, ()=> apiFetch("/api/coord/events/"+b.dataset.id+"/read", {method:"POST"})); await DataManager.refresh(); closeModal(); modalMyReminders(team); render(); }catch(e){ toast(e.message, true); }
   }; });
   bindVideoStageButtons(()=>{ closeModal(); modalMyReminders(team); render(); });
+  document.querySelectorAll(".coord-read-many").forEach(b=>{ b.onclick = async (e)=>{
+    e.preventDefault(); e.stopPropagation();
+    const ids = String(b.dataset.ids||"").split(",").filter(Boolean);
+    try{ await withBusy(b, ()=> apiFetch("/api/coord/events/read-many", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids})})); await DataManager.refresh(); closeModal(); modalMyReminders(team); render(); }catch(err){ toast(err.message, true); }
+  }; });
   document.querySelectorAll(".coord-accept").forEach(b=>{ b.onclick = async ()=>{
     try{ await withBusy(b, ()=> apiFetch("/api/coord/events/"+b.dataset.id+"/accept-date", {method:"POST"})); toast("Новая дата сохранена"); await DataManager.refresh(); closeModal(); modalMyReminders(team); render(); }catch(e){ toast(e.message, true); }
   }; });
