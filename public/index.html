@@ -6521,8 +6521,9 @@ function aiReviewHtml(d, open){
     if(!media) return `<div class="ai-review" style="color:var(--ink-mute)">🤖 ИИ не разбирал: видео нет в WhatsApp-переписке бота (отмечено вручную) — посмотрите сами</div>`;
     return `<div class="ai-review">🤖 ИИ ещё не разбирал это видео ${UI.readOnly ? "" : `<button class="btn btn-ghost btn-sm vstage-btn" data-id="${d.id}" data-action="ai_review">Разобрать сейчас</button>`}</div>`;
   }
-  if(r.status === "running") return `<div class="ai-review">🤖 ИИ разбирает видео…</div>`;
-  if(r.status === "error") return `<div class="ai-review" style="color:var(--bad)">🤖 ИИ не смог разобрать: ${escapeHtml(r.error||"")}</div>`;
+  const again = UI.readOnly || !r.url ? "" : ` <button class="btn btn-ghost btn-sm vstage-btn" data-id="${d.id}" data-action="ai_review">🔄 Разобрать ещё раз</button>`;
+  if(r.status === "running") return `<div class="ai-review">🤖 ${r.note ? escapeHtml(r.note) : "ИИ разбирает видео…"}</div>`;
+  if(r.status === "error") return `<div class="ai-review" style="color:var(--bad)">🤖 ИИ не смог разобрать: ${escapeHtml(/перегружен|503|high demand/i.test(r.error||"") ? "Gemini перегружен, попробуйте позже" : (r.error||""))}${again}</div>`;
   const col = r.decision === "ПУБЛИКАЦИЯ" ? "#087f5b" : r.decision === "ПРАВКИ" ? "#e67700" : "#c92a2a";
   const copyBtns = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px"><button class="btn btn-ghost btn-sm ai-copy" data-id="${d.id}" data-part="blogger">📋 Скопировать правки</button><button class="btn btn-ghost btn-sm ai-copy" data-id="${d.id}" data-part="all">📋 Скопировать весь разбор</button></div>`;
   return `<details class="ai-review" ${open?"open":""}><summary>🤖 Разбор ИИ: <span style="color:${col}">${escapeHtml(r.decision||"готов")}</span>${r.score!=null?` · ${r.score}/9`:""}</summary><pre>${escapeHtml(r.text||"")}</pre>${copyBtns}</details>`;
