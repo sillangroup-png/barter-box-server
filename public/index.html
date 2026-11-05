@@ -6472,7 +6472,7 @@ function calendarDeals(source){
       product: d.product || "",
       date: inflDealDate(d),
       done: !!d.publishedDate,
-      responsible: d.responsible || "",
+      responsible: calNormName(d.responsible),
       link: "",
     }));
   }
@@ -6483,7 +6483,7 @@ function calendarDeals(source){
     date: microDealDate(d),
     done: !!d.publishDate,
     stage: videoStageOf(d),
-    responsible: d.responsible || "",
+    responsible: calNormName(d.responsible),
     link: d.instagramAccount || d.tiktokAccount || "",
   }));
 }
@@ -6611,11 +6611,28 @@ function bindVideoStageButtons(after){
     delete b.dataset.busy;
   }; });
 }
+// Имя ответственного для планера: без лишних пробелов и с русскими буквами вместо похожих латинских
+// («Анастасия » и «Aнастасия» — один человек, в списке менеджеров должна быть одна строка).
+const CAL_LAT2CYR = {a:"а",e:"е",o:"о",p:"р",c:"с",x:"х",y:"у",A:"А",E:"Е",O:"О",P:"Р",C:"С",X:"Х",H:"Н",K:"К",M:"М",T:"Т",B:"В"};
+function calNormName(s){
+  let t = String(s||"").replace(/[\u00a0\s]+/g," ").trim();
+  if(/[а-яё]/i.test(t)) t = t.replace(/[aeopcxyAEOPCXHKMTB]/g, ch=> CAL_LAT2CYR[ch] || ch);
+  return t ? t[0].toUpperCase() + t.slice(1) : "";
+}
+// Поиск в планере по нику/имени блогера (поле «🔍»): без @, регистра и ссылки.
+function calSearchKey(s){ return String(s||"").toLowerCase().replace(/ё/g,"е").replace(/https?:\/\/(www\.)?(instagram|tiktok)\.com\/@?/g,"").replace(/[@\s]/g,""); }
+function calendarMatchesSearch(e){
+  const q = calSearchKey(UI.calendarSearch);
+  if(!q) return true;
+  const r = e.raw || {};
+  return [e.name, r.instagramAccount, r.tiktokAccount, r.blogerLogin, r.blogerName].some(x=> calSearchKey(x).includes(q));
+}
 function calendarEntriesByDate(source, responsible){
   const map = {};
   calendarDeals(source).forEach(e=>{
     if(!e.date) return;
     if(responsible && e.responsible !== responsible) return;
+    if(!calendarMatchesSearch(e)) return;
     (map[e.date] = map[e.date] || []).push(e);
   });
   return map;
@@ -6664,6 +6681,7 @@ function tplMicroCalendar(){
           <option value="">Все менеджеры</option>
           ${responsibles.map(r=>`<option value="${escapeHtml(r)}" ${r===resp?'selected':''}>${escapeHtml(r)}</option>`).join("")}
         </select>
+        <input id="cal-search" type="search" placeholder="🔍 ник блогера" value="${escapeHtml(UI.calendarSearch||"")}" style="min-width:170px">
         ${resp ? `<span style="align-self:center;color:var(--ink-mute);font-size:11.5px">показаны только блогеры ${escapeHtml(resp)} — ${allBloggers.length} шт.</span>` : ""}
         ${(()=>{ const all = Object.keys(entriesByDate).filter(d=>d.slice(0,7)===ym).flatMap(d=>(entriesByDate[d]||[]).filter(e=>!hidden.has(e.name)));
           const inM = all.length;
@@ -7873,6 +7891,16 @@ function wireDeskTab(){
     });
     const calResp = document.getElementById("cal-responsible");
     if(calResp) calResp.onchange = e=>{ UI.calendarResponsible = e.target.value; UI.calendarHiddenBloggers = new Set(); renderDeskTab(); };
+    const calSearch = document.getElementById("cal-search");
+    if(calSearch) calSearch.oninput = e=>{
+      clearTimeout(UI._calSearchT);
+      const v = e.target.value;
+      UI._calSearchT = setTimeout(()=>{
+        UI.calendarSearch = v; renderDeskTab();
+        const el = document.getElementById("cal-search");
+        if(el){ el.focus(); try{ el.setSelectionRange(v.length, v.length); }catch(x){} }
+      }, 250);
+    };
     const calAddBtn = document.getElementById("cal-add");
     if(calAddBtn) calAddBtn.onclick = ()=> isLarge ? modalDeal(null) : modalMicroDeal(null);
     const calPrev = document.getElementById("cal-prev");
@@ -9146,6 +9174,24 @@ async function runSelfTests(){
       html = tplMicroCalendar();
       if(!html.includes(">✅ 0 · ⏳ 2<") || !html.includes("<b>2</b> видео за")) throw new Error("фильтр Нина: "+(html.match(/\d+ видео|✅ \d+[^<]*/g)||[]).join(","));
     } finally { DataManager.state.microInfluencerDeals = savedMicro; UI.calendarMonth = sM; UI.calendarSource = sS; UI.calendarResponsible = sR; UI.calendarHiddenBloggers = sH; }
+  });
+  TestSuite.test("Планер: один менеджер в списке при пробелах/латинских буквах; поиск по нику блогера", ()=>{
+    const savedMicro = DataManager.state.microInfluencerDeals, sM = UI.calendarMonth, sS = UI.calendarSource, sR = UI.calendarResponsible, sH = UI.calendarHiddenBloggers, sQ = UI.calendarSearch;
+    try{
+      DataManager.state.microInfluencerDeals = [
+        {id:79501, blogerName:"Айым", instagramAccount:"https://www.instagram.com/aiym_beauty/", responsible:"Анастасия", plannedDate:"2026-11-12"},
+        {id:79502, blogerName:"Зайка", responsible:"Анастасия ", plannedDate:"2026-11-12"},
+        {id:79503, blogerName:"Карakoz", responsible:"Aнастасия", plannedDate:"2026-11-13"},
+      ];
+      UI.calendarMonth = "2026-11"; UI.calendarSource = "micro"; UI.calendarHiddenBloggers = new Set(); UI.calendarResponsible = ""; UI.calendarSearch = "";
+      let html = tplMicroCalendar();
+      const opts = (html.match(/<option value="[^"]*"[^>]*>Анастасия<\/option>/g)||[]).length;
+      if(opts !== 1) throw new Error("Анастасия в списке "+opts+" раз(а)");
+      UI.calendarResponsible = "Анастасия"; html = tplMicroCalendar();
+      if(!html.includes("<b>3</b> видео за")) throw new Error("фильтр по Анастасии должен найти все 3");
+      UI.calendarResponsible = ""; UI.calendarSearch = "@AIYM_beauty"; html = tplMicroCalendar();
+      if(!html.includes("<b>1</b> видео за") || !html.includes("Айым") || html.includes("Зайка")) throw new Error("поиск по нику");
+    } finally { DataManager.state.microInfluencerDeals = savedMicro; UI.calendarMonth = sM; UI.calendarSource = sS; UI.calendarResponsible = sR; UI.calendarHiddenBloggers = sH; UI.calendarSearch = sQ; }
   });
   TestSuite.test("Планер: этапы видео — значки, ✅/⏳ в шапке дня, план дня, «сверх плана», перенос", ()=>{
     const savedMicro = DataManager.state.microInfluencerDeals, savedDp = DataManager.state.dayPlan, sM = UI.calendarMonth, sS = UI.calendarSource, sR = UI.calendarResponsible, sH = UI.calendarHiddenBloggers;
