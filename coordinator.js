@@ -141,6 +141,12 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       const stage = stageOf(d);
       const pausedTill = d.coordPausedUntil && Date.parse(d.coordPausedUntil) > Date.now();
       let next = null;
+      if (stage === "published" && !d.vthanksAt && !d.coordStop && (d.vstage || d.coordLastOutDay) && hour >= 10 && hour < 20) {
+        // Менеджер отметил публикацию (ссылка/факт-дата) — один раз спасибо блогеру, только по свежим публикациям.
+        const pub = String(d.publishDate || today).slice(0, 10);
+        d.vthanksAt = new Date().toISOString(); changed = true;
+        if (daysBetween(pub, today) <= 2) tellBlogger(d, "link_thanks", [nameOf(d), d.product || "", ""]).then(() => persist()).catch(() => {});
+      }
       if (d.coordStop) next = { text: "автонапоминания выключены (стоп)" };
       else if (stage === "published") next = { text: "опубликовано — напоминаний нет" };
       else if (!pd) next = { text: "нет плановой даты" };
@@ -416,8 +422,10 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   function processReply(d, text, type, url) {
     const today = almatyDate();
     log(d.id, "in", type === "text" ? text : `[${type}] ${url || ""} ${text}`.trim());
-    const draft = text.match(RE_DRAFT);
-    if (["video", "image", "document", "file"].includes(type) || draft) {
+    // Ссылки (на Диск, Reels, TikTok) бот больше не разбирает автоматически: блогер может прислать старое видео,
+    // менеджер — референс. Видео на согласование = только видео/файл в переписке.
+    const draft = null;
+    if (["video", "image", "document", "file"].includes(type)) {
       const u = url || (draft ? draft[1] : "");
       d.coordMedia = (Array.isArray(d.coordMedia) ? d.coordMedia : []).concat([{ at: new Date().toISOString(), type: draft ? "link" : type, url: u }]).slice(-20);
       const isVideo = type === "video" || type === "document" || type === "file" || !!draft;
@@ -436,15 +444,10 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     }
     const link = text.match(RE_LINK);
     if (link) {
+      // Ничего не записываем в строку (05.11.2026, просьба менеджеров): ссылку вставляет менеджер сам.
       const url = link[1];
-      const isTT = /tiktok\.com/i.test(url);
-      if (isTT && !d.tiktokVideoLink) d.tiktokVideoLink = url;
-      if (!isTT && !d.reelsLink) d.reelsLink = url;
-      if (d.videoStatus !== "опубликовано") d.videoStatus = "опубликовано";
-      if (!d.publishDate) d.publishDate = today;
-      log(d.id, "sys", `ссылка записана (${isTT ? "TikTok" : "Instagram"}), статус «опубликовано»`);
-      event(d, "link", `Блогер прислал ссылку — записана, статус «опубликовано»: ${url}`, { info: true });
-      if (!d.vthanksAt) { d.vthanksAt = new Date().toISOString(); tellBlogger(d, "link_thanks", [nameOf(d), d.product || "", ""]).then(() => persist()).catch(() => {}); }
+      log(d.id, "sys", "блогер прислал ссылку — в строку не записана, проверит менеджер");
+      event(d, "link", `Блогер прислал ссылку: ${url} — если это публикация, вставьте её в строку сами`, { info: true, url });
       return true;
     }
     if (RE_STOP.test(text)) {
@@ -718,6 +721,16 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       out.bots = Object.values(b || {}).map((x) => ({ id: x.ID, code: x.CODE, type: x.TYPE, openline: x.OPENLINE }));
     } catch (e) { out.botsError = e.message; }
     res.json(out);
+  });
+  // «Готово» сразу для нескольких уведомлений (по блогеру или все).
+  app.post("/api/coord/events/read-many", requireAuth, (req, res) => {
+    if (!staff(req, res)) return;
+    const ids = new Set(Array.isArray(req.body && req.body.ids) ? req.body.ids.map(String) : []);
+    const now = new Date().toISOString();
+    let n = 0;
+    for (const e of C().events) if (ids.has(String(e.id)) && !e.read) { e.read = true; e.readAt = now; n++; }
+    if (n) persist();
+    res.json({ ok: true, read: n });
   });
   app.post("/api/coord/events/:id/read", requireAuth, (req, res) => {
     if (!staff(req, res)) return;
