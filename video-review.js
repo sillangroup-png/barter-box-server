@@ -186,20 +186,29 @@ async function reviewVideo(url, { mimeHint } = {}) {
       contents: [{ role: "user", parts: [{ file_data: { mime_type: mime, file_uri: file.uri } }, { text: "Проанализируй этот ролик. Выведи СТРОГО два блока по инструкции." }] }],
       generationConfig: { temperature: 0.1 },
     };
-    let lastErr = "";
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const r = await fetch(`${API}/v1beta/models/${encodeURIComponent(model)}:generateContent`, { method: "POST", headers: { ...H, "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const j = await r.json().catch(() => ({}));
-      if (r.ok) {
-        const text = ((j.candidates || [])[0]?.content?.parts || []).map((p) => p.text || "").join("").trim();
-        if (!text) throw new Error("Gemini вернул пустой ответ");
-        return { text, model, ...parseReview(text) };
+    // Перегрузка (503/429/500) — по 3 попытки на основной модели, потом на запасной (GEMINI_FALLBACK_MODEL).
+    const fallback = String(process.env.GEMINI_FALLBACK_MODEL || "gemini-flash-latest").trim();
+    const models = [model].concat(fallback && fallback !== model ? [fallback] : []);
+    let lastErr = "", busy = false;
+    for (const m of models) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const r = await fetch(`${API}/v1beta/models/${encodeURIComponent(m)}:generateContent`, { method: "POST", headers: { ...H, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok) {
+          const text = ((j.candidates || [])[0]?.content?.parts || []).map((p) => p.text || "").join("").trim();
+          if (!text) throw new Error("Gemini вернул пустой ответ");
+          return { text, model: m, ...parseReview(text) };
+        }
+        lastErr = `${r.status} ${(j.error && j.error.message) || ""}`.slice(0, 300);
+        busy = r.status === 503 || r.status === 429 || r.status === 500;
+        if (r.status === 404) break; // такой модели нет — сразу к запасной
+        if (!busy) break;
+        await sleep([10000, 20000, 40000][attempt]);
       }
-      lastErr = `${r.status} ${(j.error && j.error.message) || ""}`.slice(0, 300);
-      if (r.status === 503 || r.status === 429 || r.status === 500) { await sleep((attempt + 1) * 10000); continue; }
-      break;
     }
-    throw new Error(`Gemini: ${lastErr}`);
+    const err = new Error(busy ? "Gemini перегружен" : `Gemini: ${lastErr}`);
+    err.retryable = busy;
+    throw err;
   } finally {
     fetch(`${API}/v1beta/${file.name}`, { method: "DELETE", headers: H }).catch(() => {});
   }

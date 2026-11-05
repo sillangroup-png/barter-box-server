@@ -791,7 +791,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   let reviewing = false;
   function startReview(d, url, eventId, mode) {
     d.vreview = { status: "running", at: new Date().toISOString(), url };
-    reviewQueue.push({ dealId: d.id, url, eventId, mode: mode || "" });
+    reviewQueue.push({ dealId: d.id, url, eventId, mode: mode || "", tries: 0 });
     runReviews();
   }
   async function runReviews() {
@@ -801,11 +801,19 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       while (reviewQueue.length) {
         const job = reviewQueue.shift();
         const find = () => (getState().microInfluencerDeals || []).find((x) => x.id === job.dealId);
-        let res = null, err = null;
-        try { res = await reviewVideo(job.url); } catch (e) { err = e.message; }
+        let res = null, err = null, retryable = false;
+        try { res = await reviewVideo(job.url); } catch (e) { err = e.message; retryable = !!e.retryable; }
         const d = find();
         if (!d) continue;
         const ev = job.eventId ? C().events.find((e) => e.id === job.eventId) : null;
+        // Gemini перегружен — сами повторим через 10 минут (до 6 раз, ~1 час), менеджеру ничего жать не нужно.
+        if (!res && retryable && job.tries < 6) {
+          job.tries++;
+          d.vreview = { status: "running", at: new Date().toISOString(), url: job.url, note: `Gemini перегружен — повторим сами через 10 мин (попытка ${job.tries + 1} из 7)` };
+          setTimeout(() => { reviewQueue.push(job); runReviews(); }, 10 * 60 * 1000);
+          persist();
+          continue;
+        }
         if (res) {
           d.vreview = { status: "done", at: new Date().toISOString(), url: job.url, text: String(res.text).slice(0, 12000), decision: res.decision, score: res.score, formal: res.formal, model: res.model };
           const head = `🤖 ИИ: ${res.decision || "разбор готов"}${res.score != null ? ` · ${res.score}/9` : ""}`;
