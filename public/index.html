@@ -2533,6 +2533,28 @@ const MICRO_PLAN_V2_FROM_MONTH = "2026-10";
 // (план 50) вместо «Менеджер 1»; «Менеджер 2» оставлен отдельной строкой, вне групп. Общий план команды (426 / 790) не меняется.
 const MICRO_PLAN_BY_MANAGER = {"Сая":20, "Нина":15, "Анастасия":40, "Камила":40, "Зарина":40, "Марина":40, "Мадина":40, "Сабрина":40, "Надира":40, "Анеля":40, "Оксана":50, "Менеджер 2":40};
 const MICRO_PLAN_NEW_MANAGER = 40;
+// С ноября 2026 (решение Нины 06.11.2026): у каждого менеджера 70 уникальных блогеров и 100 интеграций,
+// у Нины и Саи личного плана нет (0), Анеля — тимлид (план 21 блогер), у неё Ажар. «Менеджер 2» убран.
+// Октябрь и раньше считаются по прежним цифрам.
+const MICRO_PLAN_V3_FROM_MONTH = "2026-11";
+const MICRO_PLAN_BY_MANAGER_V3 = {"Нина":0, "Сая":0, "Анеля":21, "Мадина":70, "Марина":70, "Зарина":70, "Камила":70, "Надира":70, "Анастасия":70, "Сабрина":70, "Оксана":70, "Ажар":70};
+const MICRO_INT_PLAN_BY_MANAGER_V3 = {"Нина":0, "Сая":0, "Анеля":0, "Мадина":100, "Марина":100, "Зарина":100, "Камила":100, "Надира":100, "Анастасия":100, "Сабрина":100, "Оксана":100, "Ажар":100};
+const MICRO_PLAN_NEW_MANAGER_V3 = 70, MICRO_INT_PLAN_NEW_MANAGER_V3 = 100;
+function microPlanTableFor(month){ return month && month >= MICRO_PLAN_V3_FROM_MONTH ? MICRO_PLAN_BY_MANAGER_V3 : MICRO_PLAN_BY_MANAGER; }
+// План интеграций менеджера (только с ноября 2026): своя цифра на месяц (клик по ячейке) или по умолчанию.
+function microIntPlanFor(month, responsible){
+  if(!month || month < MICRO_PLAN_V3_FROM_MONTH) return null;
+  const name = calNormName(responsible);
+  if(!name || name==="Не указан") return null;
+  const own = planValue(month, "manager", name, "integrations");
+  if(own) return own;
+  return Object.prototype.hasOwnProperty.call(MICRO_INT_PLAN_BY_MANAGER_V3, name) ? MICRO_INT_PLAN_BY_MANAGER_V3[name] : MICRO_INT_PLAN_NEW_MANAGER_V3;
+}
+function microIntPlanDefault(month, responsible){
+  if(!month || month < MICRO_PLAN_V3_FROM_MONTH) return null;
+  const name = calNormName(responsible);
+  return Object.prototype.hasOwnProperty.call(MICRO_INT_PLAN_BY_MANAGER_V3, name) ? MICRO_INT_PLAN_BY_MANAGER_V3[name] : MICRO_INT_PLAN_NEW_MANAGER_V3;
+}
 const MICRO_TEAM_PLAN_BLOGGERS = 426;
 const MICRO_TEAM_PLAN_INTEGRATIONS = 790;
 function microDefaultPlanFor(month, responsible){
@@ -2540,7 +2562,8 @@ function microDefaultPlanFor(month, responsible){
   if(month >= MICRO_PLAN_V2_FROM_MONTH){
     const name = String(responsible||"").trim();
     if(!name || name==="Не указан") return null; // интеграции без ответственного — без личного плана
-    return Object.prototype.hasOwnProperty.call(MICRO_PLAN_BY_MANAGER, name) ? MICRO_PLAN_BY_MANAGER[name] : MICRO_PLAN_NEW_MANAGER;
+    const tbl = microPlanTableFor(month), dflt = month >= MICRO_PLAN_V3_FROM_MONTH ? MICRO_PLAN_NEW_MANAGER_V3 : MICRO_PLAN_NEW_MANAGER;
+    return Object.prototype.hasOwnProperty.call(tbl, name) ? tbl[name] : dflt;
   }
   return month >= MICRO_PLAN_FROM_MONTH ? MICRO_PLAN_PER_RESPONSIBLE : null;
 }
@@ -2583,7 +2606,7 @@ function microResponsibleSummary(month){
   const hasPlan = microMonthHasPlan(month);
   const map = {};
   deals.forEach(d=>{
-    const name = d.responsible || "Не указан";
+    const name = calNormName(d.responsible) || "Не указан"; // «Анастасия » и «Aнастасия» — одна строка
     if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), forProduct:new Set(), problem:new Set(), dealsCount:0, inProgress:0, published:0, totalReach:0, reachNoViral:0, viralCount:0};
     const a = map[name];
     if(isMicroForProduct(d)) a.forProduct.add(microBloggerKey(d.blogerName));
@@ -2607,7 +2630,7 @@ function microResponsibleSummary(month){
     // С октября 2026 нулевые строки — только у менеджеров из текущего списка плана
     // (MICRO_PLAN_BY_MANAGER): ушедшие (Алтынай, Эльмира) не висят пустыми строками. Любой
     // менеджер, у которого в месяце есть интеграции, всё равно показывается (новый — с планом 40).
-    const zeroRowNames = (month && month >= MICRO_PLAN_V2_FROM_MONTH) ? Object.keys(MICRO_PLAN_BY_MANAGER) : microKnownResponsibles();
+    const zeroRowNames = (month && month >= MICRO_PLAN_V2_FROM_MONTH) ? Object.keys(microPlanTableFor(month)) : microKnownResponsibles();
     zeroRowNames.forEach(name=>{
       if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), forProduct:new Set(), problem:new Set(), dealsCount:0, inProgress:0, published:0, totalReach:0, reachNoViral:0, viralCount:0};
     });
@@ -2632,6 +2655,7 @@ function microResponsibleSummary(month){
       viralCount: a.viralCount,
       // План/остаток/процент выполнения — null, если на этот месяц плана нет.
       plan: hasPlan ? microPlanPerResponsible(month, a.responsible) : null,
+      intPlan: microIntPlanFor(month, a.responsible),
       planLeft: !hasPlan || !microPlanPerResponsible(month, a.responsible) ? null : Math.max(0, microPlanPerResponsible(month, a.responsible) - a.bloggers.size),
       planPct: !hasPlan || !microPlanPerResponsible(month, a.responsible) ? null : Math.round(a.bloggers.size / microPlanPerResponsible(month, a.responsible) * 100),
       cityRows: toRows(byCity, "city"),
@@ -2704,28 +2728,37 @@ function microResponsibleTotalUniqueBloggers(month){
 // руководителю группы, по клику раскрываются её менеджеры. Руководитель сама тоже ведёт блогеров —
 // её личная строка показывается внутри группы первой. Менеджеры не из списка (новые, «Не указан»,
 // ушедшие в прошлых месяцах) остаются отдельными строками, как раньше.
+// С ноября 2026 Анеля — отдельный тимлид, у неё Ажар (06.11.2026). Октябрь и раньше — прежние группы.
 const MICRO_RESPONSIBLE_GROUPS = [
+  {lead:"Нина",      members:["Мадина","Марина","Зарина","Камила"]},
+  {lead:"Сая",       members:["Надира","Анастасия","Сабрина","Оксана"]},
+  {lead:"Анеля",     members:["Ажар"]},
+];
+const MICRO_RESPONSIBLE_GROUPS_OCT = [
   {lead:"Нина",      members:["Мадина","Марина","Зарина","Камила"]},
   {lead:"Сая",       members:["Надира","Анеля","Анастасия","Сабрина","Оксана"]},
 ];
+function microGroupsFor(month){ return month && month < MICRO_PLAN_V3_FROM_MONTH ? MICRO_RESPONSIBLE_GROUPS_OCT : MICRO_RESPONSIBLE_GROUPS; }
 // Общий подсчёт по группе: уникальные блогеры считаются по всей группе (один блогер у двух
 // менеджеров группы — один раз), план — сумма личных планов участниц, остальное — суммы.
 function microResponsibleGroupRows(month, rows){
   const byName = new Map(rows.map(r=>[r.responsible, r]));
   const used = new Set();
   const groups = [];
-  MICRO_RESPONSIBLE_GROUPS.forEach(g=>{
+  microGroupsFor(month).forEach(g=>{
     const names = [g.lead, ...g.members];
     const memberRows = names.map(n=>byName.get(n)).filter(Boolean);
     if(!memberRows.length) return;
     memberRows.forEach(r=>used.add(r.responsible));
-    let deals = DataManager.state.microInfluencerDeals.filter(d=> names.includes((d.responsible||"").trim()));
+    let deals = DataManager.state.microInfluencerDeals.filter(d=> names.includes(calNormName(d.responsible)));
     if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
     const unique = new Set(deals.map(d=>microBloggerKey(d.blogerName))).size;
     const forProductCount = microForProductBloggers(deals);
     const problemCount = microProblemBloggers(deals);
     const plans = memberRows.map(r=>r.plan).filter(v=>v);
     const plan = plans.length ? plans.reduce((a,b)=>a+b,0) : null;
+    const intPlans = memberRows.map(r=>r.intPlan).filter(v=>v);
+    const intPlan = intPlans.length ? intPlans.reduce((a,b)=>a+b,0) : null;
     groups.push({
       lead: g.lead, memberRows,
       uniqueBloggerCount: unique,
@@ -2737,6 +2770,7 @@ function microResponsibleGroupRows(month, rows){
       inProgress: memberRows.reduce((a,r)=>a+r.inProgress,0),
       published: memberRows.reduce((a,r)=>a+r.published,0),
       dealsCount: memberRows.reduce((a,r)=>a+r.dealsCount,0),
+      intPlan,
       totalReach: memberRows.reduce((a,r)=>a+r.totalReach,0),
       reachNoViral: memberRows.reduce((a,r)=>a+r.reachNoViral,0),
       viralCount: memberRows.reduce((a,r)=>a+r.viralCount,0),
@@ -2767,7 +2801,9 @@ function tplMicroResponsibleSummary(){
   // Под числом блогеров — сколько из них проблемных (не решённые: Открыта / В работе / Отказ).
   const problemNote = n => n ? `<div style="font-size:10.5px;font-weight:600;color:var(--bad);white-space:nowrap">⚠ проблемных: ${n}</div>` : "";
   const forProductNote = n => `<div style="font-size:10.5px;font-weight:400;color:var(--ink-mute);white-space:nowrap">из них за товар: ${n||0}</div>`;
-  const cols = plan ? 10 : 7; // всего колонок в таблице — нужно для colspan пустой строки
+  const intCols = !!(month && month >= MICRO_PLAN_V3_FROM_MONTH); // план интеграций по менеджерам — с ноября 2026
+  const cols = (plan ? 10 : 7) + (intCols ? 2 : 0); // всего колонок в таблице — нужно для colspan пустой строки
+  const intPct = (fact, p) => p ? Math.round(fact / p * 100) : null;
   return `
     <div class="panel">
       <div class="panel-title">
@@ -2786,11 +2822,11 @@ function tplMicroResponsibleSummary(){
              личные планы по блогерам — в колонке «План» (новому менеджеру — ${MICRO_PLAN_NEW_MANAGER}).`
           : `План с ${escapeHtml(monthLabel(MICRO_PLAN_FROM_MONTH))}: <b>${MICRO_PLAN_PER_RESPONSIBLE} уникальных блогеров на каждого менеджера в месяц</b>.`}
         Блогер считается один раз, сколько бы интеграций с ним ни было. Менеджеры без интеграций за месяц тоже показаны — с нулём.
-        Сверху — общий подсчёт по группам (Нина, Сая); нажмите ▸, чтобы увидеть менеджеров группы.
+        Сверху — общий подсчёт по группам (${microGroupsFor(month).map(g=>escapeHtml(g.lead)).join(", ")}); нажмите ▸, чтобы увидеть менеджеров группы.${intCols ? " План интеграций — у каждого менеджера свой (по умолчанию 100), кликните по ячейке, чтобы поменять." : ""}
       </div>` : ""}
       <div class="table-wrap"><table>
         <thead><tr>
-          <th style="width:28px"></th><th>Ответственный</th><th>Блогеров</th>${plan?`<th>План</th><th>Осталось</th><th>Выполнение</th>`:""}<th>В работе (интеграций)</th><th>Опубликовано (интеграций)</th><th>Всего интеграций</th><th>Охваты</th>
+          <th style="width:28px"></th><th>Ответственный</th><th>Блогеров</th>${plan?`<th>План</th><th>Осталось</th><th>Выполнение</th>`:""}<th>В работе (интеграций)</th><th>Опубликовано (интеграций)</th><th>Всего интеграций</th>${intCols?`<th>План интеграций</th><th>Выполнение (интеграции)</th>`:""}<th>Охваты</th>
         </tr></thead>
         <tbody>
           ${(()=>{
@@ -2815,6 +2851,7 @@ function tplMicroResponsibleSummary(){
               <td>${r.inProgress}</td>
               <td>${r.published}</td>
               <td>${r.dealsCount}</td>
+              ${intCols ? `${planCell(month,"manager",r.responsible,"integrations",{auto:microIntPlanDefault(month, r.responsible)})}${progressCell(intPct(r.dealsCount, r.intPlan))}` : ""}
               <td>${fmtNum(r.totalReach)}${noViralNote(r.reachNoViral, r.viralCount)}</td>
             </tr>${expanded ? `<tr${o.indent?' style="background:var(--canvas)"':''}>
               <td></td>
@@ -2838,6 +2875,7 @@ function tplMicroResponsibleSummary(){
                 <td>${g.inProgress}</td>
                 <td>${g.published}</td>
                 <td>${g.dealsCount}</td>
+                ${intCols ? `<td>${g.intPlan==null?"—":fmtNum(g.intPlan)}</td>${progressCell(intPct(g.dealsCount, g.intPlan))}` : ""}
                 <td>${fmtNum(g.totalReach)}${noViralNote(g.reachNoViral, g.viralCount)}</td>
               </tr>${open ? g.memberRows.map(r=> personRow(r, {indent:true, label: r.responsible===g.lead ? r.responsible+" (лично)" : r.responsible})).join("") : ""}`;
             }).join("");
@@ -2872,6 +2910,7 @@ function tplMicroResponsibleSummary(){
               const pct = Math.round(totalDeals/team.integrations*100);
               return `${totalDeals} <span style="font-weight:400;color:var(--ink-mute)">из</span> ${planCellInlineValue(month,"team","micro","integrations",MICRO_TEAM_PLAN_INTEGRATIONS)} <span style="font-weight:600;color:${pct>=100?'var(--ok)':(pct>=60?'var(--warn)':'var(--bad)')}">${pct}%</span>`;
             })()}</td>
+            ${intCols ? (()=>{ const p = rows.reduce((s,r)=>s+(r.intPlan||0),0), f = rows.reduce((s,r)=>s+r.dealsCount,0); return `<td>${p?fmtNum(p):"—"}</td>${progressCell(intPct(f, p))}`; })() : ""}
             <td>${fmtNum(rows.reduce((s,r)=>s+r.totalReach,0))}${noViralNote(rows.reduce((s,r)=>s+r.reachNoViral,0), rows.reduce((s,r)=>s+r.viralCount,0))}</td>
           </tr>` : ""}
         </tbody>
@@ -8985,6 +9024,35 @@ async function runSelfTests(){
     } finally {
       DataManager.state.microInfluencerDeals = savedMicro; UI.microResponsibleMonth = savedM;
     }
+  });
+  TestSuite.test("Сводка за ноябрь 2026: группы Нина / Сая / Анеля (Ажар), Анастасия одной строкой, без «Менеджер 2», план 70 блогеров и 100 интеграций", ()=>{
+    const savedMicro = DataManager.state.microInfluencerDeals, savedPlans = DataManager.state.plans, savedM = UI.microResponsibleMonth;
+    try{
+      DataManager.state.plans = [];
+      DataManager.state.microInfluencerDeals = [
+        {id:77001, blogerName:"a1", responsible:"Анастасия", plannedDate:"2026-11-02"},
+        {id:77002, blogerName:"a2", responsible:"Анастасия ", plannedDate:"2026-11-03"},
+        {id:77003, blogerName:"a3", responsible:"Aнастасия", plannedDate:"2026-11-04"},
+        {id:77004, blogerName:"z1", responsible:"Ажар", plannedDate:"2026-11-04"},
+      ];
+      const rows = microResponsibleSummary("2026-11");
+      const an = rows.filter(r=>r.responsible.includes("настасия"));
+      if(an.length!==1 || an[0].uniqueBloggerCount!==3) throw new Error("Анастасия должна быть одной строкой с 3 блогерами: "+an.map(r=>JSON.stringify(r.responsible)+":"+r.uniqueBloggerCount));
+      if(rows.some(r=>r.responsible==="Менеджер 2")) throw new Error("«Менеджер 2» не должен показываться");
+      if(an[0].plan!==70 || an[0].intPlan!==100) throw new Error("план Анастасии 70/100: "+an[0].plan+"/"+an[0].intPlan);
+      const nina = rows.find(r=>r.responsible==="Нина"), anel = rows.find(r=>r.responsible==="Анеля");
+      if(nina.plan || nina.intPlan) throw new Error("у Нины личного плана нет");
+      if(anel.plan!==21) throw new Error("у Анели 21 блогер: "+anel.plan);
+      const {groups, ungrouped} = microResponsibleGroupRows("2026-11", rows);
+      if(groups.map(g=>g.lead).join(",")!=="Нина,Сая,Анеля") throw new Error("группы: "+groups.map(g=>g.lead));
+      const ag = groups.find(g=>g.lead==="Анеля");
+      if(ag.memberRows.map(r=>r.responsible).join(",")!=="Анеля,Ажар" || ag.plan!==21+70) throw new Error("группа Анели: "+ag.memberRows.map(r=>r.responsible)+" план "+ag.plan);
+      if(groups.find(g=>g.lead==="Сая").memberRows.some(r=>r.responsible==="Анеля")) throw new Error("Анеля больше не в группе Саи");
+      if(ungrouped.length) throw new Error("вне групп никого: "+ungrouped.map(r=>r.responsible));
+      UI.microResponsibleMonth = "2026-11";
+      const html = tplMicroResponsibleSummary();
+      if(!html.includes("План интеграций")) throw new Error("нет колонки плана интеграций");
+    } finally { DataManager.state.microInfluencerDeals = savedMicro; DataManager.state.plans = savedPlans; UI.microResponsibleMonth = savedM; }
   });
   TestSuite.test("Сводка по ответственным: группы Нина (Мадина, Марина, Зарина, Камила), Сая (Надира, Анеля, Анастасия, Сабрина, Оксана); Менеджер 2 — отдельно", ()=>{
     const savedMicro = DataManager.state.microInfluencerDeals, savedPlans = DataManager.state.plans, savedM = UI.microResponsibleMonth;
