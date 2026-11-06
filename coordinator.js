@@ -108,7 +108,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   // Тимлиды (как в Barter Box: группы менеджеров). Чужой/неизвестный менеджер — к COORD_TEAMLEAD (по умолчанию Нина).
   const TEAM_GROUPS = [
     { lead: "Нина", members: ["Мадина", "Марина", "Зарина", "Камила"] },
-    { lead: "Сая", members: ["Надира", "Анеля", "Анастасия", "Сабрина", "Оксана"] },
+    { lead: "Сая", members: ["Надира", "Анастасия", "Сабрина", "Оксана"] },
+    { lead: "Анеля", members: ["Ажар"] }, // с ноября 2026
   ];
   const leadOf = (resp) => {
     const k = personKey(resp);
