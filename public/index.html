@@ -6744,7 +6744,7 @@ function tplMicroCalendar(){
         Дата ячейки — плановая дата публикации, а если её ещё нет — фактическая дата выкладки.
         Клик по «+» на дне добавляет интеграцию сразу с этой плановой датой; клик по карточке — открывает её на редактирование;
         ✕ на карточке снимает интеграцию с плана (дата очищается, сама запись не удаляется).
-        ${source==="micro" ? `<br>Значки: ⏳ ждём видео (пунктир — ещё не точно) · 📥 прислали, надо проверить · 👀 у тимлида на согласовании · ✏️ правки · 🔁 пересъём · ✅ одобрено — точно выйдет · 🎬 вышло. Видео на согласование ждём за рабочий день до публикации; в 10:00 неодобренное на сегодня переезжает на следующий рабочий день — в «сегодня» остаётся только то, что реально выйдет.` : ""}
+        ${source==="micro" ? `<br>Значки: ⏳ ждём видео (пунктир — ещё не точно) · 📥 прислали, надо проверить · 👀 у тимлида на согласовании · ✏️ правки · 🔁 пересъём · ✅ одобрено — точно выйдет · 🎬 вышло. Видео на согласование ждём за рабочий день до публикации. Дата выхода сама не меняется — переносит только менеджер. В 10:00 фиксируется план дня (✅ на сегодня); согласованное позже помечается «сверх плана».` : ""}
         ${!responsibles.length ? `<br><b>Ответственный пока никому не проставлен</b> в этой базе — заполните поле «Ответственный» в карточке интеграции, и здесь появится выбор менеджера.`
           : (withoutResp ? `<br>У ${withoutResp} интеграций ответственный не указан — они видны только при «Все менеджеры».` : "")}
       </div>
@@ -6761,7 +6761,10 @@ function tplMicroCalendar(){
           const countHtml = !items.length ? "" : source==="micro"
             ? ` <span class="planner-day-count" title="Видео на этот день${resp?` у ${escapeHtml(resp)}`:""}: ${items.length}. ✅ одобрено или вышло — ${sure}, ⏳ ещё не готово — ${items.length-sure}" style="font-size:10.5px;font-weight:700;color:#fff;background:${MICRO_BRAND};border-radius:8px;padding:0 6px;margin-left:4px">✅ ${sure}${items.length-sure ? ` · ⏳ ${items.length-sure}` : ""}</span>`
             : ` <span class="planner-day-count" title="Видео на этот день${resp?` у ${escapeHtml(resp)}`:""}: ${items.length}, из них уже вышло ${items.filter(e=>e.done).length}" style="font-size:10.5px;font-weight:700;color:#fff;background:${INFL_BRAND};border-radius:8px;padding:0 6px;margin-left:4px">${items.length} видео</span>`;
-          const planHtml = dp ? `<div class="planner-dayplan" style="font-size:10.5px;color:var(--ink-soft);margin:-2px 0 2px" title="План дня зафиксирован утром: только одобренные видео">план дня <b>${(dp.ids||[]).length}</b> · вышло <b>${items.filter(e=>e.stage==="published").length}</b></div>` : "";
+          // Снимок плана в 10:00 (неизменяемый) + текущий план (согласовано на сейчас) + факт. Снимок — по всем командам,
+          // при фильтре по менеджеру считаем только его строки.
+          const planHtml = dp ? (()=>{ const ids = new Set(dp.ids||[]); const at10 = items.filter(e=>ids.has(e.id)).length;
+            return `<div class="planner-dayplan" style="font-size:10.5px;color:var(--ink-soft);margin:-2px 0 2px" title="План на 10:00 — согласованные видео на этот день в момент снимка; не меняется. Сейчас — согласовано или вышло на данный момент.">в 10:00: <b>${at10}</b> · сейчас: <b>${sure}</b> · вышло: <b>${items.filter(e=>e.stage==="published").length}</b></div>`; })() : "";
           return `<div class="planner-day ${inMonth?'':'out'} ${isToday?'today':''}">
             <div class="planner-day-head">
               <span>${dayNum}${countHtml}</span>
@@ -6775,7 +6778,7 @@ function tplMicroCalendar(){
                 : `<span class="dot"></span>${escapeHtml(e.name)}`;
               const S = e.stage ? VIDEO_STAGE[e.stage] : null, r = e.raw || {};
               const tags = !S ? "" : [
-                (e.stage==="wait"||e.stage==="revise"||e.stage==="reshoot") && Number(r.vmissed) >= 1 ? `<span class="vtag warn">⚠️ видео не прислали в срок</span>` : "",
+                ["wait","received","lead","revise","reshoot"].includes(e.stage) && dateStr <= today ? `<span class="vtag warn">⚠️ ещё не согласовано</span>` : "",
                 r.vmoved && r.vmoved.to === dateStr && r.vmoved.from ? `<span class="vtag info">перенесено с ${ddmmStr(r.vmoved.from)}</span>` : "",
                 dp && (e.stage==="approved"||e.stage==="published") && !(dp.ids||[]).includes(e.id) ? `<span class="vtag plus">сверх плана</span>` : "",
               ].join(" ");
@@ -9281,15 +9284,15 @@ async function runSelfTests(){
         {id:79402, blogerName:"pub1", responsible:"Нина", plannedDate:"2026-11-18", publishDate:"2026-11-18", videoStatus:"опубликовано"},
         {id:79403, blogerName:"late", responsible:"Нина", plannedDate:"2026-11-18", vstage:"approved"},
         {id:79404, blogerName:"rcv", responsible:"Нина", plannedDate:"2026-11-18", vstage:"received"},
-        {id:79405, blogerName:"mv", responsible:"Нина", plannedDate:"2026-11-18", vmissed:1, vmoved:{from:"2026-11-17", to:"2026-11-18", why:"видео не готово к утру"}},
+        {id:79405, blogerName:"mv", responsible:"Нина", plannedDate:"2026-11-18", vmoved:{from:"2026-11-17", to:"2026-11-18", why:"блогер попросил перенос"}},
       ];
       DataManager.state.dayPlan = {"2026-11-18": {ids:[79401, 79402]}};
       UI.calendarMonth = "2026-11"; UI.calendarSource = "micro"; UI.calendarHiddenBloggers = new Set(); UI.calendarResponsible = "";
       const html = tplMicroCalendar();
       if(!html.includes(">✅ 3 · ⏳ 2<")) throw new Error("шапка дня: "+(html.match(/✅ \d+[^<]*/g)||[]).join(","));
-      if(!html.includes("план дня <b>2</b> · вышло <b>1</b>")) throw new Error("нет строки плана дня");
-      if((html.match(/сверх плана/g)||[]).length !== 1) throw new Error("«сверх плана» должно быть ровно у одного (late)");
-      if(!html.includes("перенесено с 17.11") || !html.includes("видео не прислали в срок")) throw new Error("нет пометок переноса/срока");
+      if(!html.includes("в 10:00: <b>2</b> · сейчас: <b>3</b> · вышло: <b>1</b>")) throw new Error("нет строки плана дня");
+      if((html.match(/vtag plus">сверх плана/g)||[]).length !== 1) throw new Error("«сверх плана» должно быть ровно у одного (late)");
+      if(!html.includes("перенесено с 17.11")) throw new Error("нет пометки переноса");
       if(!html.includes('data-action="approve"')) throw new Error("у «пришло» должны быть кнопки ✅ ✏️ 🔁");
       if(!html.includes("st-received") || !html.includes("st-wait") || !html.includes("st-approved")) throw new Error("нет классов этапов");
       if(!html.includes("🎬 вышло <b>1</b> · ✅ одобрено <b>2</b> · ⏳ ждём <b>2</b>")) throw new Error("месяц: нет разбивки");
