@@ -103,6 +103,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   const nextWorkday = (ymd) => { let x = addDays(ymd, 1); while (!isWd(x)) x = addDays(x, 1); return x; };
   const prevWorkday = (ymd) => { let x = addDays(ymd, -1); while (!isWd(x)) x = addDays(x, -1); return x; };
   const addWorkdays = (ymd, n) => { let x = ymd; for (let i = 0; i < n; i++) x = nextWorkday(x); return x; };
+  // Сколько рабочих дней прошло после срока (срок не считается): срок пн, сегодня ср → 2.
+  const workdaysAfter = (due, today) => { if (!due || today <= due) return 0; let n = 0, x = due; while (x < today) { x = addDays(x, 1); if (isWd(x)) n++; } return n; };
   const isDone = (d) => isPublished(d) || !!d.publishDate;
   const stageOf = (d) => (isDone(d) ? "published" : ["received", "lead", "revise", "reshoot", "approved"].includes(d.vstage) ? d.vstage : "wait");
   // Тимлиды (как в Barter Box: группы менеджеров). Чужой/неизвестный менеджер — к COORD_TEAMLEAD (по умолчанию Нина).
@@ -163,11 +165,11 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         next = { text: today < pd ? `одобрено, публикация ${ddmm(pd)}; вечером в день публикации попросим ссылку` : today === pd ? "одобрено, сегодня публикация; в 18:00 попросим ссылку, если её не будет" : "одобрено, но ссылки нет — менеджеру" };
       } else {
         // wait / revise / reshoot — ждём видео на согласование
-        const due = dueOf(d), missed = Number(d.vmissed) || 0, ep = d.vepoch || d.plannedDateOrig || pd;
+        const due = dueOf(d), missed = workdaysAfter(due, today), ep = `${d.vepoch || ""}|${pd}`; // новая дата выхода (менеджер поменял) — новый цикл напоминаний
         if (missed >= 3) { next = { text: "молчит 3 дня — напоминания остановлены, нужен менеджер" }; mgrOnce(d, `${d.id}:mgr-silent:${ep}`, "overdue", `Видео не прислали уже ${missed} раб. дня после срока — блогеру больше не пишем, нужен менеджер`); }
         else if (!pausedTill) {
           let kind = null, key = null, ds = ddmm(due);
-          if (missed >= 1) { kind = "overdue"; key = `${d.id}:overdue:${ep}`; ds = ddmm(d.vdueMissed || due); }
+          if (missed >= 1) { kind = "overdue"; key = `${d.id}:overdue:${ep}`; ds = ddmm(due); }
           else if (today === due) { kind = "due_today"; key = `${d.id}:due_today:${due}`; }
           else if (today === prevWorkday(due) || (today < due && daysBetween(today, due) === 1)) { kind = "due_soon"; key = `${d.id}:due_soon:${due}`; ds = whenWord(today, due); }
           if (kind && !c.keys[key]) queue(d, kind, key, ds);
@@ -198,35 +200,20 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     d.vmoved = { from, to, why, at: new Date().toISOString() };
     d.vmoves = (Number(d.vmoves) || 0) + 1;
   }
+  // 11.11.2026 (ТЗ MIXIT §12): дату НЕ двигаем. Плановая дата = согласованная с блогером; поменять её может только
+  // менеджер (или «Принять дату» по просьбе блогера). В DAYPLAN_HOUR (10:00 Алматы) фиксируем НЕИЗМЕНЯЕМЫЙ снимок
+  // плана дня по всем командам: видео, согласованные (✅) или уже вышедшие, с датой на сегодня. Согласованное позже
+  // попадает в текущий план («сверх плана»), снимок не переписывается. DAYPLAN_SCOPE=off — снимок не делаем.
   function runDayPlan(force) {
-    const sc = String(process.env.DAYPLAN_SCOPE || "pilot").toLowerCase();
+    const sc = String(process.env.DAYPLAN_SCOPE || "all").toLowerCase();
     if (sc === "off") return false;
     const st = getState(), today = almatyDate();
     const hourFix = Number(process.env.DAYPLAN_HOUR) || 10;
     st.dayPlan = st.dayPlan && typeof st.dayPlan === "object" ? st.dayPlan : {};
-    if (!force && (st.dayPlan[today] || almatyHour() < hourFix)) return false;
-    if (!st.dayPlanStart) st.dayPlanStart = today;
-    const start = st.dayPlanStart;
-    let moved = 0;
-    for (const d of st.microInfluencerDeals || []) {
-      if (!dayplanScope(d)) continue;
-      const pd = String(d.plannedDate || "").slice(0, 10);
-      if (!pd || pd > today || pd < start) continue;
-      const stage = stageOf(d);
-      if (stage === "published" || stage === "approved") continue;
-      const to = nextWorkday(today);
-      if (stage === "wait" || stage === "revise" || stage === "reshoot") {
-        const due = dueOf(d);
-        if (due && due <= today) { if (!d.vmissed) d.vdueMissed = due; d.vmissed = (Number(d.vmissed) || 0) + 1; }
-      }
-      moveDeal(d, to, stage === "received" ? "видео не проверено к утру" : stage === "lead" ? "видео не согласовано к утру" : "видео не готово к утру");
-      if (d.vstage === "revise" || d.vstage === "reshoot") d.vdue = today; // правки так и не пришли — ждём сегодня
-      log(d.id, "sys", `план дня: не готово к утру — перенесено ${ddmm(pd)} → ${ddmm(to)}`);
-      if (stage === "received") event(d, "media", `Видео не проверено к утру — перенесено на ${ddmm(to)}. Одобрите, чтобы вернуть в план`);
-      moved++;
-    }
-    const ids = (st.microInfluencerDeals || []).filter((d) => dayplanScope(d) && String(d.plannedDate || "").slice(0, 10) === today && ["approved", "published"].includes(stageOf(d))).map((d) => d.id);
-    st.dayPlan[today] = { at: new Date().toISOString(), ids, moved, scope: sc };
+    if (st.dayPlan[today] && st.dayPlan[today].v === 2) return false; // снимок дня уже есть — не переписываем
+    if (!force && almatyHour() < hourFix) return false;
+    const ids = (st.microInfluencerDeals || []).filter((d) => String(d.plannedDate || "").slice(0, 10) === today && ["approved", "published"].includes(stageOf(d))).map((d) => d.id);
+    st.dayPlan[today] = { v: 2, at: new Date().toISOString(), ids };
     for (const day of Object.keys(st.dayPlan)) if (daysBetween(day, today) > 120) delete st.dayPlan[day];
     persist();
     return true;
@@ -767,7 +754,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     else if (stage === "received") return res.status(400).json({ error: "Видео уже пришло и ждёт проверки — блогеру напоминать не нужно" });
     else if (stage === "published") return res.status(400).json({ error: "Уже опубликовано" });
     else if (!due) return res.status(400).json({ error: "Нет плановой даты" });
-    else if ((Number(d.vmissed) || 0) >= 1 || today > due) { kind = "overdue"; ds = ddmm(d.vdueMissed || due); }
+    else if (today > due) { kind = "overdue"; ds = ddmm(due); }
     else if (today === due) { kind = "due_today"; ds = ddmm(due); }
     else { kind = "due_soon"; ds = whenWord(today, due); }
     const vals = [nameOf(d), d.product || "интеграции", ds];
@@ -888,20 +875,17 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       return res.json({ ok: true, stage: "lead", lead, plannedDate: d.plannedDate });
     }
     if (action === "approve") {
-      if (!pd || pd < today) moveDeal(d, today, "одобрено после плановой даты — публикация сегодня");
-      // Утром перенесли с сегодня (видео не было к 10:00), а днём прислали и одобрили — возвращаем на сегодня («сверх плана»).
-      else if (pd > today && d.vmoved && d.vmoved.from === today && /к утру/.test(d.vmoved.why || "")) moveDeal(d, today, "одобрено днём — вернули на сегодня");
+      // Дату не трогаем (ТЗ §12): одобрение ≠ перенос. Дату выхода меняет только менеджер.
       d.vstage = "approved"; d.vstageAt = now; d.vmissed = 0; d.vdueMissed = null;
-      const npd = String(d.plannedDate).slice(0, 10);
+      const npd = String(d.plannedDate || today).slice(0, 10);
       log(d.id, "sys", `менеджер одобрил видео, публикация ${ddmm(npd)}`);
       sent = await tellBlogger(d, "approved", [nameOf(d), d.product || "", npd === today ? "сегодня" : ddmm(npd)]);
     } else if (action === "revise" || action === "reshoot") {
       const days = Math.max(1, Math.min(10, Number(b.days) || (action === "revise" ? 1 : 2)));
       // Исправленное видео ждём через N рабочих дней от сегодня; публикацию двигаем, только если она раньше,
       // чем рабочий день после нового срока (видео пришло заранее — дата публикации остаётся).
+      // Дату выхода НЕ двигаем (ТЗ §9, §12) — только срок исправленного видео; перенос — решение менеджера.
       const due = addWorkdays(today, days);
-      const minPub = nextWorkday(due);
-      if (!pd || pd < minPub) moveDeal(d, minPub, action === "revise" ? "правки" : "пересъём");
       d.vstage = action; d.vstageAt = now; d.vepoch = now; d.vmissed = 0; d.vdueMissed = null;
       d.vdue = due; d.vcomment = comment || null; d.vrounds = (Number(d.vrounds) || 0) + 1;
       // Сами правки менеджер пишет блогеру в чате — бот их не отправляет. Если новый срок уже сегодня, не дёргаем блогера
