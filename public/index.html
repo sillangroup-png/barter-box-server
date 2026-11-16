@@ -351,7 +351,9 @@ const MICRO_PAYMENT_STATUSES = ["не оплачено","к оплате","оп�
 const MICRO_PRODUCT_STATUSES = ["товар заказан","товар доставлен"];
 const MICRO_VIDEO_STATUSES = ["не опубликовано","опубликовано"];
 // Язык видео (16.11.2026, по просьбе Нины) — менеджер отмечает вручную; пусто = не указан.
-const MICRO_VIDEO_LANGS = ["ru","kz","смешанный","под музыку"];
+// «смешанный» убран по решению Нины (это в основном kz): старое значение показываем как kz.
+const MICRO_VIDEO_LANGS = ["ru","kz","под музыку"];
+const microVideoLang = d=> (d && d.videoLang === "смешанный") ? "kz" : ((d && d.videoLang) || "");
 // Категория (специализация) блогера — не путать с productCategory (категорией товара):
 // нужна, чтобы подбирать блогеров под тип продукта/задачи (напр. визажиста под декор.косметику).
 // «За товар» — больше не категория, а тип сотрудничества (30.10.2026, см. MICRO_COOP_TYPES).
@@ -5246,7 +5248,7 @@ function tplMicroInfluencers(){
           ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
           ${sortableTh("Вклад в продажи (план/факт)","sales",mf.sort)}<th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th>${sortableTh("ROAS, ×","romi",mf.sort)}
         <th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (сумма оплаты + стоимость переданного товара). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th><th title="Вклад по заказам Kaspi: продажи товара сверх обычного уровня в дни выхода. Обычный уровень — среднее за дни до выхода при той же цене, без других блогеров этого товара (если цена была другой — дни после). Окно — с дня выхода, пока продажи не вернутся к обычным: у мелких до 7 дней, у крупных — только день выхода и следующий. Плюс шлейф: 50% подъёма продаж над уровнем до кампании (с поправкой на общий фон магазина — товары без блогеров; в дни скидок шлейфа нет), не попавшего в пики, делится по охвату (по корню: охват в 4 раза больше — доля в 2 раза больше) с затуханием (мелкие — до 7 дней, вдвое за 2 дня; крупные — только день выхода и следующий, сторис висят 24 ч). Скидка вычитается по прошлым сменам цены. Если в те же дни выходили другие блогеры этого товара — прирост делится по охвату (крупные и мелкие делят день, только если у меньшей стороны охват от 20% другой; иначе весь день — большей). Всплеска нет — 0. «—» — если обычный уровень определить не из чего. Ручной вклад менеджера главнее.">${UI.collapsedColGroups.has("infl-auto") ? `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">+ Авто</span>` : `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">− Авто (Kaspi)</span>`}</th>
-          <th>Статус товара</th><th>Статус видео</th><th title="На каком языке видео: ru / kz / смешанный / под музыку (без речи)">Язык видео</th><th>Плановая дата</th><th>Дата выкладки</th><th title="Формат (Reels + TikTok / Сторис / Reels + Сторис / Сторис + Reels + TikTok), ссылка на Reels; у сторис — охват и клики вручную (ссылки нет)">Ссылка / сторис</th><th></th>
+          <th>Статус товара</th><th>Статус видео</th><th title="На каком языке видео: ru / kz (в т.ч. смешанный рус+каз) / под музыку (без речи)">Язык видео</th><th>Плановая дата</th><th>Дата выкладки</th><th title="Формат (Reels + TikTok / Сторис / Reels + Сторис / Сторис + Reels + TikTok), ссылка на Reels; у сторис — охват и клики вручную (ссылки нет)">Ссылка / сторис</th><th></th>
         </tr></thead>
         <tbody>
           ${pageDeals.map((d,i)=>{
@@ -5295,7 +5297,7 @@ function tplMicroInfluencers(){
               <td>${UI.collapsedColGroups.has("infl-auto") ? `<span style="color:var(--ink-mute);cursor:default" title="Свёрнуто — нажмите «+ Авто» в заголовке колонки, чтобы показать">⋯</span>` : autoContributionCell(d)}</td>
               <td>${inlineEditSpan(escapeHtml(d.productStatus||"—"), d.id, 'productStatus', d.productStatus||'', 'select', MICRO_PRODUCT_STATUSES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.videoStatus||"—"), d.id, 'videoStatus', d.videoStatus||'', 'select', MICRO_VIDEO_STATUSES)}${d.videoStatus!=="опубликовано" && microDealPublished(d) ? `<br><span style="font-size:10.5px;color:var(--ok)" title="Сторис с охватом считается вышедшей, даже без ссылки">✓ сторис вышла</span>` : ""}</td>
-              <td>${inlineEditSpan(escapeHtml(d.videoLang||"—"), d.id, 'videoLang', d.videoLang||'', 'select', [""].concat(MICRO_VIDEO_LANGS))}</td>
+              <td>${inlineEditSpan(escapeHtml(microVideoLang(d)||"—"), d.id, 'videoLang', microVideoLang(d), 'select', [""].concat(MICRO_VIDEO_LANGS))}</td>
               <td>${inlineEditSpan(escapeHtml(d.plannedDate||"—"), d.id, 'plannedDate', d.plannedDate||'', 'date')}</td>
               <td>${inlineEditSpan(escapeHtml(d.publishDate||"—"), d.id, 'publishDate', d.publishDate||'', 'date')}</td>
               <td>${microLinkStoriesCell(d)}</td>
@@ -7074,7 +7076,7 @@ function modalMicroDeal(existing, prefill){
     </div>
     <div class="form-row">
       <div class="field"><label>Статус видео</label><select id="mm-video-status">${MICRO_VIDEO_STATUSES.map(st=>`<option ${st===d.videoStatus?'selected':''}>${st}</option>`).join("")}</select></div>
-      <div class="field"><label>Язык видео</label><select id="mm-video-lang"><option value="">— не указан —</option>${MICRO_VIDEO_LANGS.map(st=>`<option ${st===d.videoLang?'selected':''}>${st}</option>`).join("")}</select></div>
+      <div class="field"><label>Язык видео</label><select id="mm-video-lang"><option value="">— не указан —</option>${MICRO_VIDEO_LANGS.map(st=>`<option ${st===microVideoLang(d)?'selected':''}>${st}</option>`).join("")}</select></div>
     </div>
     <datalist id="product-suggestions">${knownProductNames().map(p=>`<option value="${escapeHtml(p)}">`).join("")}</datalist>
     <div class="login-hint">Если укажешь ШК — вклад в продажи и ROMI будут считаться по нему (надёжнее, чем по названию товара).</div>
