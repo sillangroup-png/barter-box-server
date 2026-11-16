@@ -1518,7 +1518,7 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
     conditions: b.conditions || "", paymentMethod: b.paymentMethod || "", iin: b.iin || "",
     city: b.city || "", address: b.address || "",
     product: b.product || "", barcode: b.barcode || "", productCategory: b.productCategory || "",
-    productStatus: b.productStatus || "", videoStatus: b.videoStatus || "",
+    productStatus: b.productStatus || "", videoStatus: b.videoStatus || "", videoLang: b.videoLang || "",
     reelsLink: normalizeLinkUrl(b.reelsLink || ""), factReachReels: b.factReachReels || 0,
     tiktokVideoLink: b.tiktokVideoLink || "", factReachTT: b.factReachTT || 0,
     contentFormat: b.contentFormat || "", factReachStories: b.factReachStories || 0, storiesClicks: b.storiesClicks || 0,
