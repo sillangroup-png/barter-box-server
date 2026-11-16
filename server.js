@@ -1613,6 +1613,8 @@ app.post("/api/micro-influencer-deals/import", requireAuth, (req,res)=>{
     // Проблемный блогер и сторис — только если колонки есть в файле (старые CSV их не стирают).
     const has = k => Object.prototype.hasOwnProperty.call(r, k);
     if(has("тз")) fields.tz = String(r["тз"]||"").trim().slice(0,120);
+    // Язык видео (16.11.2026): ru / kz / под музыку; «смешанный» и «каз» → kz, «рус» → ru, «без речи»/«музыка» → под музыку.
+    if(has("язык видео")){ const l = String(r["язык видео"]||"").trim().toLowerCase(); fields.videoLang = !l ? "" : /^(ru|рус)/.test(l) ? "ru" : /^(kz|каз|смеш)/.test(l) ? "kz" : /(музык|без речи)/.test(l) ? "под музыку" : ""; }
     if(has("тип сотрудничества")){ const ct = String(r["тип сотрудничества"]||"").trim().toLowerCase(); fields.coopType = ct.startsWith("за товар") || ct === "бартер" ? "За товар" : ct.startsWith("плат") ? "Платная интеграция" : /^доп/.test(ct) ? "Доп. видео" : ""; }
     // Старые файлы: «За товар»/«Бартер» в категории — это тип сотрудничества, а не категория.
     if(/^(за товар|бартер)$/i.test(String(fields.bloggerCategory||"").trim())){ fields.bloggerCategory = ""; if(!fields.coopType) fields.coopType = "За товар"; }
