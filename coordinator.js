@@ -24,6 +24,7 @@
 // Лимит: COORD_DAILY_CAP сообщений в день на всех (по умолчанию 30).
 const crypto = require("crypto");
 const { reviewVideo } = require("./video-review.js");
+const videoFlow = require("./video-flow.js");
 
 const H = 3600 * 1000;
 const WAZZUP = "https://api.wazzup24.com/v3";
@@ -294,6 +295,16 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (j.messageId) C().seen[`out:${j.messageId}`] = Date.now(); // чтобы статусы ошибок брать только по нашим сообщениям
     return j;
   }
+  const flowMedia=require('./flow-media').createMedia({});
+  flowMedia.mount(app,requireAuth);
+  const reviewTransport=require('./review-transport').createReviewTransport({getState,persist,send:wazzupSend,getChannel:chanInfo,resolveUrl:item=>{const v=(getState().microInfluencerDeals||[]).find(d=>d.id===item.dealId)?.flowVideoVersions?.find(v=>v.id===item.videoVersionId);return v?.mediaId?flowMedia.url(v.mediaId):item.url}});
+  const briefDelivery=require('./brief-delivery').createBriefDelivery({getState,persist,send:wazzupSend,getChannel:chanInfo});
+  briefDelivery.mount(app,requireAuth);
+  const logisticsDigests=require('./logistics-digests').createDigests({getState,persist,send:wazzupSend,getChannel:chanInfo});
+  const digestTimer=setInterval(()=>logisticsDigests.drain().catch(()=>{}),30000);digestTimer.unref();
+  const reviewTimer=setInterval(()=>reviewTransport.drain().catch(()=>{}),15000);reviewTimer.unref();
+  const crmRelay=require('./crm-comms-relay').createRelay({getState,persist});
+  const relayTimer=setInterval(()=>crmRelay.drain().catch(()=>{}),15000);relayTimer.unref();
   let sending = false;
   async function processQueue() {
     const k = cfg();
@@ -390,6 +401,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     // Адрес вебхука один на весь аккаунт Wazzup (24 номера Sillan, Masterok…): сюда приходят сообщения ВСЕХ клиентов.
     // Берём только наш канал (WAZZUP_CHANNEL_ID), входящие, от номеров из теста. Всё остальное — сразу мимо, ничего не сохраняем.
     if (!msg || !ourChannel || String(msg.channelId || "") !== ourChannel) return false;
+    if(videoFlow.enabled() && reviewTransport.incoming(msg,ourChannel))return true;
     if (msg.isEcho || String(msg.chatType || "whatsapp") !== "whatsapp") return false;
     const chatId = waNumber(msg.chatId);
     if (!chatId) return false;
@@ -403,6 +415,16 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     c.lastIn[chatId] = new Date().toISOString();
     const today = almatyDate();
     const active = cands.filter((d) => !isPublished(d)).sort((a, b) => Math.abs(daysBetween(today, a.plannedDate || today)) - Math.abs(daysBetween(today, b.plannedDate || today)));
+    if(videoFlow.enabled()){
+      const possible=active.length?active:cands;
+      const isVideo=String(msg.type)==='video'||(['document','file'].includes(String(msg.type))&&/\.(mp4|mov|webm)(?:$|[?#])/i.test(String(msg.fileName||msg.contentUri||'')));
+      if(possible.length>1){
+        videoFlow.queueAmbiguous(st,msg,possible);
+        for(const candidate of possible) event(candidate,'media_ambiguous','Сообщение требует выбора интеграции: автоматическая привязка остановлена',{messageId:id,review:false});
+        return true;
+      }
+      if(isVideo)videoFlow.recordVersion(possible[0],{messageId:id,url:String(msg.contentUri||''),source:'blogger'});
+    }
     const d = active[0] || cands[0];
     return processReply(d, String(msg.text || "").trim(), String(msg.type || "text"), msg.contentUri || "");
   }
@@ -416,7 +438,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (["video", "image", "document", "file"].includes(type)) {
       const u = url || (draft ? draft[1] : "");
       d.coordMedia = (Array.isArray(d.coordMedia) ? d.coordMedia : []).concat([{ at: new Date().toISOString(), type: draft ? "link" : type, url: u }]).slice(-20);
-      const isVideo = type === "video" || type === "document" || type === "file" || !!draft;
+      const isVideo = videoFlow.enabled() ? (type === "video" || /\.(mp4|mov|webm)(?:$|[?#])/i.test(u)) : (type === "video" || type === "document" || type === "file" || !!draft);
       if (isVideo && ["wait", "revise", "reshoot"].includes(stageOf(d))) {
         d.vstage = "received"; d.vreceivedAt = new Date().toISOString();
         log(d.id, "sys", "видео пришло — статус «📥 проверить»");
@@ -466,9 +488,11 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const sts = Array.isArray(b.statuses) ? b.statuses : [];
     if (!msgs.length && !sts.length) return;
     let changed = false;
+    if(crmRelay.enqueue(b)){changed=true;crmRelay.drain().catch(()=>{});}
     try {
       const our = k.apiKey ? (await chanInfo()).id : "";
       for (const m of msgs) if (handleIncoming(m, our)) changed = true;
+      if(briefDelivery.statuses(sts)) changed=true;
       for (const s of sts) if (s && s.status === "error" && C().seen[`out:${s.messageId}`]) { log(null, "sys", "Wazzup: ошибка доставки нашего напоминания"); changed = true; }
     } catch (e) { console.error("Wazzup webhook:", e.message); }
     if (changed) persist();
@@ -619,6 +643,37 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const k = cfg(), c = C();
     res.json({ mode: k.mode, transport: transport(), bot: C().botId || null, manager: k.manager, phones: k.phones, wazzup: !!k.apiKey, templates: { soon: !!k.tpl.soon, today: !!k.tpl.today, overdue: !!k.tpl.overdue },
       webhook: k.secret.length >= 16, queue: c.queue.filter((q) => q.status === "pending").length, log: c.log.slice(-60).reverse() });
+  });
+  app.post('/api/coord/pending-media/:messageId/attach',requireAuth,(req,res)=>{
+    if(!staff(req,res))return;
+    if(!videoFlow.enabled())return res.status(409).json({error:'Версионность выключена'});
+    const st=getState(),pending=(st.videoFlow?.pendingMedia||[]).find(x=>x.messageId===req.params.messageId);
+    if(!pending)return res.status(404).json({error:'Сообщение не найдено'});
+    const deal=(st.microInfluencerDeals||[]).find(x=>String(x.id)===String(req.body.dealId));
+    if(!deal||!pending.dealIds.includes(deal.id))return res.status(400).json({error:'Выберите одну из связанных интеграций'});
+    if(pending.status==='attached')return pending.dealId===deal.id?res.json({ok:true}):res.status(409).json({error:'Уже связано с другой интеграцией'});
+    const isVideo=pending.type==='video'||/\.(mp4|mov|webm)(?:$|[?#])/i.test(pending.url);
+    if(isVideo)videoFlow.recordVersion(deal,{messageId:pending.messageId,url:pending.url,source:'blogger'});
+    processReply(deal,pending.text,pending.type,pending.url);
+    pending.status='attached';pending.dealId=deal.id;persist();res.json({ok:true});
+  });
+  app.get('/api/automation/editing',requireAuth,(req,res)=>{
+    if(!staff(req,res))return;
+    const st=getState();res.json({tasks:(st.automationFlow?.drafts||[]).filter(x=>x.topic==='editing.requested').map(task=>{
+      const deal=(st.microInfluencerDeals||[]).find(d=>d.id===task.dealId),version=deal?.flowVideoVersions?.find(v=>v.id===task.videoVersionId);
+      let source=version?.url||'';if(version?.mediaId){try{source=flowMedia.url(version.mediaId)}catch{}}
+      return {...task,blogger:deal?.blogerName,source,versionNumber:version?.number};
+    })});
+  });
+  app.post('/api/automation/editing/:taskId/upload',requireAuth,(req,res,next)=>{if(!staff(req,res))return;if(process.env.FLOW_VIDEO_VERSIONS_ENABLED!=='1')return res.status(409).json({error:'Версионность выключена'});const task=getState().automationFlow?.drafts?.find(x=>x.id===req.params.taskId&&x.topic==='editing.requested');if(!task||task.status!=='pending')return res.status(409).json({error:'Задача уже обработана или не найдена'});try{flowMedia.url('00000000-0000-0000-0000-000000000000.mp4')}catch(e){return res.status(503).json({error:e.message})}next();},flowMedia.upload,(req,res)=>{
+    if(!req.file)return res.status(400).json({error:'Загрузите видео'});
+    const st=getState(),task=st.automationFlow?.drafts?.find(x=>x.id===req.params.taskId&&x.topic==='editing.requested');
+    if(!task||task.status!=='pending'){flowMedia.remove(req.file.filename);return res.status(409).json({error:'Задача уже обработана'});}
+    const deal=(st.microInfluencerDeals||[]).find(d=>d.id===task.dealId);if(!deal){flowMedia.remove(req.file.filename);return res.status(404).json({error:'Интеграция удалена'});}
+    const version=videoFlow.recordVersion(deal,{messageId:'editor:'+req.file.filename,url:flowMedia.url(req.file.filename),source:'editor'});version.mediaId=req.file.filename;
+    task.status='uploaded';task.uploadedVersionId=version.id;task.uploadedBy=actorName(req)||'монтажёр';deal.vstage='received';deal.flowEditingStatus='uploaded';
+    const ev=event(deal,'media','Монтажёр загрузил новую версию — автоматическая проверка',{review:true,url:version.url});
+    if(process.env.GEMINI_API_KEY)startReview(deal,version.url,ev?.id);else event(deal,'error','Видео сохранено; автоматическая проверка требует настроенного Gemini');persist();res.json({ok:true,versionId:version.id});
   });
   // Каналы и шаблоны WABA из Wazzup — чтобы взять коды для WAZZUP_TPL_* и WAZZUP_CHANNEL_ID без программиста.
   app.get("/api/coord/wazzup-info", requireAuth, async (req, res) => {
@@ -779,7 +834,13 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   let reviewing = false;
   function startReview(d, url, eventId, mode) {
     d.vreview = { status: "running", at: new Date().toISOString(), url };
-    reviewQueue.push({ dealId: d.id, url, eventId, mode: mode || "", tries: 0 });
+    let videoVersionId=null;
+    if(videoFlow.enabled()){
+      let version=(d.flowVideoVersions||[]).find(v=>v.id===d.flowCurrentVideoVersionId&&v.url===url);
+      if(!version)version=videoFlow.beginReview(d,url);
+      videoVersionId=version.id;
+    }
+    reviewQueue.push({ dealId: d.id, url, eventId, mode: mode || "", tries: 0, videoVersionId });
     runReviews();
   }
   async function runReviews() {
@@ -790,7 +851,14 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         const job = reviewQueue.shift();
         const find = () => (getState().microInfluencerDeals || []).find((x) => x.id === job.dealId);
         let res = null, err = null, retryable = false;
-        try { res = await reviewVideo(job.url); } catch (e) { err = e.message; retryable = !!e.retryable; }
+        try {
+          if(job.videoVersionId && process.env.FLOW_MEDIA_CACHE_ENABLED!=='0' && process.env.FLOW_PUBLIC_ORIGIN && process.env.FLOW_MEDIA_SECRET){
+            const version=find()?.flowVideoVersions?.find(v=>v.id===job.videoVersionId);
+            if(version&&!version.mediaId){try{const saved=await flowMedia.copyRemote(job.url);version.originalUri=version.url;version.mediaId=saved.id;version.url=saved.url;job.url=saved.url;persist();}catch(e){e.retryable=true;throw e;}}
+            else if(version?.mediaId)job.url=flowMedia.url(version.mediaId);
+          }
+          res = await reviewVideo(job.url);
+        } catch (e) { err = e.message; retryable = !!e.retryable; }
         const d = find();
         if (!d) continue;
         const ev = job.eventId ? C().events.find((e) => e.id === job.eventId) : null;
@@ -802,6 +870,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
           persist();
           continue;
         }
+        if(job.videoVersionId && (!retryable || job.tries>=6 || res)) videoFlow.finishReview(getState(),d,job.videoVersionId,res,err);
+        if(job.videoVersionId && d.flowCurrentVideoVersionId!==job.videoVersionId){persist();continue;}
         if (res) {
           d.vreview = { status: "done", at: new Date().toISOString(), url: job.url, text: String(res.text).slice(0, 12000), decision: res.decision, score: res.score, formal: res.formal, model: res.model };
           const head = `🤖 ИИ: ${res.decision || "разбор готов"}${res.score != null ? ` · ${res.score}/9` : ""}`;
@@ -816,6 +886,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
           else if (ev) { ev.text = `Блогер прислал видео на согласование. ИИ не смог разобрать (${String(err).slice(0, 150)}) — посмотрите сами`; ev.read = false; }
         }
         persist();
+        if(job.videoVersionId)reviewTransport.drain().catch(()=>{});
       }
     } finally { reviewing = false; }
   }

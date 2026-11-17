@@ -934,6 +934,13 @@ require("./mcp.js")(app, { getState: ()=> state, pgPool, readonlyScrub });
 // ИИ-координатор блогеров через WhatsApp/Wazzup (30.10.2026, тест на одном менеджере) — см. coordinator.js.
 // Выключен, пока в Render не задан COORD_MODE=dry (проверка без отправки) или on.
 require("./coordinator.js")(app, { getState: ()=> state, persist: ()=> persist(), requireAuth });
+// Mobile logistics pilot: disabled unless FLOW_LOGISTICS_ENABLED=1.
+const automationFlow = require("./automation-flow.js");
+automationFlow.mount(app, {getState:()=>state, persist:()=>persist(), requireAuth});
+require("./lifecycle").mount(app,{getState:()=>state,persist:()=>persist(),requireAuth});
+require("./blogery-client").createClient({getState:()=>state,persist:()=>persist()}).mount(app,requireAuth);
+require("./crm-link").mount(app,{getState:()=>state,persist:()=>persist(),requireAuth});
+require("./finance-client").createFinanceClient({getState:()=>state,persist:()=>persist()}).mount(app,requireAuth);
 
 // ---------- state & health ----------
 // /api/state отдаёт ВСЮ базу (заказы, телефоны, адреса, выручку, ROMI) — без
@@ -1060,6 +1067,7 @@ app.post("/api/orders", requireAuth, (req,res)=>{
     deliveredAt: null, bitrixSynced: false,
   };
   state.orders.push(order);
+  if(process.env.FLOW_LOGISTICS_ENABLED === "1") state.orders.forEach(o=>automationFlow.syncOrderLinks(state,o));
   persist();
   res.json(order);
 });
@@ -1067,6 +1075,7 @@ app.patch("/api/orders/:id", requireAuth, (req,res)=>{
   const o = state.orders.find(o=>o.id===+req.params.id);
   if(!o) return res.status(404).json({error:"not found"});
   Object.assign(o, req.body || {});
+  if(process.env.FLOW_LOGISTICS_ENABLED === "1") state.orders.forEach(o=>automationFlow.syncOrderLinks(state,o));
   persist();
   res.json(o);
 });
@@ -1104,6 +1113,7 @@ app.delete("/api/orders/:id", requireAuth, (req,res)=>{
   // без этого публикация (и её замеры охвата/продаж) остаётся "осиротевшей" в базе и
   // продолжает попадать в сводки на дашборде, хотя сам заказ уже удалён.
   state.publications = state.publications.filter(p=>p.orderId!==id);
+  if(process.env.FLOW_LOGISTICS_ENABLED === "1") state.orders.forEach(o=>automationFlow.syncOrderLinks(state,o));
   persist();
   res.json({ok:true});
 });
@@ -1118,6 +1128,7 @@ app.post("/api/orders/:id/deliver", requireAuth, uploadPhoto, (req,res)=>{
   o.driverComment = (req.body && req.body.comment) || "";
   o.deliveredAt = new Date().toLocaleString("ru-RU");
   o.bitrixSynced = false;
+  if(process.env.FLOW_LOGISTICS_ENABLED === "1") state.orders.forEach(o=>automationFlow.syncOrderLinks(state,o));
   persist();
   res.json(o);
 });
@@ -1130,6 +1141,7 @@ app.post("/api/orders/:id/problem", requireAuth, (req,res)=>{
   o.status = statusCode;
   o.driverComment = comment;
   o.deliveredAt = new Date().toLocaleString("ru-RU");
+  if(process.env.FLOW_LOGISTICS_ENABLED === "1") state.orders.forEach(o=>automationFlow.syncOrderLinks(state,o));
   persist();
   res.json(o);
 });
@@ -1138,6 +1150,7 @@ app.post("/api/orders/:id/sync-bitrix", requireAuth, (req,res)=>{
   const o = state.orders.find(o=>o.id===+req.params.id);
   if(!o) return res.status(404).json({error:"not found"});
   o.bitrixSynced = true;
+  if(process.env.FLOW_LOGISTICS_ENABLED === "1") state.orders.forEach(o=>automationFlow.syncOrderLinks(state,o));
   persist();
   res.json(o);
 });
@@ -1151,6 +1164,7 @@ app.post("/api/orders/bulk-assign", requireAuth, (req,res)=>{
   state.orders.forEach(o=>{
     if(idSet.has(o.id)){ o.driverCode = driverCode; o.status = "assigned"; o.assignedAt = now; count++; }
   });
+  if(process.env.FLOW_LOGISTICS_ENABLED === "1") state.orders.forEach(o=>automationFlow.syncOrderLinks(state,o));
   persist();
   res.json({ok:true, count});
 });
@@ -1171,6 +1185,7 @@ app.post("/api/orders/bulk-deliver", requireAuth, (req,res)=>{
     o.closedWithoutPhoto = true; o.bitrixSynced = false;
     count++;
   });
+  if(process.env.FLOW_LOGISTICS_ENABLED === "1") state.orders.forEach(o=>automationFlow.syncOrderLinks(state,o));
   persist();
   res.json({ok:true, count, skipped});
 });
@@ -1200,6 +1215,7 @@ app.post("/api/orders/bulk-status", requireAuth, (req,res)=>{
     if(status === "assigned" && !o.assignedAt) o.assignedAt = now;
     count++;
   });
+  if(process.env.FLOW_LOGISTICS_ENABLED === "1") state.orders.forEach(o=>automationFlow.syncOrderLinks(state,o));
   persist();
   res.json({ok:true, count});
 });
@@ -1212,6 +1228,7 @@ app.post("/api/orders/bulk-delete", requireAuth, (req,res)=>{
   // та же причина, что и в одиночном удалении: без каскада публикации выбранных заказов
   // остаются в базе и продолжают попадать в сводки на дашборде.
   state.publications = state.publications.filter(p=>!idSet.has(p.orderId));
+  if(process.env.FLOW_LOGISTICS_ENABLED === "1") state.orders.forEach(o=>automationFlow.syncOrderLinks(state,o));
   persist();
   res.json({ok:true, count: before - state.orders.length});
 });
@@ -1245,6 +1262,7 @@ app.post("/api/orders/import", requireAuth, (req,res)=>{
     });
     added++;
   });
+  if(process.env.FLOW_LOGISTICS_ENABLED === "1") state.orders.forEach(o=>automationFlow.syncOrderLinks(state,o));
   persist();
   res.json({added});
 });
@@ -1508,6 +1526,17 @@ app.post("/api/influencer-deals/import", requireAuth, (req,res)=>{
 app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
   const b = req.body || {};
   if(!b.blogerName) return res.status(400).json({error:"blogerName обязателен"});
+  let crmLinkedProfile = null;
+  if(b.crmBloggerId){
+    crmLinkedProfile=state.automationFlow?.bloggerLinks?.find(x=>x.crmBloggerId===String(b.crmBloggerId));
+    if(!crmLinkedProfile||microIgLogin(b.instagramAccount)!==crmLinkedProfile.handle)return res.status(409).json({error:'Связь с CRM не подтверждена'});
+  }
+  let flowSelection = null;
+  if(b.flowGoodsInput){
+    if(process.env.FLOW_LOGISTICS_ENABLED !== "1") return res.status(409).json({error:"Выбор товаров из справочника выключен"});
+    try{ flowSelection = automationFlow.priceSelection(state,b.flowGoodsInput); }
+    catch(e){ return res.status(e.status||400).json({error:e.message}); }
+  }
   const deal = {
     id: nextId("microInfluencerDeals"),
     responsible: b.responsible || "Нина",
@@ -1526,6 +1555,9 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
     coopType: b.coopType || "",
     plannedDate: b.plannedDate || "", publishDate: b.publishDate || "", notes: b.notes || "",
   };
+  deal.flowBriefAutoSend=b.flowBriefAutoSend===true;if(deal.flowBriefAutoSend)deal.flowBriefAutoSendPhone=String(deal.phone||'').replace(/\D/g,'').replace(/^8(?=\d{10}$)/,'7');
+  if(crmLinkedProfile)deal.crmBloggerId=crmLinkedProfile.crmBloggerId;
+  if(flowSelection) Object.assign(deal,{flowGoods:flowSelection.items,flowGoodsCostMinor:flowSelection.costMinor,productCost:flowSelection.costMinor/100});
   state.microInfluencerDeals.push(deal);
   persist();
   res.json(deal);
@@ -1534,6 +1566,13 @@ app.patch("/api/micro-influencer-deals/:id", requireAuth, (req,res)=>{
   const d = state.microInfluencerDeals.find(d=>d.id===+req.params.id);
   if(!d) return res.status(404).json({error:"not found"});
   const body = Object.assign({}, req.body || {});
+  if(body.flowGoodsInput){
+    if(process.env.FLOW_LOGISTICS_ENABLED !== "1") return res.status(409).json({error:"Выбор товаров из справочника выключен"});
+    try{ const choice=automationFlow.priceSelection(state,body.flowGoodsInput); Object.assign(body,{flowGoods:choice.items,flowGoodsCostMinor:choice.costMinor,productCost:choice.costMinor/100}); }
+    catch(e){ return res.status(e.status||400).json({error:e.message}); }
+  }
+  delete body.flowGoodsInput;
+  if(body.flowBriefAutoSend===true)body.flowBriefAutoSendPhone=String(body.phone??d.phone??'').replace(/\D/g,'').replace(/^8(?=\d{10}$)/,'7');
   if("instagramAccount" in body) body.instagramAccount = normalizeInstagramUrl(body.instagramAccount);
   if("reelsLink" in body) body.reelsLink = normalizeLinkUrl(body.reelsLink);
   if("tiktokVideoLink" in body) body.tiktokVideoLink = normalizeLinkUrl(body.tiktokVideoLink);
