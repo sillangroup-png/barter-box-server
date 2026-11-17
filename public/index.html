@@ -294,6 +294,7 @@ select.inline-edit-input{cursor:pointer}
 <div id="app"></div>
 <div id="toast"></div>
 
+<script src="/flow-product-picker.js"></script>
 <script>
 "use strict";
 
@@ -3366,6 +3367,7 @@ function renderLogin(){
         UI.role = role; UI.authToken = data.token; UI.readOnly = !!data.readOnly; saveSession(); UI.tab = "dashboard";
         await DataManager.load(); // токена не было до этого момента — предыдущая попытка загрузки данных 401'ится
         render();
+        await maybeOpenFlowCrmProfile();
       }catch(e){ toast(e.message, true); }
     };
     document.getElementById("staff-login-btn").onclick = submit;
@@ -7021,6 +7023,8 @@ function microProblemWarning(name, exceptId){
 }
 function modalMicroDeal(existing, prefill){
   const isEdit = !!existing;
+  let flowGoodsDirty = false;
+  let flowGoodsInput = [];
   const d = existing || Object.assign({
     responsible:"Нина", blogerName:"", bloggerCategory:"", phone:"",
     instagramAccount:"", followers:0, er:0, avgReach:0,
@@ -7066,6 +7070,8 @@ function modalMicroDeal(existing, prefill){
       <div class="field"><label>ИИН</label><input id="mm-iin" value="${escapeHtml(d.iin||'')}"></div>
     </div>
     <div class="login-hint">Стоимость товара — себестоимость подарённого бартером товара; учитывается в расходах, CPV и ROMI вместе с суммой оплаты.</div>
+    ${(DataManager.state.automationFlow?.catalog||[]).length ? `<div class="field"><label>Выбрать товары и рассчитать себестоимость</label><div id="mm-flow-goods"></div><div class="login-hint">Это выбор товаров, без заявки и доставки. Отправка оформляется отдельно; координатор — Сая. Для нескольких видео общий расход не копируйте в каждую строку.</div></div>` : ""}
+
     <div class="field"><label>Условия</label><input id="mm-conditions" value="${escapeHtml(d.conditions||'')}"></div>
     <div class="form-row">
       <div class="field"><label>Товар</label><input id="mm-product" list="product-suggestions" placeholder="Название товара как в 1С" value="${escapeHtml(d.product||'')}"></div>
@@ -7093,17 +7099,39 @@ function modalMicroDeal(existing, prefill){
       <div class="field"><label>Факт.охват TikTok</label><input id="mm-fact-reach-tt" type="number" value="${d.factReachTT||0}"></div>
     </div>
     <div class="form-row">
+      ${d.id && DataManager.state.automationFlow ? `<div class="field"><a class="btn btn-ghost btn-sm" href="/flow/?lifecycle=${encodeURIComponent(d.id)}" target="_blank" rel="noopener">Доставка и сроки +2 / +4 ↗</a></div>` : ""}
       <div class="field"><label>Плановая дата публикации</label><input id="mm-planned-date" type="date" value="${d.plannedDate||''}"></div>
       <div class="field"><label>Дата выкладки (факт)</label><input id="mm-publish-date" type="date" value="${d.publishDate||''}"></div>
     </div>
     <div class="login-hint">Плановая дата — чтобы интеграция сразу попала в нужный месяц фильтра/графика, даже если видео ещё не вышло. Как только появится факт-дата выкладки — используется она.</div>
     <div class="field"><label>Комментарий</label><textarea id="mm-notes">${escapeHtml(d.notes||"")}</textarea></div>
+    <label class="login-hint"${DataManager.state.automationFlow?'':' style="display:none"'}><input id="mm-brief-auto-send" type="checkbox" ${d.flowBriefAutoSend?'checked':''}> Разрешаю автоматически отправить утверждённое ТЗ в WhatsApp на проверенный телефон этой интеграции</label>
     <div class="modal-actions">
+      ${isEdit&&DataManager.state.automationFlow?'<button class="btn btn-ghost" id="mm-blogery-request">ТЗ → Blogery Audit</button>':''}
       <button class="btn btn-ghost" id="mm-cancel">Отмена</button>
       <button class="btn btn-primary" id="mm-save">${isEdit?'Сохранить':'Добавить'}</button>
     </div>
   `);
   document.getElementById("mm-cancel").onclick = closeModal;
+  if(isEdit&&existing.crmBloggerId&&DataManager.state.automationFlow){const pay=document.createElement('button');pay.className='btn btn-ghost';pay.textContent='Подать на оплату';pay.onclick=()=>{const rows=(DataManager.state.microInfluencerDeals||[]).filter(x=>x.crmBloggerId===existing.crmBloggerId);openModal(`<h3>Подать на оплату</h3><div class="field"><label>Общая сумма, ₸</label><input id="flow-pay-amount" type="number" step="0.01" min="0.01" value="${existing.cost||''}"></div><div class="field"><label>Получатель</label><input id="flow-pay-recipient"></div><div class="field"><label>Способ расчёта</label><select id="flow-pay-settlement"><option value="ip">ИП</option><option value="cash">Наличные</option></select></div><div class="field"><label>Этап оплаты</label><input id="flow-pay-stage" value="Окончательный расчёт"></div><div class="field"><label>Полученный счёт ИП (до 10 МБ)</label><input id="flow-pay-invoice" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg"><label><input id="flow-pay-confirmed" type="checkbox"> Счёт получен, сумма и реквизиты проверены</label></div><div class="field"><label>Видео в этой заявке</label>${rows.map(x=>`<label><input type="checkbox" class="flow-pay-deal" value="${x.id}" ${x.id===existing.id?'checked':''}> №${x.id} · ${escapeHtml(x.product||'')}</label>`).join('')}</div><div class="login-hint">Сумма общая для выбранных видео. Выплата не выполняется. Для ИП без счёта согласование Bitrix не запускается.</div><button class="btn btn-primary" id="flow-pay-submit">Подать заявку</button>`);document.getElementById('flow-pay-submit').onclick=async()=>{try{const form=new FormData();const invoice=document.getElementById('flow-pay-invoice').files[0];if(invoice)form.append('invoice',invoice);form.append('payload',JSON.stringify({integrationIds:[...document.querySelectorAll('.flow-pay-deal:checked')].map(x=>x.value),amountKzt:document.getElementById('flow-pay-amount').value,recipientName:document.getElementById('flow-pay-recipient').value,settlement:document.getElementById('flow-pay-settlement').value,stage:document.getElementById('flow-pay-stage').value,invoiceConfirmed:document.getElementById('flow-pay-confirmed').checked}));const data=await apiFetch('/api/automation/payment-request',{method:'POST',body:form});closeModal();toast(data.bitrixStatus==='submitted'?'Заявка записана в CRM и передана в Bitrix №'+data.bitrixItemId:data.crmPaymentId?'Заявка в CRM; Bitrix: '+(data.bitrixStatus||'ожидает передачи счёта'):'Заявка в очереди; запись CRM пока не подтверждена');}catch(e){toast(e.message,true)}}};document.getElementById('mm-save').parentElement.prepend(pay);}
+
+  if(isEdit&&(existing.flowBriefHistory||[]).length){
+    const versions=existing.flowBriefHistory;const row=document.createElement('div');row.className='login-hint';
+    const title=document.createElement('span');title.textContent='Утверждённое ТЗ из Blogery Audit: ';row.appendChild(title);
+    const select=document.createElement('select');for(const v of versions){const option=document.createElement('option');option.value=v.versionId;option.textContent=(v.title||'ТЗ')+' · '+(v.status==='sent'?'отправлено':'утверждено');select.appendChild(option);}select.value=existing.flowBriefApprovedVersionId||versions[versions.length-1].versionId;row.appendChild(select);
+    const send=document.createElement('button');send.className='btn btn-ghost';send.textContent='Отправить ТЗ блогеру в WhatsApp';send.onclick=async()=>{try{const data=await apiFetch('/api/automation/brief-send/'+existing.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({versionId:select.value})});toast('ТЗ в очереди WhatsApp. Факт отправки подтвердит канал.');}catch(e){toast(e.message,true)}};row.appendChild(send);document.getElementById('mm-save').parentElement.before(row);
+  }
+  const blogeryRequest=document.getElementById('mm-blogery-request');
+  if(blogeryRequest)blogeryRequest.onclick=async()=>{try{
+    const data=await apiFetch('/api/automation/brief-request/'+existing.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:document.getElementById('mm-notes').value})});if(data.url){window.open(data.url,'_blank','noopener,noreferrer');}else toast('Запрос записан в очередь передачи в Blogery Audit');
+  }catch(e){toast(e.message,true)}};
+
+  let flowPicker = null;
+  if(document.getElementById("mm-flow-goods") && typeof mountFlowProductPicker === 'function'){
+    flowPicker = mountFlowProductPicker({root:document.getElementById('mm-flow-goods'),catalog:DataManager.state.automationFlow.catalog,selected:d.flowGoods||[],barcodes:d.barcode||'',name:d.product||'',onChange:(lines,total)=>{
+      flowGoodsInput=lines;flowGoodsDirty=true;document.getElementById('mm-product-cost').value=total/100;
+    }});
+  }
   const skuPick = document.getElementById("mm-sku-pick");
   if(skuPick) skuPick.addEventListener("change", ()=>{
     const hit = microSkuAll().find(x=> skuPick.value === x.name+" — "+x.code || skuPick.value.trim() === x.code);
@@ -7138,7 +7166,7 @@ function modalMicroDeal(existing, prefill){
       erTT: parseFloat(document.getElementById("mm-er-tt").value)||0,
       avgReachTT: parseInt(document.getElementById("mm-avg-reach-tt").value,10)||0,
       cost: parseInt(document.getElementById("mm-cost").value,10)||0,
-      productCost: parseInt(document.getElementById("mm-product-cost").value,10)||0,
+      productCost: parseFloat(document.getElementById("mm-product-cost").value)||0,
       paymentStatus: document.getElementById("mm-payment-status").value,
       paymentMethod: document.getElementById("mm-payment-method").value.trim(),
       iin: document.getElementById("mm-iin").value.trim(),
@@ -7160,6 +7188,7 @@ function modalMicroDeal(existing, prefill){
       plannedDate: document.getElementById("mm-planned-date").value,
       publishDate: document.getElementById("mm-publish-date").value,
       notes: document.getElementById("mm-notes").value.trim(),
+      flowBriefAutoSend: document.getElementById("mm-brief-auto-send").checked,
     };
   };
   const formAtOpen = readMicroForm();
@@ -7168,8 +7197,12 @@ function modalMicroDeal(existing, prefill){
     const btn = document.getElementById("mm-save");
     const blogerName = document.getElementById("mm-name").value.trim();
     if(!blogerName){ toast("Укажите блогера", true); return; }
+    if(flowGoodsDirty && flowPicker){try{flowPicker.validate();}catch(e){toast(e.message,true);return;}}
+    if(prefill?.crmBloggerId&&!document.getElementById('mm-responsible').value.trim()){toast('Укажите ответственного: соответствие сотрудника CRM ещё не настроено',true);return;}
     const payload = readMicroForm();
+    if(!isEdit&&prefill?.crmBloggerId)payload.crmBloggerId=prefill.crmBloggerId;
     const toSend = isEdit ? changedFields(payload, formAtOpen) : payload;
+    if(flowGoodsDirty) toSend.flowGoodsInput=flowGoodsInput;
     if(isEdit && !Object.keys(toSend).length){ closeModal(); toast("Изменений нет"); return; }
     try{
       await withBusy(btn, ()=> isEdit ? Api.updateMicroDeal(existing.id, toSend) : Api.createMicroDeal(payload));
@@ -12485,6 +12518,8 @@ async function runSelfTests(){
   TestSuite.run();
 }
 
+let flowCrmProfileOpened=false;
+async function maybeOpenFlowCrmProfile(){const id=new URL(location.href).searchParams.get('crm_blogger');if(!id||!UI.authToken||flowCrmProfileOpened)return;try{const data=await apiFetch('/api/automation/crm-blogger/'+encodeURIComponent(id));flowCrmProfileOpened=true;UI.tab='microInfluencers';render();modalMicroDeal(null,{crmBloggerId:data.profile.crmBloggerId,blogerName:data.profile.name,instagramAccount:'https://www.instagram.com/'+data.profile.handle+'/',phone:data.profile.phone,responsible:data.profile.responsible});}catch(e){toast(e.message,true)}}
 /* =========================================================================
    14. СТАРТ ПРИЛОЖЕНИЯ
    ========================================================================= */
@@ -12511,6 +12546,7 @@ document.addEventListener("DOMContentLoaded", async ()=>{
   UI.inflCompare = {aFrom:"", aTo:"", bFrom:"", bTo:""};
   render();
   startPolling();
+  await maybeOpenFlowCrmProfile();
 });
 </script>
 </body>
