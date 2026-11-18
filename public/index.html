@@ -6051,10 +6051,33 @@ function myIpReminders(team){
 }
 const MICRO_IP_FIELDS = [["name","Название ИП (без «ИП»)"],["iin","ИИН / БИН"],["head","ФИО полностью"],["address","Адрес"],["iban","IBAN (счёт)"],["bank","Банк"],["bik","БИК"],["kbe","КБе"],["phone","Телефон"],["email","E-mail"]];
 // Реквизиты ИП + договор и счёт в Word (18.11.2026). Счёт можно сразу приложить к заявке на оплату (→ CRM → Bitrix).
+// Реквизиты из сообщения блогера: вставили текст целиком — поля заполняются сами.
+const MICRO_BIK_BANKS = {CASPKZKA:'АО "Kaspi Bank"', HSBKKZKX:'АО «Народный Банк Казахстана»', KCJBKZKX:'АО «Банк ЦентрКредит»', IRTYKZKA:'АО «ForteBank»', TSESKZKA:'АО «First Heartland Jusan Bank»', EURIKZKA:'АО «Евразийский банк»', SHBKKZKA:'АО «Shinhan Bank Kazakhstan»', ALFAKZKA:'АО «Alfa-Bank»', HCSKKZKA:'АО «Home Credit Bank»', BRKEKZKA:'АО «Bereke Bank»', KZKOKZKX:'АО «Bereke Bank»', INLMKZKA:'АО «Нурбанк»', VTBAKZKZ:'АО «ВТБ (Казахстан)»', ATYNKZKA:'АО «Altyn Bank»', KSNVKZKA:'АО «Freedom Bank Kazakhstan»'};
+function microParseRequisites(text){
+  const t = String(text||"").replace(/\u00a0/g," "), o = {};
+  const m = (re)=>{ const x = t.match(re); return x ? x[1].trim() : ""; };
+  o.iban = (t.match(/KZ\s?\d{2}(?:\s?[A-Z0-9]){16}/i)||[""])[0].replace(/\s/g,"").toUpperCase();
+  o.iin = m(/(?:ИИН|БИН|IIN|BIN)[^\d\n]{0,15}(\d{12})/i) || (t.replace(/KZ\s?\d{2}(?:\s?[A-Z0-9]){16}/ig,"").match(/(?:^|\D)(\d{12})(?!\d)/)||["",""])[1];
+  o.bik = (m(/(?:БИК|BIC|SWIFT)[^A-Z\n]{0,10}([A-Z]{6}[A-Z0-9]{2})/i) || (t.match(/\b[A-Z]{4}KZ[A-Z0-9]{2}\b/)||[""])[0]).toUpperCase();
+  o.kbe = m(/(?:КБе|KBE|Кбе|КБЕ)[^\d\n]{0,8}(\d{2})/i);
+  o.bank = m(/(?:Банк|Bank)\s*[:\-–]\s*([^\n]+)/i) || m(/((?:АО|ДБ АО)\s*[«"„][^»"\n]+[»"])/) || (MICRO_BIK_BANKS[o.bik]||"");
+  if(!o.bank && /kaspi/i.test(t)) o.bank = MICRO_BIK_BANKS.CASPKZKA;
+  if(!o.bik){ const b = Object.keys(MICRO_BIK_BANKS).find(k=> o.bank && MICRO_BIK_BANKS[k] === o.bank); if(b) o.bik = b; }
+  o.name = m(/(?:^|[\s,(])(?:ИП|ИНДИВИДУАЛЬНЫЙ ПРЕДПРИНИМАТЕЛЬ|Индивидуальный предприниматель)\s*[«"„“]?\s*([^»"”\n,]+?)\s*[»"”]?(?:[,\n]|$)/m).replace(/^ИП\s*/i,"");
+  o.head = m(/(?:ФИО|Руководитель|Директор|Ф\.И\.О\.?)\s*[:\-–]?\s*([А-ЯЁӘІҢҒҮҰҚӨҺA-Z][^\n,]{4,60})/);
+  if(!o.head && /^[А-ЯЁӘІҢҒҮҰҚӨҺ][а-яёәіңғүұқөһ]+\s+[А-ЯЁӘІҢҒҮҰҚӨҺ][а-яёәіңғүұқөһ]+(\s+[А-ЯЁӘІҢҒҮҰҚӨҺ][а-яёәіңғүұқөһ]+)?$/.test(o.name)) o.head = o.name;
+  if(!o.head){ const line = t.split(/\n/).map(x=>x.trim()).find(x=> /^[А-ЯЁӘІҢҒҮҰҚӨҺ][а-яёәіңғүұқөһ]+\s+[А-ЯЁӘІҢҒҮҰҚӨҺ][а-яёәіңғүұқөһ]+\s+[А-ЯЁӘІҢҒҮҰҚӨҺ][а-яёәіңғүұқөһ]+\.?$/.test(x)); if(line) o.head = line.replace(/\.$/,""); }
+  o.address = m(/(?:Юридический адрес|Юр\.?\s*адрес|Адрес)\s*[:\-–]?\s*([^\n]+)/i);
+  o.phone = (t.match(/\+?[78][\s\-()]*7\d{2}[\s\-()]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/)||[""])[0].trim();
+  o.email = (t.match(/[\w.+-]+@[\w-]+\.[\w.]+/)||[""])[0];
+  Object.keys(o).forEach(k=>{ o[k] = String(o[k]||"").replace(/[;,.]+$/,"").trim(); if(!o[k]) delete o[k]; });
+  return o;
+}
 function microIpDocsHtml(d, isEdit){
   const r = d.ipRequisites || {}, filled = MICRO_IP_FIELDS.filter(([k])=> String(r[k]||"").trim()).length;
   return `<details id="mm-ipdocs" style="margin:6px 0 12px;border:1px solid var(--line);border-radius:12px;padding:8px 12px" ${microIsIp(d) ? "open" : ""}>
     <summary style="cursor:pointer;font-weight:600;font-size:13px">Реквизиты ИП · договор и счёт <span style="font-weight:400;color:var(--ink-mute)">заполнено ${filled} из ${MICRO_IP_FIELDS.length}</span></summary>
+    <div class="field" style="margin-top:8px"><label>Вставьте сообщение блогера с реквизитами — поля заполнятся сами</label><textarea id="mm-ip-paste" rows="3" placeholder="ИП «…», ИИН …, IBAN KZ…, Kaspi Bank, БИК CASPKZKA, КБе 19, адрес …"></textarea><div style="display:flex;gap:8px;align-items:center;margin-top:4px"><button type="button" class="btn btn-ghost btn-sm" id="mm-ip-parse">Заполнить из сообщения</button><span id="mm-ip-parse-msg" style="font-size:12px;color:var(--ink-mute)"></span></div></div>
     <div class="form-row" style="margin-top:8px">${MICRO_IP_FIELDS.map(([k,l])=>`<div class="field"><label>${l}</label><input id="mm-ip-${k}" value="${escapeHtml(r[k]||"")}"></div>`).join("")}</div>
     ${isEdit ? `<div class="form-row"><div class="field"><label>№ договора / счёта</label><input id="mm-doc-number" placeholder="авто"></div><div class="field"><label>Дата</label><input id="mm-doc-date" type="date" value="${todayStr()}"></div><div class="field"><label>Видео в договоре</label><input id="mm-doc-videos" type="number" min="1" max="20" value="1"></div><div class="field"><label>Общая сумма, ₸</label><input id="mm-doc-amount" type="number" value="${d.cost||""}"></div></div>
     ${(()=>{ const all = microBloggerDeals(d.blogerName); if(all.length < 2) return ""; return `<div class="field"><label>Какие видео блогера входят в договор и счёт</label><div id="mm-doc-deals" style="display:flex;flex-direction:column;gap:3px;max-height:140px;overflow:auto">${all.map(x=>`<label style="font-weight:400;font-size:12.5px"><input type="checkbox" class="mm-doc-deal" value="${x.id}" data-cost="${Number(x.cost)||0}" ${x.id===d.id?"checked":""}> ${escapeHtml(microDealDate(x)||"без даты")} · ${escapeHtml(x.product||"товар не указан")} · ${fmtNum(x.cost||0)} ₸</label>`).join("")}</div></div>`; })()}
@@ -6072,6 +6095,14 @@ async function microDocBlob(dealId, kind, over){
   if(!r.ok){ const e = await r.json().catch(()=>({})); throw new Error(e.error || "Ошибка"); }
   const cd = r.headers.get("Content-Disposition") || ""; const name = decodeURIComponent((cd.match(/filename\*=UTF-8''([^;]+)/)||[])[1] || (kind+".docx"));
   return new File([await r.blob()], name, {type:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
+}
+function wireMicroIpParse(){
+  const ta = document.getElementById("mm-ip-paste"), b = document.getElementById("mm-ip-parse"), out = document.getElementById("mm-ip-parse-msg");
+  if(!ta || !b) return;
+  const run = ()=>{ const o = microParseRequisites(ta.value); const keys = Object.keys(o); keys.forEach(k=>{ const el = document.getElementById("mm-ip-"+k); if(el) el.value = o[k]; });
+    const miss = MICRO_IP_FIELDS.filter(([k])=> ["name","iin","head","address","iban","bank","bik","kbe"].includes(k) && !String((document.getElementById("mm-ip-"+k)||{}).value||"").trim()).map(([,l])=>l);
+    if(out){ out.textContent = keys.length ? ("Заполнено: "+keys.length+(miss.length ? " · проверьте: "+miss.join(", ") : " · всё на месте")) : "Не нашёл реквизитов в тексте"; out.style.color = miss.length ? "var(--bad)" : "var(--ok,#1f8a4c)"; } };
+  b.onclick = run; ta.addEventListener("paste", ()=> setTimeout(run, 50));
 }
 function wireMicroIpDocs(dealId){
   const msg = t=>{ const m = document.getElementById("mm-doc-msg"); if(m){ m.textContent = t; m.style.color = /^⚠/.test(t) ? "var(--bad)" : "var(--ok,#1f8a4c)"; } };
@@ -7367,6 +7398,7 @@ function modalMicroDeal(existing, prefill){
   { const pm = document.getElementById("mm-payment-method"), ib = document.getElementById("mm-ip-banner");
     if(pm && ib) pm.addEventListener("input", ()=>{ const keep = {markingChecked: (document.getElementById("mm-marking-checked")||{}).checked, avrReceived: (document.getElementById("mm-avr-received")||{}).checked};
       ib.innerHTML = microIpBannerHtml(Object.assign({}, d, keep, {paymentMethod: pm.value, id: isEdit ? existing.id : 0})); }); }
+  wireMicroIpParse();
   if(isEdit) wireMicroIpDocs(existing.id);
   const mmHist = document.getElementById("mm-history");
   if(mmHist) wireMicroHistoryRows(mmHist);
