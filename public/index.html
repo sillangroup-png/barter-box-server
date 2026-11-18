@@ -3004,6 +3004,87 @@ function microBloggerKey(name){
   s = s.replace(/[^a-zа-я0-9]+/g,"");
   return s || "—";
 }
+// Менеджеры для выпадающих списков «Ответственный» (18.11.2026): те же имена, что в планах.
+function microManagerNames(cur){
+  const names = Object.keys(MICRO_PLAN_BY_MANAGER_V3);
+  const c = String(cur||"").trim();
+  return c && !names.includes(c) ? [c].concat(names) : names;
+}
+function microDefaultResponsible(){
+  const a = String(UI.actorName||"").trim().split(/\s+/)[0];
+  return Object.keys(MICRO_PLAN_BY_MANAGER_V3).includes(a) ? a : "Нина";
+}
+// Карточка блогера (18.11.2026): все интеграции блогера по ключу microBloggerKey (имя/логин).
+function microBloggerDeals(name, exceptId){
+  const key = microBloggerKey(name);
+  if(!String(name||"").trim() || key==="—") return [];
+  return (DataManager.state.microInfluencerDeals||[]).filter(x=> x.id!==exceptId && microBloggerKey(x.blogerName)===key)
+    .sort((a,b)=> String(microDealDate(b)||b.createdAt||"").localeCompare(String(microDealDate(a)||a.createdAt||"")) || (Number(b.id)||0)-(Number(a.id)||0));
+}
+function microKnownBloggers(){
+  const seen = new Map();
+  (DataManager.state.microInfluencerDeals||[]).forEach(d=>{
+    const k = microBloggerKey(d.blogerName); if(!d.blogerName || k==="—") return;
+    const cur = seen.get(k);
+    if(!cur) seen.set(k, {name:d.blogerName, n:1, last:d});
+    else { cur.n++; if(String(microDealDate(d)||"") > String(microDealDate(cur.last)||"")) { cur.last = d; cur.name = d.blogerName; } }
+  });
+  return [...seen.values()].sort((a,b)=> a.name.localeCompare(b.name,"ru"));
+}
+// Контакты блогера из последней интеграции, где поле заполнено.
+function microBloggerPrefill(name){
+  const deals = microBloggerDeals(name);
+  if(!deals.length) return null;
+  const out = {blogerName: deals[0].blogerName};
+  ["phone","city","address","instagramAccount","followers","er","avgReach","tiktokAccount","followersTT","erTT","avgReachTT","bloggerCategory","coopType","paymentMethod","iin"].forEach(f=>{
+    const hit = deals.find(d=> d[f]!==undefined && d[f]!==null && d[f]!=="" && d[f]!==0);
+    if(hit) out[f] = hit[f];
+  });
+  return out;
+}
+function microBloggerHistoryHtml(name, exceptId){
+  const deals = microBloggerDeals(name, exceptId);
+  if(!deals.length) return "";
+  const total = deals.reduce((a,d)=> a + (Number(d.cost)||0), 0);
+  const reach = deals.reduce((a,d)=> a + microDealFactReach(d), 0);
+  const rows = deals.map(d=>`<tr class="mbc-row" data-open-id="${escapeHtml(String(d.id))}" style="cursor:pointer" title="Открыть интеграцию">
+      <td>${escapeHtml(microDealDate(d)||"—")}</td><td>${escapeHtml(d.product||"—")}</td><td>${fmtNum(d.cost||0)}</td>
+      <td>${escapeHtml(d.paymentStatus||"—")}</td><td>${escapeHtml(d.videoStatus||"—")}</td><td>${fmtNum(microDealFactReach(d))}</td>
+      <td>${escapeHtml(d.responsible||"—")}</td></tr>`).join("");
+  return `<div class="mbc-history" style="margin:4px 0 12px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--canvas)">
+    <div style="font-size:12.5px;margin-bottom:6px"><b>История интеграций: ${deals.length}</b> · сумма ${fmtNum(total)} ₸ · охват ${fmtNum(reach)}</div>
+    <div style="max-height:180px;overflow:auto"><table style="width:100%;font-size:12px"><thead><tr><th>Дата</th><th>Товар</th><th>Сумма</th><th>Оплата</th><th>Видео</th><th>Охват</th><th>Ответственный</th></tr></thead><tbody>${rows}</tbody></table></div>
+  </div>`;
+}
+function wireMicroHistoryRows(root){
+  (root||document).querySelectorAll(".mbc-row[data-open-id]").forEach(tr=>{
+    tr.onclick = ()=>{
+      const d = (DataManager.state.microInfluencerDeals||[]).find(x=> String(x.id)===tr.dataset.openId);
+      if(d){ closeModal(); modalMicroDeal(d); }
+    };
+  });
+}
+function openMicroBloggerCard(name){
+  const deals = microBloggerDeals(name);
+  if(!deals.length){ toast("Интеграций с этим блогером нет", true); return; }
+  const pf = microBloggerPrefill(name) || {};
+  const ig = pf.instagramAccount ? `<a href="${escapeHtml(pf.instagramAccount)}" target="_blank" rel="noopener">Instagram</a>` : "";
+  const tt = pf.tiktokAccount ? `<a href="${escapeHtml(/^https?:/.test(pf.tiktokAccount) ? pf.tiktokAccount : "https://www.tiktok.com/@"+String(pf.tiktokAccount).replace(/^@/,""))}" target="_blank" rel="noopener">TikTok</a>` : "";
+  const info = [pf.phone ? escapeHtml(pf.phone) : "", pf.city ? escapeHtml(pf.city) : "", pf.bloggerCategory ? escapeHtml(normalizeBloggerCategory(pf.bloggerCategory)) : "", pf.followers ? "подписчиков IG "+fmtNum(pf.followers) : "", ig, tt].filter(Boolean).join(" · ");
+  openModal(`
+    <h3>📇 ${escapeHtml(pf.blogerName||name)}</h3>
+    <div id="mbc-warn">${microProblemWarning(name, null)}</div>
+    <div style="font-size:12.5px;color:var(--ink-mute);margin-bottom:8px">${info || "контакты не заполнены"}</div>
+    ${microBloggerHistoryHtml(name, null)}
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="mbc-close">Закрыть</button>
+      ${UI.readOnly ? "" : `<button class="btn" id="mbc-new">➕ Новая интеграция с этим блогером</button>`}
+    </div>`);
+  document.getElementById("mbc-close").onclick = closeModal;
+  const nb = document.getElementById("mbc-new");
+  if(nb) nb.onclick = ()=>{ closeModal(); modalMicroDeal(null, Object.assign({}, pf, {responsible: microDefaultResponsible()})); };
+  wireMicroHistoryRows(document.getElementById("modal-back"));
+}
 // Тип сотрудничества: поле coopType; у старых записей (до переноса на сервере) — «За товар»/«Бартер» в категории.
 function microCoopTypeOf(d){
   if(!d) return "";
@@ -5263,11 +5344,11 @@ function tplMicroInfluencers(){
             return `<tr${rowStyle}>
               <td class="rowcheck"><input type="checkbox" class="micro-row-check" data-id="${d.id}" ${UI.selectedMicroIds.has(d.id)?'checked':''}></td>
               <td>${pageOffset+i+1}</td>
-              <td class="sticky-col">${pb && pb.status==="Отказ от блогера" ? '<span title="Отказ от блогера">⛔ </span>' : ""}${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')}${microHasStories(d) ? ` <span style="font-size:10.5px;padding:1px 6px;border-radius:8px;background:var(--canvas);border:1px solid var(--line);white-space:nowrap" title="${escapeHtml(microFormatOf(d))}">📱 сторис</span>` : ""}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
+              <td class="sticky-col">${pb && pb.status==="Отказ от блогера" ? '<span title="Отказ от блогера">⛔ </span>' : ""}${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')} <button type="button" class="mbc-open" data-name="${escapeHtml(d.blogerName||'')}" title="Карточка блогера: история интеграций, новая интеграция" style="border:none;background:none;cursor:pointer;padding:0 2px;font-size:13px">📇</button>${microHasStories(d) ? ` <span style="font-size:10.5px;padding:1px 6px;border-radius:8px;background:var(--canvas);border:1px solid var(--line);white-space:nowrap" title="${escapeHtml(microFormatOf(d))}">📱 сторис</span>` : ""}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
               <td>${microProblemCell(d, pb)}</td>
               <td>${inlineEditSpan(escapeHtml(d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "—"), d.id, 'bloggerCategory', d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : '', 'select', MICRO_BLOGGER_CATEGORIES)}</td>
               <td>${inlineEditSpan(microCoopTypeOf(d) ? `<span style="white-space:nowrap${microCoopTypeOf(d)==="За товар" ? ";color:var(--accent,#c2185b)" : ""}">${escapeHtml(microCoopTypeOf(d))}</span>` : '<span style="color:var(--ink-mute)">—</span>', d.id, 'coopType', microCoopTypeOf(d), 'select', MICRO_COOP_TYPES)}</td>
-              <td>${inlineEditSpan(escapeHtml(d.responsible||"—"), d.id, 'responsible', d.responsible||'', 'text')}</td>
+              <td>${inlineEditSpan(escapeHtml(d.responsible||"—"), d.id, 'responsible', d.responsible||'', 'select', [""].concat(microManagerNames(d.responsible)))}</td>
               <td>${d.instagramAccount?`<a href="${escapeHtml(normalizeInstagramUrl(d.instagramAccount))}" target="_blank" rel="noopener">IG</a> `:""}${inlineEditSpan(fmtNum(d.followers||0), d.id, 'followers', d.followers||0, 'number')}</td>
               <td>${d.tiktokAccount?`<a href="${escapeHtml(d.tiktokAccount)}" target="_blank" rel="noopener">TT</a> `:""}${inlineEditSpan(fmtNum(d.followersTT||0), d.id, 'followersTT', d.followersTT||0, 'number')}</td>
               <td>${inlineEditSpan(escapeHtml(d.product||"—"), d.id, 'product', d.product||'', 'text')}<br><span style="color:var(--ink-mute);font-size:11px">ШК ${inlineEditSpan(escapeHtml(d.barcode||"—"), d.id, 'barcode', d.barcode||'', 'text')}</span></td>
@@ -7026,7 +7107,7 @@ function modalMicroDeal(existing, prefill){
   let flowGoodsDirty = false;
   let flowGoodsInput = [];
   const d = existing || Object.assign({
-    responsible:"Нина", blogerName:"", bloggerCategory:"", phone:"",
+    responsible: microDefaultResponsible(), blogerName:"", bloggerCategory:"", phone:"",
     instagramAccount:"", followers:0, er:0, avgReach:0,
     tiktokAccount:"", followersTT:0, erTT:0, avgReachTT:0,
     cost:0, productCost:0, paymentStatus: MICRO_PAYMENT_STATUSES[0],
@@ -7040,12 +7121,13 @@ function modalMicroDeal(existing, prefill){
   openModal(`
     <h3>${isEdit?'Изменить':'Новая'} интеграция · Инфлюенс микро/средние</h3>
     <div id="mm-problem-warn">${microProblemWarning(d.blogerName, isEdit ? existing.id : null)}</div>
+    <div id="mm-history">${microBloggerHistoryHtml(d.blogerName, isEdit ? existing.id : null)}</div>
     ${isEdit ? videoStageBlock(existing) : ""}
     <div class="form-row">
-      <div class="field"><label>Блогер</label><input id="mm-name" placeholder="Имя / название аккаунта" value="${escapeHtml(d.blogerName)}"></div>
+      <div class="field"><label>Блогер</label><input id="mm-name" list="mm-blogger-list" autocomplete="off" placeholder="Начните вводить — выберите из базы или новый" value="${escapeHtml(d.blogerName)}"><datalist id="mm-blogger-list">${microKnownBloggers().map(b=>`<option value="${escapeHtml(b.name)}">${escapeHtml(b.name)} · интеграций: ${b.n}</option>`).join("")}</datalist></div>
       <div class="field"><label>Тип сотрудничества</label><select id="mm-coop-type"><option value="">—</option>${MICRO_COOP_TYPES.map(c=>`<option ${c===microCoopTypeOf(d)?'selected':''}>${c}</option>`).join("")}</select></div>
       <div class="field"><label>Категория блогера</label><select id="mm-blogger-category"><option value="">—</option>${MICRO_BLOGGER_CATEGORIES.map(c=>`<option ${d.bloggerCategory && c===normalizeBloggerCategory(d.bloggerCategory)?'selected':''}>${c}</option>`).join("")}</select></div>
-      <div class="field"><label>Ответственный</label><input id="mm-responsible" value="${escapeHtml(d.responsible||'')}"></div>
+      <div class="field"><label>Ответственный</label><select id="mm-responsible"><option value="">—</option>${microManagerNames(d.responsible).map(n=>`<option ${n===d.responsible?'selected':''}>${escapeHtml(n)}</option>`).join("")}</select></div>
       <div class="field"><label>Телефон</label><input id="mm-phone" value="${escapeHtml(d.phone||'')}"></div>
       <div class="field"><label>Город</label><input id="mm-city" value="${escapeHtml(d.city||'')}"></div>
       <div class="field"><label>Адрес</label><input id="mm-address" value="${escapeHtml(d.address||'')}"></div>
@@ -7142,9 +7224,25 @@ function modalMicroDeal(existing, prefill){
     bc.value = cur.join(",");
     skuPick.value = "";
   });
+  const mmHist = document.getElementById("mm-history");
+  if(mmHist) wireMicroHistoryRows(mmHist);
   document.getElementById("mm-name").addEventListener("input", e=>{
     const w = document.getElementById("mm-problem-warn");
     if(w) w.innerHTML = microProblemWarning(e.target.value, isEdit ? existing.id : null);
+    const h = document.getElementById("mm-history");
+    if(h){ h.innerHTML = microBloggerHistoryHtml(e.target.value, isEdit ? existing.id : null); wireMicroHistoryRows(h); }
+    // Выбрали блогера из базы в новой интеграции — подставляем его контакты в пустые поля.
+    if(!isEdit){
+      const pf = microBloggerPrefill(e.target.value);
+      if(pf && microBloggerKey(pf.blogerName)===microBloggerKey(e.target.value)){
+        const put = (id, v)=>{ const el = document.getElementById(id); if(!el || v===undefined || v===null || v==="") return; if(el.tagName==="SELECT"){ if([...el.options].some(o=>o.value===String(v)) && !el.value) el.value = String(v); } else if(!el.value || el.value==="0") el.value = v; };
+        put("mm-phone", pf.phone); put("mm-city", pf.city); put("mm-address", pf.address);
+        put("mm-ig", pf.instagramAccount); put("mm-followers", pf.followers); put("mm-er", pf.er); put("mm-avg-reach", pf.avgReach);
+        put("mm-tt", pf.tiktokAccount); put("mm-followers-tt", pf.followersTT); put("mm-er-tt", pf.erTT); put("mm-avg-reach-tt", pf.avgReachTT);
+        put("mm-blogger-category", pf.bloggerCategory ? normalizeBloggerCategory(pf.bloggerCategory) : ""); put("mm-coop-type", pf.coopType);
+        put("mm-payment-method", pf.paymentMethod); put("mm-iin", pf.iin);
+      }
+    }
   });
   // Сохраняем только то, что поменяли в этой форме (29.10.2026): раньше форма отправляла ВСЕ поля, и если
   // она была открыта давно, старые значения затирали то, что за это время внесли другие (статус оплаты и т.п.).
@@ -7768,6 +7866,7 @@ function wireDeskTab(){
 
   else if(UI.tab==="microInfluencers"){
     document.getElementById("new-micro-btn").onclick = ()=> modalMicroDeal(null);
+    document.querySelectorAll(".mbc-open").forEach(b=>{ b.onclick = e=>{ e.stopPropagation(); openMicroBloggerCard(b.dataset.name); }; });
     wirePlanCells();
 
     const microSearch = document.getElementById("micro-search");
@@ -10865,12 +10964,12 @@ async function runSelfTests(){
         if(!optionValues.includes(cat)) throw new Error("выпадающий список категорий должен включать: "+cat);
       });
       document.getElementById("mm-name").value = "Категория Тест";
-      respInput.value = "Аружан";
+      respInput.value = "Камила";
       catSelect.value = "Визажист";
       let captured = null;
       window.fetch = (url, opts)=>{ captured = {url, opts}; return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({id:1})}); };
       document.getElementById("mm-save").onclick();
-      if(!captured || !captured.opts.body.includes('"responsible":"Аружан"')) throw new Error("payload сохранения должен включать responsible: "+(captured&&captured.opts.body));
+      if(!captured || !captured.opts.body.includes('"responsible":"Камила"')) throw new Error("payload сохранения должен включать responsible: "+(captured&&captured.opts.body));
       if(!captured || !captured.opts.body.includes('"bloggerCategory":"Визажист"')) throw new Error("payload сохранения должен включать bloggerCategory: "+(captured&&captured.opts.body));
     } finally {
       window.fetch = origFetch;
