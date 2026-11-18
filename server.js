@@ -1438,6 +1438,7 @@ app.post("/api/influencer-deals", requireAuth, (req,res)=>{
     instagramLink: normalizeInstagramUrl(b.instagramLink || ""), reelsLink: normalizeLinkUrl(b.reelsLink || ""),
     driveFolderLink: normalizeLinkUrl(b.driveFolderLink || ""),
     status: b.status || DEAL_STATUSES[0], notes: b.notes || "",
+    crmBloggerId: String(b.crmBloggerId || ""), // перенос из Blogger CRM (18.11.2026)
   };
   state.influencerDeals.push(deal);
   persist();
