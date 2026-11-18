@@ -12729,7 +12729,7 @@ async function runSelfTests(){
 }
 
 let flowCrmProfileOpened=false;
-async function maybeOpenFlowCrmProfile(){const id=new URL(location.href).searchParams.get('crm_blogger');if(!id||!UI.authToken||flowCrmProfileOpened)return;try{const data=await apiFetch('/api/automation/crm-blogger/'+encodeURIComponent(id));flowCrmProfileOpened=true;UI.tab='microInfluencers';render();modalMicroDeal(null,{crmBloggerId:data.profile.crmBloggerId,blogerName:data.profile.name,instagramAccount:'https://www.instagram.com/'+data.profile.handle+'/',phone:data.profile.phone,responsible:data.profile.responsible});}catch(e){toast(e.message,true)}}
+async function maybeOpenFlowCrmProfile(){const id=new URL(location.href).searchParams.get('crm_blogger');if(!id||!UI.authToken||flowCrmProfileOpened)return;try{const data=await apiFetch('/api/automation/crm-blogger/'+encodeURIComponent(id));flowCrmProfileOpened=true;UI.tab='microInfluencers';render();const pr=data.profile;modalMicroDeal(null,{crmBloggerId:pr.crmBloggerId,blogerName:pr.name,instagramAccount:'https://www.instagram.com/'+pr.handle+'/',phone:pr.phone,responsible:pr.responsible,followers:pr.followers||0,avgReach:pr.avgReach||0,er:pr.er||0,tiktokAccount:pr.tiktokAccount||'',followersTT:pr.followersTT||0,avgReachTT:pr.avgReachTT||0,cost:pr.cost||0,conditions:pr.notes||''});}catch(e){toast(e.message,true)}}
 /* =========================================================================
    14. СТАРТ ПРИЛОЖЕНИЯ
    ========================================================================= */
