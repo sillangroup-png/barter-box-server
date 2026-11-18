@@ -6083,8 +6083,53 @@ function microIpDocsHtml(d, isEdit){
     ${(()=>{ const all = microBloggerDeals(d.blogerName); if(all.length < 2) return ""; return `<div class="field"><label>Какие видео блогера входят в договор и счёт</label><div id="mm-doc-deals" style="display:flex;flex-direction:column;gap:3px;max-height:140px;overflow:auto">${all.map(x=>`<label style="font-weight:400;font-size:12.5px"><input type="checkbox" class="mm-doc-deal" value="${x.id}" data-cost="${Number(x.cost)||0}" ${x.id===d.id?"checked":""}> ${escapeHtml(microDealDate(x)||"без даты")} · ${escapeHtml(x.product||"товар не указан")} · ${fmtNum(x.cost||0)} ₸</label>`).join("")}</div></div>`; })()}
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" class="btn btn-primary btn-sm" id="mm-doc-contract">Договор (Word)</button><button type="button" class="btn btn-ghost btn-sm" id="mm-doc-invoice">Счёт на оплату (Word)</button>
     <label style="font-size:12px;color:var(--action);cursor:pointer">Загрузить шаблон договора<input type="file" id="mm-doc-template" accept=".docx" style="display:none"></label><span id="mm-doc-msg" style="font-size:12px"></span></div>
-    <div class="login-hint" style="margin-top:6px">Сумма — из поля «Сумма». Счёт прикладывается к «Подать на оплату» → CRM → Bitrix.</div>` : `<div class="login-hint">Договор и счёт — после сохранения интеграции.</div>`}
+    <div class="login-hint" style="margin-top:6px">Сумма — из поля «Сумма». Счёт прикладывается сам в блоке «💳 Подать на оплату» (ИП → CRM + Bitrix).</div>` : `<div class="login-hint">Договор и счёт — после сохранения интеграции.</div>`}
   </details>`;
+}
+// Подача на оплату прямо в интеграции (18.11.2026): Наличные → только Blogger CRM; ИП → Blogger CRM + Bitrix «Согласование оплаты» со счётом из реквизитов.
+function microPayRoute(pm){ return /^ип/i.test(String(pm||"").trim()) ? "ip" : /налич/i.test(String(pm||"")) ? "cash" : ""; }
+function microPayHtml(d, isEdit){
+  if(!isEdit) return `<div class="login-hint" style="margin:4px 0 10px">💳 Подать на оплату — после сохранения интеграции.</div>`;
+  const all = microBloggerDeals(d.blogerName); const rows = all.length ? all : [d];
+  return `<div id="mm-pay" style="margin:4px 0 12px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--canvas)">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:13px">💳 Подать на оплату</b><span id="mm-pay-route" style="font-size:12px"></span></div>
+    <div class="form-row" style="margin-top:8px"><div class="field"><label>Сумма к оплате, ₸</label><input id="mm-pay-amount" type="number" min="1" value="${Number(d.cost)||""}"></div><div class="field"><label>Получатель</label><input id="mm-pay-recipient" value="${escapeHtml(microIsIp(d) && d.ipRequisites && d.ipRequisites.name ? "ИП «"+d.ipRequisites.name+"»" : (d.blogerName||""))}"></div><div class="field"><label>Этап</label><select id="mm-pay-stage">${["Окончательный расчёт","Предоплата","Остаток"].map(x=>`<option>${x}</option>`).join("")}</select></div></div>
+    ${rows.length > 1 ? `<div class="field"><label>Какие видео оплачиваем (сумма общая)</label><div style="display:flex;flex-direction:column;gap:3px;max-height:120px;overflow:auto">${rows.map(x=>`<label style="font-weight:400;font-size:12.5px"><input type="checkbox" class="mm-pay-deal" value="${x.id}" data-cost="${Number(x.cost)||0}" ${x.id===d.id?"checked":""}> ${escapeHtml(microDealDate(x)||"без даты")} · ${escapeHtml(x.product||"товар не указан")} · ${Number(x.cost)||0} ₸${x.flowPaymentId?" · заявка уже есть":""}</label>`).join("")}</div></div>` : ""}
+    <div id="mm-pay-ip" style="display:none;font-size:12.5px;margin:2px 0 8px">Счёт сформируется из реквизитов ИП (блок выше) и уйдёт в Bitrix. Свой счёт от блогера: <input id="mm-pay-file" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg" style="font-size:12px"><label style="display:flex;gap:6px;align-items:center;margin-top:6px;font-weight:600"><input type="checkbox" id="mm-pay-confirm"> Реквизиты и сумма проверены</label></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button type="button" class="btn btn-primary btn-sm" id="mm-pay-send">Отправить заявку</button><span id="mm-pay-msg" style="font-size:12px"></span></div>
+    <div id="mm-pay-list" style="margin-top:6px;font-size:12px;color:var(--ink-mute)"></div>
+  </div>`;
+}
+function wireMicroPay(dealId){
+  const box = document.getElementById("mm-pay"); if(!box) return;
+  const $ = id=> document.getElementById(id), msg = (t, bad)=>{ const m = $("mm-pay-msg"); m.textContent = t; m.style.color = bad ? "var(--bad)" : "var(--ok,#1f8a4c)"; };
+  const route = ()=>{ const r = microPayRoute(($("mm-payment-method")||{}).value), el = $("mm-pay-route");
+    el.innerHTML = r === "ip" ? `<span style="color:#1f6b40">ИП → Blogger CRM + Bitrix (согласование оплаты)</span>` : r === "cash" ? `<span style="color:#1f6b40">Наличные → только Blogger CRM</span>` : `<span style="color:var(--bad)">Выберите «Способ оплаты»: ИП или Наличные</span>`;
+    $("mm-pay-ip").style.display = r === "ip" ? "" : "none";
+    const rc = $("mm-pay-recipient"), nm = ($("mm-ip-name")||{}).value; if(r === "ip" && nm && !/^ИП/i.test(rc.value)) rc.value = "ИП «"+nm+"»"; return r; };
+  route(); const pm = $("mm-payment-method"); if(pm) pm.addEventListener("change", route);
+  const ipn = $("mm-ip-name"); if(ipn) ipn.addEventListener("input", route);
+  const recalc = ()=>{ const b = [...document.querySelectorAll(".mm-pay-deal:checked")]; if(b.length > 1) $("mm-pay-amount").value = b.reduce((s,x)=> s + (Number(x.dataset.cost)||0), 0) || $("mm-pay-amount").value; };
+  document.querySelectorAll(".mm-pay-deal").forEach(x=> x.onchange = recalc);
+  const list = async ()=>{ try{ const r = await apiFetch("/api/automation/payments"); const mine = (r.payments||[]).filter(p=> (p.payload.integrationIds||[]).includes(String(dealId)));
+    $("mm-pay-list").innerHTML = mine.map(p=>`✓ ${escapeHtml(p.payload.stage)} · ${(p.payload.amountMinor/100).toLocaleString("ru-RU")} ₸ · ${p.payload.settlement==="ip"?"ИП":"наличные"} · CRM: ${p.crmPaymentId ? escapeHtml(p.status||"принята") : "отправляется…"}${p.payload.settlement==="ip" ? " · Bitrix: "+(p.bitrixItemId ? "№"+escapeHtml(String(p.bitrixItemId)) : escapeHtml(p.bitrixStatus||"в очереди")) : ""}${p.lastError ? ` <span style="color:var(--bad)">${escapeHtml(p.lastError)}</span>` : ""}`).join("<br>"); }catch(e){} };
+  list();
+  $("mm-pay-send").onclick = async ()=>{ const btn = $("mm-pay-send");
+    try{
+      const r = route(); if(!r) throw new Error("Выберите способ оплаты: ИП или Наличные");
+      const ids = [...document.querySelectorAll(".mm-pay-deal:checked")].map(x=> x.value); if(!ids.length) ids.push(String(dealId));
+      const amount = $("mm-pay-amount").value; if(!(Number(amount) > 0)) throw new Error("Укажите сумму");
+      if(r === "ip" && !$("mm-pay-confirm").checked) throw new Error("Отметьте «Реквизиты и сумма проверены»");
+      btn.disabled = true; msg("Отправляю…");
+      await Api.updateMicroDeal(dealId, {paymentMethod: $("mm-payment-method").value, responsible: ($("mm-responsible")||{}).value || undefined});
+      const form = new FormData();
+      if(r === "ip"){ let f = $("mm-pay-file").files[0]; if(!f){ msg("Собираю счёт из реквизитов…"); f = await microDocBlob(dealId, "invoice", {amount, videos: ids.length}); } form.append("invoice", f); }
+      form.append("payload", JSON.stringify({integrationIds: ids, amountKzt: amount, recipientName: $("mm-pay-recipient").value.trim(), settlement: r, stage: $("mm-pay-stage").value, invoiceConfirmed: r === "ip"}));
+      const data = await apiFetch("/api/automation/payment-request", {method:"POST", body: form});
+      msg(r === "ip" ? (data.bitrixItemId ? "Заявка в CRM и Bitrix №"+data.bitrixItemId : "Заявка в CRM; в Bitrix уходит в течение минуты") : (data.crmPaymentId ? "Заявка в Blogger CRM" : "Заявка в очереди в CRM"));
+      list();
+    }catch(e){ msg("⚠ "+e.message, true); } finally{ btn.disabled = false; }
+  };
 }
 function microDocFormatOf(d){ const f = String(microFormatOf(d)||"").toLowerCase(); const st = /сторис/.test(f), re = /reels/.test(f), tt = /tiktok/.test(f); return st && re ? "stories_reels" : st ? "stories" : re && !tt ? "reels" : tt && !re ? "tiktok" : "reels_tt"; }
 function readMicroIpRequisites(){ const o = {}; let any = false; MICRO_IP_FIELDS.forEach(([k])=>{ const el = document.getElementById("mm-ip-"+k); if(el){ any = true; o[k] = el.value.trim(); } }); return any ? o : null; }
@@ -7329,6 +7374,7 @@ function modalMicroDeal(existing, prefill){
       <div class="field"><label>ИИН</label><input id="mm-iin" value="${escapeHtml(d.iin||'')}"></div>
     </div>
     <div class="login-hint">Стоимость товара — себестоимость подарённого бартером товара; учитывается в расходах, CPV и ROMI вместе с суммой оплаты.</div>
+    ${microPayHtml(d, isEdit)}
     ${(DataManager.state.automationFlow?.catalog||[]).length ? `<div class="field"><label>Выбрать товары и рассчитать себестоимость</label><div id="mm-flow-goods"></div><div class="login-hint">Это выбор товаров, без заявки и доставки. Отправка оформляется отдельно; координатор — Сая. Для нескольких видео общий расход не копируйте в каждую строку.</div></div>` : ""}
 
     <div class="field"><label>Условия</label><input id="mm-conditions" value="${escapeHtml(d.conditions||'')}"></div>
@@ -7372,7 +7418,6 @@ function modalMicroDeal(existing, prefill){
     </div>
   `);
   document.getElementById("mm-cancel").onclick = closeModal;
-  if(isEdit&&existing.crmBloggerId&&DataManager.state.automationFlow){const pay=document.createElement('button');pay.className='btn btn-ghost';pay.textContent='Подать на оплату';pay.onclick=()=>{const rows=(DataManager.state.microInfluencerDeals||[]).filter(x=>x.crmBloggerId===existing.crmBloggerId);openModal(`<h3>Подать на оплату</h3><div class="field"><label>Общая сумма, ₸</label><input id="flow-pay-amount" type="number" step="0.01" min="0.01" value="${existing.cost||''}"></div><div class="field"><label>Получатель</label><input id="flow-pay-recipient" value="${escapeHtml(existing.ipRequisites&&existing.ipRequisites.name?'ИП «'+existing.ipRequisites.name+'»':'')}"></div><div class="field"><label>Способ расчёта</label><select id="flow-pay-settlement"><option value="ip">ИП</option><option value="cash">Наличные</option></select></div><div class="field"><label>Этап оплаты</label><input id="flow-pay-stage" value="Окончательный расчёт"></div><div class="field"><label>Полученный счёт ИП (до 10 МБ)</label><input id="flow-pay-invoice" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg"> <button type="button" class="btn btn-ghost btn-sm" id="flow-pay-gen">Сформировать счёт из реквизитов</button><label><input id="flow-pay-confirmed" type="checkbox"> Счёт получен, сумма и реквизиты проверены</label></div><div class="field"><label>Видео в этой заявке</label>${rows.map(x=>`<label><input type="checkbox" class="flow-pay-deal" value="${x.id}" ${x.id===existing.id?'checked':''}> №${x.id} · ${escapeHtml(x.product||'')}</label>`).join('')}</div><div class="login-hint">Сумма общая для выбранных видео. Выплата не выполняется. Для ИП без счёта согласование Bitrix не запускается.</div><button class="btn btn-primary" id="flow-pay-submit">Подать заявку</button>`);{const g=document.getElementById('flow-pay-gen');if(g)g.onclick=async()=>{try{g.textContent='Собираю…';const f=await microDocBlob(existing.id,'invoice',{amount:document.getElementById('flow-pay-amount').value,videos:document.querySelectorAll('.flow-pay-deal:checked').length||1});const dt=new DataTransfer();dt.items.add(f);document.getElementById('flow-pay-invoice').files=dt.files;document.getElementById('flow-pay-settlement').value='ip';g.textContent='✓ '+f.name;}catch(e){g.textContent='Сформировать счёт из реквизитов';toast(e.message,true)}};}document.getElementById('flow-pay-submit').onclick=async()=>{try{const form=new FormData();const invoice=document.getElementById('flow-pay-invoice').files[0];if(invoice)form.append('invoice',invoice);form.append('payload',JSON.stringify({integrationIds:[...document.querySelectorAll('.flow-pay-deal:checked')].map(x=>x.value),amountKzt:document.getElementById('flow-pay-amount').value,recipientName:document.getElementById('flow-pay-recipient').value,settlement:document.getElementById('flow-pay-settlement').value,stage:document.getElementById('flow-pay-stage').value,invoiceConfirmed:document.getElementById('flow-pay-confirmed').checked}));const data=await apiFetch('/api/automation/payment-request',{method:'POST',body:form});closeModal();toast(data.bitrixStatus==='submitted'?'Заявка записана в CRM и передана в Bitrix №'+data.bitrixItemId:data.crmPaymentId?'Заявка в CRM; Bitrix: '+(data.bitrixStatus||'ожидает передачи счёта'):'Заявка в очереди; запись CRM пока не подтверждена');}catch(e){toast(e.message,true)}}};document.getElementById('mm-save').parentElement.prepend(pay);}
 
   if(isEdit&&(existing.flowBriefHistory||[]).length){
     const versions=existing.flowBriefHistory;const row=document.createElement('div');row.className='login-hint';
@@ -7406,6 +7451,7 @@ function modalMicroDeal(existing, prefill){
       ib.innerHTML = microIpBannerHtml(Object.assign({}, d, keep, {paymentMethod: pm.value, id: isEdit ? existing.id : 0})); }); }
   wireMicroIpParse();
   if(isEdit) wireMicroIpDocs(existing.id);
+  if(isEdit) wireMicroPay(existing.id);
   const mmHist = document.getElementById("mm-history");
   if(mmHist) wireMicroHistoryRows(mmHist);
   document.getElementById("mm-name").addEventListener("input", e=>{
