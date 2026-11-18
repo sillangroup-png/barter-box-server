@@ -5332,6 +5332,77 @@ function tplInfluencerDeals(){
 }
 
 /* ---------- Инфлюенс интеграции микро/средние (отв. Нина) ---------- */
+/* ---------- Группы блогеров — автоматически (18.11.2026) ----------
+   Менеджеры ничего не заполняют: группа считается из интеграций. Индекс ролика = факт.охват (Reels + TikTok) ÷
+   средний охват из карточки блогера по тем же площадкам; считается, когда с выхода прошло 7 дней.
+   Платные и бартерные (оплата 0 ₸, работают за товар) считаются отдельно и не смешиваются. */
+const MICRO_GROUPS = [
+  {key:"new",   title:"Новые",              rule:"Первый ролик с нами",                                  todo:"Ждём 7 дней, считаем индекс, потом решаем группу", cls:""},
+  {key:"exp",   title:"Экспериментальные",  rule:"Новый блогер, CPV дороже 2 ₸ за просмотр",             todo:"Сначала тест сторис, повтор только при индексе от 1,0", cls:"warn"},
+  {key:"live",  title:"Постоянные (живые)", rule:"2+ ролика, индекс последнего от 0,8",                  todo:"Повторы, пакеты, приоритет на сильные товары", cls:"ok"},
+  {key:"watch", title:"Под наблюдением",    rule:"2+ ролика, индекс последнего 0,7–0,8",                todo:"Повтор осторожно, следим за следующим роликом", cls:""},
+  {key:"dying", title:"На издыхании",       rule:"2+ ролика, индекс последнего ниже 0,7 или падает два раза подряд", todo:"Пауза 1–2 месяца или смена товара и формата", cls:"bad"},
+  {key:"barter",title:"Бартерные",          rule:"Работают «за товар», без оплаты",                     todo:"Те же правила по индексу, отдельной строкой", cls:""},
+];
+function microVideoIndex(d){
+  const r = Number(d.factReachReels)||0, t = Number(d.factReachTT)||0;
+  const avg = (r ? Number(d.avgReach)||0 : 0) + (t ? Number(d.avgReachTT)||0 : 0);
+  return (r + t) > 0 && avg > 0 ? (r + t) / avg : null;
+}
+function microIdx(v){ return v==null ? "—" : v.toFixed(2).replace(".", ","); }
+function microGroupOf(pubs, barter, today){
+  const ageOf = d=> Math.floor((Date.parse(today) - Date.parse(d.publishDate)) / 86400000);
+  const vids = pubs.map(d=> ({d, idx:microVideoIndex(d), age:ageOf(d)}));
+  const ready = vids.filter(v=> v.idx!=null && v.age >= 7), idxs = ready.map(v=>v.idx);
+  const last = vids[vids.length-1], lastIdx = idxs.length ? idxs[idxs.length-1] : null;
+  const res = {vids, idxs, lastIdx, last};
+  if(vids.length === 1){
+    if(last.age < 7) return Object.assign(res, {group:"new", why:`вышел ${last.age} дн. назад — индекс через ${7-last.age} дн.`, verdict:"ждём"});
+    if(last.idx == null) return Object.assign(res, {group:"new", why: microDealAvgReach(last.d) ? "нет факт.охвата ролика" : "в карточке не указан средний охват", verdict:"нужны цифры"});
+    const reach = (Number(last.d.factReachReels)||0) + (Number(last.d.factReachTT)||0), cpv = reach ? microDealTotalCost(last.d) / reach : null;
+    if(!barter && cpv != null && cpv > 2) return Object.assign(res, {group:"exp", cpv, why:`CPV ${cpv.toFixed(2).replace(".", ",")} ₸, индекс ${microIdx(last.idx)}`, verdict: last.idx >= 1 ? "индекс от 1,0 — можно повторить" : "повтор не нужен"});
+    return Object.assign(res, {group:"new", cpv, why:`индекс ${microIdx(last.idx)}`, verdict: last.idx >= 0.8 ? "повторить → станет постоянным" : last.idx >= 0.7 ? "повтор под наблюдением" : "не повторять"});
+  }
+  const falling = idxs.length >= 3 && idxs[idxs.length-1] < idxs[idxs.length-2] && idxs[idxs.length-2] < idxs[idxs.length-3];
+  if(lastIdx == null) return Object.assign(res, {group:"watch", why: last.age < 7 ? "новый ролик ещё не набрал 7 дней" : "не хватает охвата или среднего охвата в карточке", verdict:"нужны цифры"});
+  if(lastIdx < 0.7 || falling) return Object.assign(res, {group:"dying", why: falling ? `индекс падает два раза подряд (${idxs.slice(-3).map(microIdx).join(" → ")})` : `индекс последнего ${microIdx(lastIdx)}`, verdict:"пауза или смена товара/формата"});
+  if(lastIdx >= 0.8) return Object.assign(res, {group:"live", why:`индекс последнего ${microIdx(lastIdx)}`, verdict:"повторы и пакеты"});
+  return Object.assign(res, {group:"watch", why:`индекс последнего ${microIdx(lastIdx)}`, verdict:"повтор осторожно"});
+}
+function microBloggerGroups(){
+  const today = todayStr(), by = new Map();
+  (DataManager.state.microInfluencerDeals||[]).forEach(d=>{
+    if(!microDealPublished(d) || !/^\d{4}-\d{2}-\d{2}/.test(d.publishDate||"") || d.publishDate > today) return;
+    const barter = !(Number(d.cost) > 0), k = (barter ? "b|" : "p|") + microBloggerKey(d.blogerName);
+    if(!by.has(k)) by.set(k, {barter, name:d.blogerName, deals:[]}); by.get(k).deals.push(d);
+  });
+  return [...by.values()].map(b=>{
+    const pubs = b.deals.slice().sort((x, y)=> String(x.publishDate).localeCompare(String(y.publishDate)));
+    const g = microGroupOf(pubs, b.barter, today), lastDeal = pubs[pubs.length-1];
+    return Object.assign(g, {name:lastDeal.blogerName || b.name, barter:b.barter, sub:g.group, group: b.barter ? "barter" : g.group,
+      manager:lastDeal.responsible || "—", lastDate:lastDeal.publishDate, count:pubs.length, noAvg: pubs.every(d=> !microDealAvgReach(d))});
+  });
+}
+function tplMicroBloggerGroups(){
+  const list = microBloggerGroups(), open = UI.microGroupOpen || "";
+  const count = k=> list.filter(x=> x.group===k).length, noAvg = list.filter(x=> x.noAvg).length;
+  const title = k=> (MICRO_GROUPS.find(g=> g.key===k) || {}).title || k;
+  const rows = open ? list.filter(x=> x.group===open).sort((a, b)=> (b.lastIdx==null?-1:b.lastIdx) - (a.lastIdx==null?-1:a.lastIdx)) : [];
+  return `
+  <div class="panel">
+    <div class="panel-title">Группы блогеров <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">считаются автоматически из интеграций — менеджерам ничего заполнять не нужно</span></div>
+    <div class="login-hint" style="margin:0 0 10px">Индекс ролика = факт.охват (Reels + TikTok) ÷ средний охват из карточки блогера. Например, средний 20 000, ролик набрал 24 000 → индекс 1,2. Индекс считается через 7 дней после выхода. Бартер (оплата 0 ₸) — отдельной группой.${noAvg ? ` <b style="color:var(--warn)">У ${noAvg} блогеров в карточке не указан средний охват — индекс для них не посчитать.</b>` : ""}</div>
+    <div class="grid-kpi" style="margin-bottom:${open?'12px':'0'}">
+      ${MICRO_GROUPS.map(g=>`<div class="kpi ${g.cls} mg-card" data-group="${g.key}" style="cursor:pointer;${open===g.key?'outline:2px solid var(--action);':''}" title="${escapeHtml(g.rule)}">
+        <div class="num">${count(g.key)}</div><div class="lbl"><b>${g.title}</b><br>${escapeHtml(g.rule)}<br><span style="color:var(--ink-soft)">→ ${escapeHtml(g.todo)}</span></div></div>`).join("")}
+    </div>
+    ${open ? (rows.length ? `<div class="table-wrap"><table><thead><tr><th>Блогер</th><th>Менеджер</th><th>Роликов</th><th>Индексы по порядку</th><th>Последний индекс</th><th>Последний выход</th>${open==="barter"?"<th>По индексу</th>":""}<th>Почему</th><th>Что делаем</th></tr></thead><tbody>
+      ${rows.map(x=>`<tr><td><button class="link-btn mbc-open" data-name="${escapeHtml(x.name)}"><b>${escapeHtml(x.name)}</b></button></td><td>${escapeHtml(x.manager)}</td><td>${x.count}</td>
+        <td>${x.vids.slice(-5).map(v=> v.idx==null ? "—" : `<span style="color:${v.idx>=0.8?'var(--ok)':v.idx>=0.7?'var(--warn)':'var(--bad)'}">${microIdx(v.idx)}</span>${v.age<7?'<small style="color:var(--ink-mute)"> (рано)</small>':''}`).join(" → ")}</td>
+        <td><b>${microIdx(x.lastIdx)}</b></td><td>${escapeHtml(x.lastDate||"")}</td>${open==="barter"?`<td>${escapeHtml(title(x.sub))}</td>`:""}<td>${escapeHtml(x.why||"")}</td><td>${escapeHtml(x.verdict||"")}</td></tr>`).join("")}
+      </tbody></table></div>` : `<div class="empty">В группе «${escapeHtml(title(open))}» сейчас никого нет</div>`) : `<div class="login-hint" style="margin:8px 0 0">Нажмите на группу, чтобы увидеть блогеров.</div>`}
+  </div>`;
+}
 function tplMicroInfluencers(){
   const s = microInfluencerSummary();
   // KPI-плашки (Всего интеграций/Уникальных блогеров/Сумма/Факт.охват/CPV/Опубликовано/Ещё
@@ -5447,6 +5518,7 @@ function tplMicroInfluencers(){
 
   return `
     ${tplMicroInfluencerBrandDashboard(s.romiRows)}
+    ${tplMicroBloggerGroups()}
     ${tplMicroInfluencerCompare(s.romiRows)}
     ${tplMicroBloggerSummary()}
     ${tplPlanSales(UI.microMonth, ["small"])}
@@ -8335,6 +8407,7 @@ function wireDeskTab(){
 
   else if(UI.tab==="microInfluencers"){
     document.getElementById("new-micro-btn").onclick = ()=> modalMicroDeal(null);
+    document.querySelectorAll(".mg-card").forEach(c=>{ c.onclick = ()=>{ UI.microGroupOpen = UI.microGroupOpen===c.dataset.group ? "" : c.dataset.group; renderDeskTab(); }; });
     document.querySelectorAll(".mbc-open").forEach(b=>{ b.onclick = e=>{ e.stopPropagation(); openMicroBloggerCard(b.dataset.name); }; });
     wirePlanCells();
 
