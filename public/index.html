@@ -6028,7 +6028,7 @@ function myReminders(opts){
 }
 // Оплата через ИП (18.11.2026): до выхода — в видео обязательна маркировка; после выхода — блогер присылает АВР.
 const MICRO_AD_MARKING = "Реклама | MIXIT | ИП Нигай";
-const MICRO_PAYMENT_METHODS = ["ИП (счёт)", "Kaspi перевод", "Наличные"];
+const MICRO_PAYMENT_METHODS = ["ИП", "Наличные"];
 function microIsIp(d){ return /(^|[^а-яёa-z])ип([^а-яёa-z]|$)/i.test([d && d.paymentMethod, d && d.coopType, d && d.conditions].join(" ")); }
 function microIpTodo(d){
   if(!d || !microIsIp(d) || microProblemStatusOf(d) === "Отказ от блогера") return "";
@@ -7320,7 +7320,7 @@ function modalMicroDeal(existing, prefill){
       <div class="field"><label>Сумма, ₸</label><input id="mm-cost" type="number" value="${d.cost||0}"></div>
       <div class="field"><label>Стоимость товара, ₸</label><input id="mm-product-cost" type="number" value="${d.productCost||0}"></div>
       <div class="field"><label>Статус оплаты</label><select id="mm-payment-status">${MICRO_PAYMENT_STATUSES.map(st=>`<option ${st===d.paymentStatus?'selected':''}>${st}</option>`).join("")}</select></div>
-      <div class="field"><label>Способ оплаты</label><input id="mm-payment-method" list="mm-payment-method-list" placeholder="ИП (счёт) / Kaspi / наличные" value="${escapeHtml(d.paymentMethod||'')}"><datalist id="mm-payment-method-list">${MICRO_PAYMENT_METHODS.map(x=>`<option value="${escapeHtml(x)}">`).join("")}</datalist></div>
+      <div class="field"><label>Способ оплаты</label><select id="mm-payment-method"><option value="">—</option>${MICRO_PAYMENT_METHODS.concat(d.paymentMethod && !MICRO_PAYMENT_METHODS.includes(d.paymentMethod) ? [d.paymentMethod] : []).map(x=>`<option ${x===d.paymentMethod?'selected':''}>${escapeHtml(x)}</option>`).join("")}</select></div>
       <div class="field"><label>ИИН</label><input id="mm-iin" value="${escapeHtml(d.iin||'')}"></div>
     </div>
     <div class="login-hint">Стоимость товара — себестоимость подарённого бартером товара; учитывается в расходах, CPV и ROMI вместе с суммой оплаты.</div>
@@ -7397,7 +7397,7 @@ function modalMicroDeal(existing, prefill){
     skuPick.value = "";
   });
   { const pm = document.getElementById("mm-payment-method"), ib = document.getElementById("mm-ip-banner");
-    if(pm && ib) pm.addEventListener("input", ()=>{ const keep = {markingChecked: (document.getElementById("mm-marking-checked")||{}).checked, avrReceived: (document.getElementById("mm-avr-received")||{}).checked};
+    if(pm && ib) pm.addEventListener("change", ()=>{ const keep = {markingChecked: (document.getElementById("mm-marking-checked")||{}).checked, avrReceived: (document.getElementById("mm-avr-received")||{}).checked};
       ib.innerHTML = microIpBannerHtml(Object.assign({}, d, keep, {paymentMethod: pm.value, id: isEdit ? existing.id : 0})); }); }
   wireMicroIpParse();
   if(isEdit) wireMicroIpDocs(existing.id);
