@@ -6723,9 +6723,9 @@ function knownProductNames(){
   const {influencerDeals, salesByDay, microInfluencerDeals} = DataManager.state;
   return [...new Set([...BOX_TYPES, ...influencerDeals.map(d=>d.product), ...salesByDay.map(s=>s.product), ...(microInfluencerDeals||[]).map(d=>d.product)])].filter(Boolean);
 }
-function modalDeal(existing){
+function modalDeal(existing, prefill){
   const isEdit = !!existing;
-  const d = existing || {blogerLogin:"", platform:PLATFORMS[0], product:"", barcode:"", responsible:"", bloggerCategory:"", plannedDate:"", publishedDate:"", plannedReach:0, plannedClicks:0, reach:0, clicks:0, likes:0, comments:0, saves:0, cost:0, plannedCost:0, plannedContribution:0, instagramLink:"", reelsLink:"", driveFolderLink:"", notes:""};
+  const d = existing || Object.assign({blogerLogin:"", platform:PLATFORMS[0], product:"", barcode:"", responsible:"", bloggerCategory:"", plannedDate:"", publishedDate:"", plannedReach:0, plannedClicks:0, reach:0, clicks:0, likes:0, comments:0, saves:0, cost:0, plannedCost:0, plannedContribution:0, instagramLink:"", reelsLink:"", driveFolderLink:"", notes:""}, prefill||{});
   const botHint = d.lastUpdatedFrom==="telegram"
     ? `<div class="login-hint">Последнее обновление — из Telegram-бота (${escapeHtml((d.lastUpdatedAt||"").replace("T"," ").slice(0,16))}). Лайки/комментарии/сохранения ниже — из распознанного скриншота.</div>`
     : "";
@@ -6738,6 +6738,7 @@ function modalDeal(existing){
       <div class="field"><label>Категория блогера</label><select id="m-category"><option value="">—</option>${LARGE_BLOGGER_CATEGORIES.map(c=>`<option ${c===d.bloggerCategory?'selected':''}>${c}</option>`).join("")}</select></div>
       <div class="field"><label>Продукт</label><input id="m-product" list="product-suggestions" placeholder="Название товара как в 1С" value="${escapeHtml(d.product||'')}"></div>
       <div class="field"><label>Штрихкод (ШК) товара</label><input id="m-barcode" placeholder="необязательно, но надёжнее" value="${escapeHtml(d.barcode||'')}"></div>
+      <div class="field"><label>Подобрать товар (добавит ШК)</label><input id="m-sku-pick" list="m-sku-pick-list" placeholder="начните: флюид, праймер, салфетки…"><datalist id="m-sku-pick-list">${microSkuAll().map(x=>`<option value="${escapeHtml(x.name+" — "+x.code)}"></option>`).join("")}</datalist></div>
       <div class="field"><label>Дата план</label><input id="m-planned-date" type="date" value="${d.plannedDate||''}"></div>
       <div class="field"><label>Дата факт (публикации)</label><input id="m-published-date" type="date" value="${d.publishedDate||''}"></div>
       <div class="field"><label>План охват</label><input id="m-planned-reach" type="number" value="${d.plannedReach||0}"></div>
@@ -6761,11 +6762,36 @@ function modalDeal(existing){
     <div class="field"><label>Папка с видео (Google Drive) <span style="font-weight:400;color:var(--ink-mute)">${(()=>{ const a=d.driveFolderAuto; return a&&a.id ? `найдена автоматически: «${escapeHtml(a.name||"")}» — поле можно не заполнять` : "пусто — подберётся сама по логину и дате, если папка названа по правилу"; })()}</span></label><input id="m-drive-folder" placeholder="https://drive.google.com/drive/folders/..." value="${escapeHtml(d.driveFolderLink||'')}"></div>
     <div class="field"><label>Комментарий</label><textarea id="m-notes">${escapeHtml(d.notes||"")}</textarea></div>
     <div class="modal-actions">
+      ${isEdit&&DataManager.state.automationFlow?'<button class="btn btn-ghost" id="m-blogery-request">ТЗ → Blogery Audit</button>':''}
       <button class="btn btn-ghost" id="m-cancel">Отмена</button>
       <button class="btn btn-primary" id="m-save">${isEdit?'Сохранить':'Добавить'}</button>
     </div>
   `);
   document.getElementById("m-cancel").onclick = closeModal;
+  // 18.11.2026: как у микро/средних — автоподбор ШК, «ТЗ → Blogery Audit» и прикреплённое ТЗ.
+  { const pick = document.getElementById("m-sku-pick");
+    if(pick){ ensureSkuCatalogLoaded(); pick.addEventListener("change", ()=>{
+      const hit = microSkuAll().find(x=> pick.value === x.name+" — "+x.code || pick.value.trim() === x.code); if(!hit) return;
+      const bc = document.getElementById("m-barcode"), cur = bc.value.split(/[,;\s]+/).map(c=>c.trim()).filter(Boolean);
+      if(!cur.includes(hit.code)) cur.push(hit.code); bc.value = cur.join(",");
+      const pr = document.getElementById("m-product"); if(pr && !pr.value.trim() && hit.name) pr.value = hit.name;
+      pick.value = ""; }); } }
+  if(isEdit){
+    const showBriefs = versions=>{ if(!versions.length || !document.getElementById("m-save")) return; const prev = document.getElementById("m-briefs"); if(prev) prev.remove();
+      const row = document.createElement("div"); row.className = "login-hint"; row.id = "m-briefs";
+      row.innerHTML = '📎 <b>ТЗ из Blogery Audit прикреплено:</b> ';
+      const sel = document.createElement("select"); versions.forEach(v=>{ const o = document.createElement("option"); o.value = v.versionId; o.textContent = v.title||"ТЗ"; sel.appendChild(o); }); sel.value = existing.flowBriefApprovedVersionId || versions[versions.length-1].versionId; row.appendChild(sel);
+      const open = document.createElement("a"); open.className = "btn btn-ghost"; open.target = "_blank"; open.rel = "noopener"; open.textContent = "Открыть PDF";
+      const setHref = ()=>{ const v = versions.find(x=>x.versionId===sel.value); open.href = (v&&v.files&&v.files.pdf)||"#"; }; setHref(); sel.onchange = setHref; row.appendChild(open);
+      document.getElementById("m-save").parentElement.before(row); };
+    showBriefs(existing.flowBriefHistory||[]);
+    apiFetch("/api/automation/brief-request/L"+existing.id).then(r=>{ const v = (r&&r.approved)||[]; if(v.length && v.length !== (existing.flowBriefHistory||[]).length){ existing.flowBriefHistory = v; showBriefs(v); } }).catch(()=>{});
+    const br = document.getElementById("m-blogery-request");
+    if(br) br.onclick = async ()=>{ try{
+      const data = await apiFetch("/api/automation/brief-request/L"+existing.id, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({notes:document.getElementById("m-notes").value})});
+      if(data.url) window.open(data.url, "_blank", "noopener,noreferrer"); else toast("Запрос ТЗ ушёл в Blogery Audit — появится во вкладке «Запросы ТЗ»");
+    }catch(e){ toast(e.message, true); } };
+  }
   // Сохраняем только то, что поменяли в этой форме (29.10.2026): раньше форма отправляла ВСЕ поля, и если
   // она была открыта давно, старые значения затирали то, что за это время внесли другие (статус оплаты и т.п.).
   const readDealForm = ()=>{
@@ -6801,7 +6827,7 @@ function modalDeal(existing){
     const toSend = isEdit ? changedFields(payload, formAtOpen) : payload;
     if(isEdit && !Object.keys(toSend).length){ closeModal(); toast("Изменений нет"); return; }
     try{
-      await withBusy(btn, ()=> isEdit ? Api.updateDeal(existing.id, toSend) : Api.createDeal(payload));
+      await withBusy(btn, ()=> isEdit ? Api.updateDeal(existing.id, toSend) : Api.createDeal(Object.assign(payload, d.crmBloggerId ? {crmBloggerId: d.crmBloggerId} : {})));
       closeModal(); toast(isEdit?"Интеграция обновлена":"Интеграция добавлена"); await DataManager.refresh(); render();
     }catch(e){ toast(e.message, true); }
   };
@@ -12867,7 +12893,7 @@ async function runSelfTests(){
 }
 
 let flowCrmProfileOpened=false;
-async function maybeOpenFlowCrmProfile(){const id=new URL(location.href).searchParams.get('crm_blogger');if(!id||!UI.authToken||flowCrmProfileOpened)return;try{const data=await apiFetch('/api/automation/crm-blogger/'+encodeURIComponent(id));flowCrmProfileOpened=true;UI.tab='microInfluencers';render();const pr=data.profile;modalMicroDeal(null,{crmBloggerId:pr.crmBloggerId,blogerName:pr.name,instagramAccount:'https://www.instagram.com/'+pr.handle+'/',phone:pr.phone,responsible:pr.responsible,followers:pr.followers||0,avgReach:pr.avgReach||0,er:pr.er||0,tiktokAccount:pr.tiktokAccount||'',followersTT:pr.followersTT||0,avgReachTT:pr.avgReachTT||0,cost:pr.cost||0,conditions:pr.notes||''});}catch(e){toast(e.message,true)}}
+async function maybeOpenFlowCrmProfile(){const id=new URL(location.href).searchParams.get('crm_blogger');if(!id||!UI.authToken||flowCrmProfileOpened)return;try{const data=await apiFetch('/api/automation/crm-blogger/'+encodeURIComponent(id));flowCrmProfileOpened=true;UI.tab='microInfluencers';render();const pr=data.profile;const openMicro=()=>{modalMicroDeal(null,{crmBloggerId:pr.crmBloggerId,blogerName:pr.name,instagramAccount:'https://www.instagram.com/'+pr.handle+'/',phone:pr.phone,responsible:pr.responsible,followers:pr.followers||0,avgReach:pr.avgReach||0,er:pr.er||0,tiktokAccount:pr.tiktokAccount||'',followersTT:pr.followersTT||0,avgReachTT:pr.avgReachTT||0,cost:pr.cost||0,conditions:pr.notes||''});};const openLarge=()=>{UI.tab="influencerDeals";render();modalDeal(null,{crmBloggerId:pr.crmBloggerId,blogerLogin:"@"+pr.handle,instagramLink:"https://www.instagram.com/"+pr.handle+"/",responsible:pr.responsible||"",plannedCost:pr.cost||0,notes:pr.notes||""});};openModal(`<h3>Куда добавить @${escapeHtml(pr.handle||pr.name||"")}?</h3><div class="login-hint">Блогер из Blogger CRM${pr.followers?" · подписчиков "+fmtNum(pr.followers):""}</div><div class="modal-actions" style="justify-content:flex-start"><button class="btn btn-primary" id="crm-to-micro">Инфлюенс микро/средние</button><button class="btn btn-primary" id="crm-to-large">Инфлюенс крупные</button><button class="btn btn-ghost" id="crm-to-cancel">Отмена</button></div>`);document.getElementById("crm-to-micro").onclick=()=>{closeModal();openMicro();};document.getElementById("crm-to-large").onclick=()=>{closeModal();openLarge();};document.getElementById("crm-to-cancel").onclick=closeModal;}catch(e){toast(e.message,true)}}
 /* =========================================================================
    14. СТАРТ ПРИЛОЖЕНИЯ
    ========================================================================= */
