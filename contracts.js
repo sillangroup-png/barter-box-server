@@ -62,6 +62,37 @@ const REQ = [['name','название ИП'],['iin','ИИН/БИН'],['address'
 const CUST = ['preamble','name','iin','address','iban','kbe','bik','bank','phone','email','head','marking'];
 const TOKENS = ['{{ИП}}','{{ИИН}}','{{СУММА}}','{{КОЛВО}}','{{НОМЕР}}'];
 const fail = (status, msg) => Object.assign(Error(msg), { status });
+// Формат размещения: от него зависят абзацы предмета договора и строка счёта.
+const FORMATS = {
+  reels_tt: { label: 'Reels + TikTok', unit: 'рекламных видеоролика с кросспостингом (Instagram Reels + TikTok)' },
+  reels: { label: 'Reels', unit: 'рекламных видеоролика в формате Reels (Instagram)' },
+  tiktok: { label: 'TikTok', unit: 'рекламных видеоролика в TikTok' },
+  stories: { label: 'Блок сторис', unit: 'блока сторис в Instagram (с активной ссылкой-стикером)' },
+  stories_reels: { label: 'Сторис + Reels', unit: 'рекламных видеоролика в формате Reels (Instagram) и блок сторис с активной ссылкой-стикером' },
+};
+const pText = p => (p.match(/<w:t(?: [^>]*)?>[^<]*<\/w:t>/g) || []).map(t => t.replace(/<[^>]+>/g, '')).join('').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+// Заменить текст абзаца (по фрагменту) целиком: текст — в первый фрагмент, остальные пустые; null — удалить абзац.
+function setParagraph(doc, anchor, text) {
+  return doc.replace(/<w:p[ >][\s\S]*?<\/w:p>/g, p => {
+    if (!pText(p).includes(anchor)) return p;
+    if (text == null) return '';
+    let first = true;
+    return p.replace(/(<w:t)(?: [^>]*)?(>)[^<]*(<\/w:t>)/g, (m, a, b, c) => { if (first) { first = false; return `${a} xml:space="preserve"${b}${xml(text)}${c}`; } return `${a}${b}${c}`; });
+  });
+}
+function applyFormat(doc, fmt, p, count) {
+  if (fmt === 'reels_tt' || !FORMATS[fmt]) return doc;
+  const places = fmt === 'tiktok' ? `в социальной сети TikTok: ${p.tiktok} (далее - “Площадка”)` : `в социальной сети Instagram: ${p.instagram} (далее - “Площадка”)`;
+  const unit = FORMATS[fmt].unit;
+  doc = setParagraph(doc, 'принимает на себя обязательства по созданию и размещению', `Исполнитель принимает на себя обязательства по созданию и размещению рекламных материалов бренда «MIXIT» (МИКСИТ) на принадлежащей Исполнителю странице ${places} в составе: ${count} ${unit}.`);
+  doc = setParagraph(doc, 'обязуется создать и разместить', `1.1. В рамках настоящего договора Исполнитель обязуется создать и разместить ${count} ${unit} в течение 1 (одного) календарного месяца с даты подписания настоящего договора в соответствии с согласованным графиком публикаций:`);
+  const bullets = { reels: [`—  ${count} видеоролика в формате Reels (Instagram) с активной ссылкой на продукт Заказчика;`, null], tiktok: [null, `—  ${count} видеоролика в TikTok с активной ссылкой на продукт Заказчика.`],
+    stories: [`—  ${count} блока сторис в Instagram с активной ссылкой-стикером на продукт Заказчика.`, null],
+    stories_reels: [`—  ${count} видеоролика в формате Reels (Instagram) с активной ссылкой на продукт Заказчика;`, `—  блок сторис в Instagram с активной ссылкой-стикером на продукт Заказчика.`] }[fmt];
+  doc = setParagraph(doc, 'в формате Reels (Instagram) с активной ссылкой', bullets[0]);
+  doc = setParagraph(doc, 'в TikTok с активной ссылкой', bullets[1]);
+  return doc;
+}
 
 function createContracts({ getState, env = process.env, dataDir }) {
   const templatePath = path.join(dataDir, 'contract-template.docx');
@@ -74,12 +105,12 @@ function createContracts({ getState, env = process.env, dataDir }) {
     if (cm.length) throw fail(503, 'Не настроены реквизиты MIXIT (CONTRACT_CUSTOMER_JSON): ' + cm.join(', '));
     const amount = Math.round(Number(body.amount != null && body.amount !== '' ? body.amount : d.cost));
     if (!(amount > 0)) throw fail(400, 'Укажите сумму');
-    const videos = Math.round(Number(body.videos) || 1);
+    const videos = Math.round(Number(body.videos) || 1); const format = FORMATS[body.format] ? body.format : 'reels_tt';
     if (!(videos >= 1 && videos <= 20)) throw fail(400, 'Количество видео — от 1 до 20');
     const date = /^\d{4}-\d{2}-\d{2}$/.test(String(body.date || '')) ? body.date : new Date().toISOString().slice(0, 10);
     const number = String(body.number || '').trim().slice(0, 40) || `${d.id}-${date.slice(5, 7)}-${date.slice(0, 4)}`;
     const ig = String(d.instagramAccount || '').trim(), tt = String(d.tiktokAccount || '').trim();
-    return { r, c, amount, videos, date, number, city: String(body.city || c.city || 'Астана').slice(0, 60),
+    return { r, c, amount, videos, format, date, number, city: String(body.city || c.city || 'Астана').slice(0, 60),
       instagram: ig || '—', tiktok: tt ? (/^https?:/.test(tt) ? tt : 'https://www.tiktok.com/@' + tt.replace(/^@/, '')) : '—' };
   }
   const safe = s => s.replace(/[\\/:*?"<>|]/g, '_');
@@ -91,7 +122,7 @@ function createContracts({ getState, env = process.env, dataDir }) {
       'ТЕЛ': p.r.phone || '—', 'EMAIL': p.r.email || '—', 'ФИО': p.r.head, 'INSTAGRAM': p.instagram, 'TIKTOK': p.tiktok, 'КОЛВО': `${p.videos} (${COUNT_WORDS[p.videos] || numberWords(p.videos)})`,
       'СУММА': money(p.amount), 'СУММА_ПРОПИСЬЮ': numberWords(p.amount) + ' тенге', 'МАРКИРОВКА': p.c.marking, 'З_ПРЕАМБУЛА': p.c.preamble, 'З_НАЗВАНИЕ': p.c.name, 'З_ИИН': p.c.iin,
       'З_АДРЕС': p.c.address, 'З_IBAN': p.c.iban, 'З_КБЕ': p.c.kbe, 'З_БИК': p.c.bik, 'З_БАНК': p.c.bank, 'З_ТЕЛ': p.c.phone, 'З_EMAIL': p.c.email, 'З_РУК': p.c.head };
-    let doc = files['word/document.xml'].toString('utf8').replace(/\{\{([^{}<>]+)\}\}/g, (m, k) => (k in v ? xml(v[k]) : m));
+    let doc = applyFormat(files['word/document.xml'].toString('utf8'), p.format, p, `${p.videos} (${COUNT_WORDS[p.videos] || numberWords(p.videos)})`).replace(/\{\{([^{}<>]+)\}\}/g, (m, k) => (k in v ? xml(v[k]) : m));
     if (/\{\{[^{}<>]+\}\}/.test(doc)) throw fail(500, 'В шаблоне остались незаполненные поля');
     files['word/document.xml'] = Buffer.from(doc, 'utf8');
     return { buffer: zip(files), filename: safe(`Договор ${p.number} — ИП ${p.r.name}.docx`) };
@@ -101,7 +132,7 @@ function createContracts({ getState, env = process.env, dataDir }) {
     const run = (t, b) => `<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>${b ? '<w:b/>' : ''}<w:sz w:val="20"/></w:rPr><w:t xml:space="preserve">${xml(t)}</w:t></w:r>`;
     const par = (inner, align, after = 60) => `<w:p><w:pPr><w:spacing w:after="${after}"/>${align ? `<w:jc w:val="${align}"/>` : ''}</w:pPr>${inner}</w:p>`;
     const cell = (t, w, b, align) => `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/></w:tcPr>${par(run(t, b), align, 0)}</w:tc>`;
-    const service = `Рекламные услуги: создание и размещение ${p.videos} (${COUNT_WORDS[p.videos] || p.videos}) рекламных видеороликов (Instagram Reels + TikTok) по договору № ${p.number} от ${dots(p.date)}`;
+    const service = `Рекламные услуги: создание и размещение ${p.videos} (${COUNT_WORDS[p.videos] || p.videos}) ${FORMATS[p.format].unit} по договору № ${p.number} от ${dots(p.date)}`;
     const W = [500, 4900, 900, 1100, 1250, 1250], B = '<w:top w:val="single" w:sz="4"/><w:left w:val="single" w:sz="4"/><w:bottom w:val="single" w:sz="4"/><w:right w:val="single" w:sz="4"/><w:insideH w:val="single" w:sz="4"/><w:insideV w:val="single" w:sz="4"/>';
     const body2 = [
       par(`<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/><w:sz w:val="28"/></w:rPr><w:t>${xml(`Счёт на оплату № ${no} от ${dots(p.date)}`)}</w:t></w:r>`, null, 200),
@@ -146,6 +177,6 @@ function createContracts({ getState, env = process.env, dataDir }) {
       } catch (e) { res.status(e.status || 500).json({ error: e.status ? e.message : 'Не удалось собрать документ' }); }
     });
   }
-  return { contract, invoice, saveTemplate, mount, numberWords, unzip, zip };
+  return { contract, invoice, saveTemplate, mount, numberWords, unzip, zip, FORMATS };
 }
 module.exports = { createContracts };
