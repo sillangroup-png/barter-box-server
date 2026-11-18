@@ -320,7 +320,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         if (q.status !== "pending" || q.nextTry > Date.now()) continue;
         const d = (st.microInfluencerDeals || []).find((x) => x.id === q.dealId);
         if (Date.now() - Date.parse(q.createdAt) > STALE_MS) { q.status = "stale"; log(q.dealId, "sys", "напоминание устарело (не отправлено вовремя) — пропущено"); changed = true; continue; }
-        if (!d || d.coordStop || isPublished(d)) { q.status = "cancelled"; log(q.dealId, "sys", "напоминание отменено: опубликовано / стоп / строка удалена"); changed = true; continue; }
+        if (!d || d.coordStop || isPublished(d) || !inPilot(d)) { q.status = "cancelled"; log(q.dealId, "sys", "напоминание отменено: опубликовано / стоп / строка удалена"); changed = true; continue; }
         if (d.coordLastOutDay === today) { q.nextTry = Date.now() + 12 * H; continue; } // не больше 1 сообщения в день
         const sentToday = c.log.filter((l) => l.dir === "out" && String(l.at).slice(0, 10) === new Date().toISOString().slice(0, 10)).length;
         if (sentToday >= k.dailyCap) { q.nextTry = Date.now() + 2 * H; continue; } // общий лимит в день
