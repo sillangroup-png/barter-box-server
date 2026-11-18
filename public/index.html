@@ -6094,7 +6094,8 @@ function microPayHtml(d, isEdit){
   return `<div id="mm-pay" style="margin:4px 0 12px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--canvas)">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:13px">💳 Подать на оплату</b><span id="mm-pay-route" style="font-size:12px"></span></div>
     <div class="form-row" style="margin-top:8px"><div class="field"><label>Сумма к оплате, ₸</label><input id="mm-pay-amount" type="number" min="1" value="${Number(d.cost)||""}"></div><div class="field"><label>Получатель</label><input id="mm-pay-recipient" value="${escapeHtml(microIsIp(d) && d.ipRequisites && d.ipRequisites.name ? "ИП «"+d.ipRequisites.name+"»" : (d.blogerName||""))}"></div><div class="field"><label>Этап</label><select id="mm-pay-stage">${["Окончательный расчёт","Предоплата","Остаток"].map(x=>`<option>${x}</option>`).join("")}</select></div></div>
-    ${rows.length > 1 ? `<div class="field"><label>Какие видео оплачиваем (сумма общая)</label><div style="display:flex;flex-direction:column;gap:3px;max-height:120px;overflow:auto">${rows.map(x=>`<label style="font-weight:400;font-size:12.5px"><input type="checkbox" class="mm-pay-deal" value="${x.id}" data-cost="${Number(x.cost)||0}" ${x.id===d.id?"checked":""}> ${escapeHtml(microDealDate(x)||"без даты")} · ${escapeHtml(x.product||"товар не указан")} · ${Number(x.cost)||0} ₸${x.flowPaymentId?" · заявка уже есть":""}</label>`).join("")}</div></div>` : ""}
+    ${rows.length > 1 ? `<div class="field"><label>Какие видео оплачиваем (сумма общая)</label><div style="display:flex;flex-direction:column;gap:3px;max-height:120px;overflow:auto">${rows.map(x=>`<label style="font-weight:400;font-size:12.5px"><input type="checkbox" class="mm-pay-deal" value="${x.id}" data-cost="${Number(x.cost)||0}" data-goods="${Number(x.productCost)||0}" ${x.id===d.id?"checked":""}> ${escapeHtml(microDealDate(x)||"без даты")} · ${escapeHtml(x.product||"товар не указан")} · ${Number(x.cost)||0} ₸${Number(x.productCost)?" · товар "+Number(x.productCost)+" ₸":""}${x.flowPaymentId?" · заявка уже есть":""}</label>`).join("")}</div></div>` : ""}
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px;margin:0 0 8px"><label style="display:flex;gap:6px;align-items:center;font-weight:600;margin:0"><input type="checkbox" id="mm-pay-goods-on"> + стоимость товара (самовыкуп на Kaspi)</label><input id="mm-pay-goods" type="number" min="0" style="width:120px" value="${rows.filter(x=>x.id===d.id).reduce((s,x)=>s+(Number(x.productCost)||0),0)||""}" placeholder="цена Kaspi, ₸"> <span id="mm-pay-total" style="color:var(--ink-mute)"></span></div>
     <div id="mm-pay-ip" style="display:none;font-size:12.5px;margin:2px 0 8px">Счёт сформируется из реквизитов ИП (блок выше) и уйдёт в Bitrix. Свой счёт от блогера: <input id="mm-pay-file" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg" style="font-size:12px"><label style="display:flex;gap:6px;align-items:center;margin-top:6px;font-weight:600"><input type="checkbox" id="mm-pay-confirm"> Реквизиты и сумма проверены</label></div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button type="button" class="btn btn-primary btn-sm" id="mm-pay-send">Отправить заявку</button><span id="mm-pay-msg" style="font-size:12px"></span></div>
     <div id="mm-pay-list" style="margin-top:6px;font-size:12px;color:var(--ink-mute)"></div>
@@ -6109,10 +6110,20 @@ function wireMicroPay(dealId){
     const rc = $("mm-pay-recipient"), nm = ($("mm-ip-name")||{}).value; if(r === "ip" && nm && !/^ИП/i.test(rc.value)) rc.value = "ИП «"+nm+"»"; return r; };
   route(); const pm = $("mm-payment-method"); if(pm) pm.addEventListener("change", route);
   const ipn = $("mm-ip-name"); if(ipn) ipn.addEventListener("input", route);
-  const recalc = ()=>{ const b = [...document.querySelectorAll(".mm-pay-deal:checked")]; if(b.length > 1) $("mm-pay-amount").value = b.reduce((s,x)=> s + (Number(x.dataset.cost)||0), 0) || $("mm-pay-amount").value; };
+  // Самовыкуп на Kaspi: к гонорару добавляется стоимость товара (по умолчанию — «Стоимость товара» выбранных видео, можно поправить на цену Kaspi).
+  let fee = Number($("mm-pay-amount").value)||0;
+  const goodsOn = ()=> $("mm-pay-goods-on").checked, goods = ()=> goodsOn() ? (Number($("mm-pay-goods").value)||0) : 0;
+  const total = ()=>{ $("mm-pay-amount").value = (fee + goods()) || ""; $("mm-pay-total").textContent = goodsOn() ? `гонорар ${fee.toLocaleString("ru-RU")} ₸ + товар ${goods().toLocaleString("ru-RU")} ₸` : ""; };
+  const recalc = ()=>{ const b = [...document.querySelectorAll(".mm-pay-deal:checked")];
+    if(b.length) fee = b.reduce((s,x)=> s + (Number(x.dataset.cost)||0), 0) || fee;
+    if(b.length) $("mm-pay-goods").value = b.reduce((s,x)=> s + (Number(x.dataset.goods)||0), 0) || "";
+    total(); };
   document.querySelectorAll(".mm-pay-deal").forEach(x=> x.onchange = recalc);
+  $("mm-pay-amount").addEventListener("input", ()=>{ fee = (Number($("mm-pay-amount").value)||0) - goods(); if(goodsOn()) $("mm-pay-total").textContent = `гонорар ${fee.toLocaleString("ru-RU")} ₸ + товар ${goods().toLocaleString("ru-RU")} ₸`; });
+  $("mm-pay-goods-on").onchange = ()=>{ if(goodsOn() && !$("mm-pay-goods").value){ const pc = Number(($("mm-product-cost")||{}).value)||0; if(pc) $("mm-pay-goods").value = pc; } total(); };
+  $("mm-pay-goods").addEventListener("input", total);
   const list = async ()=>{ try{ const r = await apiFetch("/api/automation/payments"); const mine = (r.payments||[]).filter(p=> (p.payload.integrationIds||[]).includes(String(dealId)));
-    $("mm-pay-list").innerHTML = mine.map(p=>`✓ ${escapeHtml(p.payload.stage)} · ${(p.payload.amountMinor/100).toLocaleString("ru-RU")} ₸ · ${p.payload.settlement==="ip"?"ИП":"наличные"} · CRM: ${p.crmPaymentId ? escapeHtml(p.status||"принята") : "отправляется…"}${p.payload.settlement==="ip" ? " · Bitrix: "+(p.bitrixItemId ? "№"+escapeHtml(String(p.bitrixItemId)) : escapeHtml(p.bitrixStatus||"в очереди")) : ""}${p.lastError ? ` <span style="color:var(--bad)">${escapeHtml(p.lastError)}</span>` : ""}`).join("<br>"); }catch(e){} };
+    $("mm-pay-list").innerHTML = mine.map(p=>`✓ ${escapeHtml(p.payload.stage)} · ${(p.payload.amountMinor/100).toLocaleString("ru-RU")} ₸ · ${p.payload.settlement==="ip"?"ИП":"наличные"} · CRM: ${p.crmPaymentId ? escapeHtml(p.status||"принята") : "отправляется…"}${p.payload.settlement==="ip" ? " · Bitrix: "+(p.bitrixItemId ? "№"+escapeHtml(String(p.bitrixItemId)) : escapeHtml(p.bitrixStatus||"в очереди")) : ""}${p.payload.notes ? " · "+escapeHtml(p.payload.notes) : ""}${p.lastError ? ` <span style="color:var(--bad)">${escapeHtml(p.lastError)}</span>` : ""}`).join("<br>"); }catch(e){} };
   list();
   $("mm-pay-send").onclick = async ()=>{ const btn = $("mm-pay-send");
     try{
@@ -6124,7 +6135,7 @@ function wireMicroPay(dealId){
       await Api.updateMicroDeal(dealId, {paymentMethod: $("mm-payment-method").value, responsible: ($("mm-responsible")||{}).value || undefined});
       const form = new FormData();
       if(r === "ip"){ let f = $("mm-pay-file").files[0]; if(!f){ msg("Собираю счёт из реквизитов…"); f = await microDocBlob(dealId, "invoice", {amount, videos: ids.length}); } form.append("invoice", f); }
-      form.append("payload", JSON.stringify({integrationIds: ids, amountKzt: amount, recipientName: $("mm-pay-recipient").value.trim(), settlement: r, stage: $("mm-pay-stage").value, invoiceConfirmed: r === "ip"}));
+      form.append("payload", JSON.stringify({integrationIds: ids, amountKzt: amount, recipientName: $("mm-pay-recipient").value.trim(), settlement: r, stage: $("mm-pay-stage").value, invoiceConfirmed: r === "ip", notes: goods() ? `Гонорар ${fee} ₸ + стоимость товара (самовыкуп на Kaspi) ${goods()} ₸` : ""}));
       const data = await apiFetch("/api/automation/payment-request", {method:"POST", body: form});
       msg(r === "ip" ? (data.bitrixItemId ? "Заявка в CRM и Bitrix №"+data.bitrixItemId : "Заявка в CRM; в Bitrix уходит в течение минуты") : (data.crmPaymentId ? "Заявка в Blogger CRM" : "Заявка в очереди в CRM"));
       list();
@@ -7419,13 +7430,16 @@ function modalMicroDeal(existing, prefill){
   `);
   document.getElementById("mm-cancel").onclick = closeModal;
 
-  if(isEdit&&(existing.flowBriefHistory||[]).length){
-    const versions=existing.flowBriefHistory;const row=document.createElement('div');row.className='login-hint';
+  // ТЗ из Blogery Audit: берём свежий список с сервера — страница могла быть открыта до того, как ТЗ пришло.
+  const showBriefs=(versions,approvedId)=>{if(!versions.length||!document.getElementById('mm-save'))return;const prev=document.getElementById('mm-briefs');if(prev)prev.remove();
+    const row=document.createElement('div');row.className='login-hint';row.id='mm-briefs';
     const title=document.createElement('span');title.innerHTML='📎 <b>ТЗ из Blogery Audit прикреплено:</b> ';row.appendChild(title);
-    const select=document.createElement('select');for(const v of versions){const option=document.createElement('option');option.value=v.versionId;option.textContent=(v.title||'ТЗ')+' · '+(v.status==='sent'?'отправлено':'утверждено');select.appendChild(option);}select.value=existing.flowBriefApprovedVersionId||versions[versions.length-1].versionId;row.appendChild(select);
+    const select=document.createElement('select');for(const v of versions){const option=document.createElement('option');option.value=v.versionId;option.textContent=(v.title||'ТЗ')+' · '+(v.status==='sent'?'отправлено':'утверждено');select.appendChild(option);}select.value=approvedId||versions[versions.length-1].versionId;row.appendChild(select);
     const open=document.createElement('a');open.className='btn btn-ghost';open.target='_blank';open.rel='noopener';open.textContent='Открыть PDF';const setHref=()=>{const v=versions.find(x=>x.versionId===select.value);open.href=(v&&v.files&&v.files.pdf)||'#';};setHref();select.onchange=setHref;row.appendChild(open);
-    const send=document.createElement('button');send.className='btn btn-ghost';send.textContent='Отправить ТЗ блогеру в WhatsApp';send.onclick=async()=>{try{const data=await apiFetch('/api/automation/brief-send/'+existing.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({versionId:select.value})});toast('ТЗ в очереди WhatsApp. Факт отправки подтвердит канал.');}catch(e){toast(e.message,true)}};row.appendChild(send);document.getElementById('mm-save').parentElement.before(row);
-  }
+    const send=document.createElement('button');send.className='btn btn-ghost';send.textContent='Отправить ТЗ блогеру в WhatsApp';send.onclick=async()=>{try{const data=await apiFetch('/api/automation/brief-send/'+existing.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({versionId:select.value})});toast('ТЗ в очереди WhatsApp. Факт отправки подтвердит канал.');}catch(e){toast(e.message,true)}};row.appendChild(send);const save=document.getElementById('mm-save');if(save)save.parentElement.before(row);
+  };
+  if(isEdit){showBriefs(existing.flowBriefHistory||[],existing.flowBriefApprovedVersionId);
+    apiFetch('/api/automation/brief-request/'+existing.id).then(r=>{const v=(r&&r.approved)||[];if(v.length&&v.length!==(existing.flowBriefHistory||[]).length){existing.flowBriefHistory=v;showBriefs(v,v[v.length-1].versionId);}}).catch(()=>{});}
   const blogeryRequest=document.getElementById('mm-blogery-request');
   if(blogeryRequest)blogeryRequest.onclick=async()=>{try{
     const data=await apiFetch('/api/automation/brief-request/'+existing.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:document.getElementById('mm-notes').value})});if(data.url){window.open(data.url,'_blank','noopener,noreferrer');}else toast('Запрос записан в очередь передачи в Blogery Audit');
