@@ -941,6 +941,7 @@ require("./lifecycle").mount(app,{getState:()=>state,persist:()=>persist(),requi
 require("./blogery-client").createClient({getState:()=>state,persist:()=>persist()}).mount(app,requireAuth);
 require("./crm-link").mount(app,{getState:()=>state,persist:()=>persist(),requireAuth});
 require("./finance-client").createFinanceClient({getState:()=>state,persist:()=>persist()}).mount(app,requireAuth);
+require("./contracts").createContracts({getState:()=>state,dataDir:DATA_DIR}).mount(app,requireAuth);
 
 // ---------- state & health ----------
 // /api/state отдаёт ВСЮ базу (заказы, телефоны, адреса, выручку, ROMI) — без
