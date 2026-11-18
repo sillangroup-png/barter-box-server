@@ -6181,6 +6181,7 @@ function modalMyReminders(team){
       ${sec("🔜 Скоро", r.soon, `в ближайшие ${REMINDER_SOON_DAYS} дня`)}
       ${sec("📵 Нет номера WhatsApp", r.nophone, "у строк выше — без номера бот не сможет написать")}
       ${(()=>{ const ip = myIpReminders(!!team); return sec("🏷 ИП: маркировка до выхода", ip.marking, `напомнить блогеру надпись «${escapeHtml(MICRO_AD_MARKING)}»`) + sec("📄 ИП: ждём АВР", ip.avr, "видео вышло — блогер должен прислать акт выполненных работ"); })()}
+      ${(()=>{ if(UI.readOnly) return ""; const ids = [...r.overdue, ...r.today, ...r.soon].filter(d=> !["received","approved"].includes(d.vstage||"") && waNumber(d.phone)).map(d=>d.id); return ids.length ? `<div style="margin-top:10px"><button class="btn btn-primary btn-sm" id="rem-send-all" data-ids="${ids.join(",")}">📨 Напомнить всем без видео (${ids.length})</button> <span id="rem-send-all-msg" style="font-size:12px"></span></div>` : ""; })()}
       <div id="coord-status" style="margin-top:12px;font-size:12px;color:var(--ink-mute)"></div>
     </div>
     <div class="modal-actions"><button class="btn btn-ghost" id="rem-close">Закрыть</button></div>`);
@@ -6191,6 +6192,10 @@ function modalMyReminders(team){
     const d = (DataManager.state.microInfluencerDeals||[]).find(x=> x.id === parseInt(b.dataset.id,10));
     if(d){ closeModal(); modalMicroDeal(d); }
   }; });
+  { const sa = document.getElementById("rem-send-all"); if(sa) sa.onclick = async ()=>{ const m = document.getElementById("rem-send-all-msg"); if(!confirm("Отправить напоминание в WhatsApp всем блогерам из списка, у кого ещё нет видео?")) return;
+      try{ const r = await withBusy(sa, ()=> apiFetch("/api/coord/send-now-many", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids: sa.dataset.ids.split(",").map(Number)})}));
+        m.textContent = `Отправлено: ${r.sent} · пропущено: ${r.skipped}${r.errors.length ? " · ошибки: " + r.errors.length : ""}`; m.title = r.errors.join("\n"); m.style.color = r.errors.length ? "var(--bad)" : "var(--ok,#1f8a4c)"; await DataManager.refresh(); }
+      catch(err){ m.textContent = "❌ " + err.message; m.style.color = "var(--bad)"; } }; }
   document.querySelectorAll(".coord-send-now").forEach(a=>{ a.onclick = async (e)=>{
     e.preventDefault();
     if(a.dataset.busy) return; a.dataset.busy = "1"; a.textContent = "отправляю…";
