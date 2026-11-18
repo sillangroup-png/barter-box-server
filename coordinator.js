@@ -438,7 +438,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (["video", "image", "document", "file"].includes(type)) {
       const u = url || (draft ? draft[1] : "");
       d.coordMedia = (Array.isArray(d.coordMedia) ? d.coordMedia : []).concat([{ at: new Date().toISOString(), type: draft ? "link" : type, url: u }]).slice(-20);
-      const isVideo = videoFlow.enabled() ? (type === "video" || /\.(mp4|mov|webm)(?:$|[?#])/i.test(u)) : (type === "video" || type === "document" || type === "file" || !!draft);
+      // Только настоящее видео: PDF/договор/фото — не видео (18.11: бот ответил «видео получили» на подписанный договор).
+      const isVideo = type === "video" || /\.(mp4|mov|webm|m4v|avi|mkv|3gp)(?:$|[?#])/i.test(u);
       if (isVideo && ["wait", "revise", "reshoot"].includes(stageOf(d))) {
         d.vstage = "received"; d.vreceivedAt = new Date().toISOString();
         log(d.id, "sys", "видео пришло — статус «📥 проверить»");
