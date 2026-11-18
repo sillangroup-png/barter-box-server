@@ -3807,8 +3807,8 @@ function tplMarketerDashboard(){
   const f = UI.dashPeriod;
   const ms = marketingSummary(f.from, f.to);
   return `
+    ${tplBiDashboard()}
     <div class="panel-title">Бартерные рассылки</div>
-    ${tplDashPeriodPicker()}
     <div class="grid-kpi">
       <div class="kpi"><div class="num">${ms.onDelivery}</div><div class="lbl">На доставке</div></div>
       <div class="kpi"><div class="num">${ms.pubCount}</div><div class="lbl">Публикаций зафиксировано</div></div>
@@ -3825,6 +3825,201 @@ function tplMarketerDashboard(){
 
     ${""/* список «Доставлены, но ещё не опубликовали» убран с главной (21.10.2026) — число осталось в плашке выше */}
   `;
+}
+
+/* ---------- Аналитика интеграций в стиле Power BI (18.11.2026) ----------
+   Главная маркетолога: срезы (тип / менеджер / категория / товар / период), KPI, расход и вклад по месяцам с ДРР,
+   менеджеры, категории блогеров, воронка, товары и топ блогеров. Всё считается из тех же данных, что и вкладки
+   «Инфлюенс интеграции крупные» и «микро/средние» (расход, вклад Kaspi/ручной, охват), поэтому обновляется само.
+   Клик по столбцу месяца, менеджеру, категории или товару — фильтр по нему (повторный клик снимает). */
+const BI_MONTHS = ["янв","фев","мар","апр","май","июн","июл","авг","сен","окт","ноя","дек"];
+function biState(){ if(!UI.bi) UI.bi = {type:"all", manager:"", cat:"", product:""}; return UI.bi; }
+function biRows(){
+  const large = computeInfluencerRomi().map(r=>{ const d = r.deal; return {type:"large", date:inflDealDate(d)||"", cost:Number(d.cost)||0, contrib:Number(r.netContribution)||0,
+    reach:Number(d.reach)||0, published:!!d.publishedDate, paid:d.status==="Оплачена"||d.status==="Закрыта",
+    manager:String(d.responsible||"").trim()||"—", cat:String(d.bloggerCategory||"").trim()||"Без категории", blogger:String(d.blogerLogin||"—"), product:String(d.product||"").trim()||"—"}; });
+  const micro = computeMicroInfluencerRomi().map(r=>{ const d = r.deal; return {type:"micro", date:microDealDate(d)||"", cost:microDealTotalCost(d), contrib:Number(r.netContribution)||0,
+    reach:microDealFactReach(d), published:microDealPublished(d), paid:d.paymentStatus==="оплачено",
+    manager:String(d.responsible||"").trim()||"—", cat:String(d.bloggerCategory||"").trim()||"Без категории", blogger:String(d.blogerName||"—"), product:String(d.product||"").trim()||"—"}; });
+  return large.concat(micro);
+}
+function biFilter(rows, skip){
+  const f = biState(), p = UI.dashPeriod || {};
+  return rows.filter(r=> (skip==="type" || f.type==="all" || r.type===f.type)
+    && (skip==="manager" || !f.manager || r.manager===f.manager)
+    && (skip==="cat" || !f.cat || r.cat===f.cat)
+    && (skip==="product" || !f.product || r.product===f.product)
+    && (!(p.from||p.to) || inDateRange(r.date, p.from, p.to)));
+}
+function biAgg(rows){
+  const a = {n:rows.length, cost:0, contrib:0, reach:0, pub:0, paid:0};
+  rows.forEach(r=>{ a.cost += r.cost; a.contrib += r.contrib; a.reach += r.reach; if(r.published) a.pub++; if(r.paid) a.paid++; });
+  a.drr = a.contrib > 0 ? a.cost / a.contrib * 100 : null;
+  a.romi = a.cost > 0 ? a.contrib / a.cost : null;
+  a.cpv = a.reach > 0 ? a.cost / a.reach : null;
+  return a;
+}
+function biGroup(rows, key){
+  const m = new Map(); rows.forEach(r=>{ const k = r[key]; if(!m.has(k)) m.set(k, []); m.get(k).push(r); });
+  return [...m].map(([k, rs])=> Object.assign({key:k}, biAgg(rs)));
+}
+function biMoney(v){ v = Number(v)||0; const a = Math.abs(v);
+  return a>=1e9 ? (v/1e9).toFixed(1).replace(".",",")+" млрд" : a>=1e6 ? (v/1e6).toFixed(1).replace(".",",")+" млн" : a>=1e3 ? Math.round(v/1e3)+" тыс" : String(Math.round(v)); }
+function biPct(v){ return v==null ? "—" : (v>=100 ? Math.round(v) : v.toFixed(1).replace(".",",")) + "%"; }
+function biMonthLabel(m){ const [y, mm] = m.split("-"); return BI_MONTHS[Number(mm)-1] + " " + y.slice(2); }
+function biAttr(v){ return escapeHtml(String(v)).replace(/"/g, "&quot;"); }
+
+function biMonthChart(rows){
+  const by = new Map();
+  rows.forEach(r=>{ if(!/^\d{4}-\d{2}/.test(r.date)) return; const m = r.date.slice(0,7); if(!by.has(m)) by.set(m, []); by.get(m).push(r); });
+  let ms = [...by.keys()].sort(); if(ms.length > 12) ms = ms.slice(-12);
+  if(!ms.length) return `<div class="empty">Нет интеграций с датами за выбранный период</div>`;
+  const ag = ms.map(m=> Object.assign({m}, biAgg(by.get(m))));
+  const W = 1100, H = 300, L = 62, R = 48, T = 22, B = 36, ch = H - T - B, cw = (W - L - R) / ms.length;
+  const max = Math.max(1, ...ag.map(a=> Math.max(a.cost, a.contrib)));
+  const drrVals = ag.map(a=>a.drr).filter(v=>v!=null);
+  const dAx = Math.max(20, Math.min(200, Math.ceil((drrVals.length ? Math.max(...drrVals) : 20) / 20) * 20));
+  const y = v=> T + ch * (1 - v / max), yd = v=> T + ch * (1 - Math.min(v, dAx) / dAx);
+  const per = UI.dashPeriod || {};
+  let s = `<svg viewBox="0 0 ${W} ${H}" class="bi-svg" role="img" aria-label="Расход и вклад по месяцам">`;
+  for(let i = 0; i <= 4; i++){ const v = max * i / 4, yy = y(v);
+    s += `<line x1="${L}" x2="${W-R}" y1="${yy}" y2="${yy}" stroke="var(--line)"/><text x="${L-6}" y="${yy+4}" text-anchor="end" class="bi-ax">${biMoney(v)}</text>`;
+    s += `<text x="${W-R+6}" y="${yd(dAx*i/4)+4}" class="bi-ax" fill="var(--plan)">${Math.round(dAx*i/4)}%</text>`; }
+  const bw = Math.min(30, cw * 0.3);
+  ag.forEach((a, i)=>{
+    const cx = L + cw * i + cw / 2, on = per.from===a.m+"-01";
+    s += `<g data-bi-month="${a.m}" class="bi-hit${on?' on':''}"><title>${biMonthLabel(a.m)}: расход ${fmtNum(Math.round(a.cost))} ₸, вклад ${fmtNum(Math.round(a.contrib))} ₸, ДРР ${biPct(a.drr)}, интеграций ${a.n}</title>`
+      + `<rect x="${L + cw*i + 2}" y="${T}" width="${cw-4}" height="${ch}" fill="${on?'var(--action-soft)':'transparent'}" rx="6"/>`
+      + `<rect x="${cx-bw-1}" y="${y(a.cost)}" width="${bw}" height="${Math.max(0, T+ch-y(a.cost))}" fill="var(--action)" rx="3"/>`
+      + `<rect x="${cx+1}" y="${y(a.contrib)}" width="${bw}" height="${Math.max(0, T+ch-y(a.contrib))}" fill="var(--ok)" rx="3"/>`
+      + `<text x="${cx}" y="${H-B+16}" text-anchor="middle" class="bi-ax">${biMonthLabel(a.m)}</text></g>`;
+  });
+  const pts = ag.map((a, i)=> a.drr==null ? null : [L + cw*i + cw/2, yd(a.drr), a.drr]).filter(Boolean);
+  if(pts.length > 1) s += `<polyline points="${pts.map(p=>p[0]+","+p[1]).join(" ")}" fill="none" stroke="var(--plan)" stroke-width="2.5" pointer-events="none"/>`;
+  pts.forEach(p=>{ s += `<circle cx="${p[0]}" cy="${p[1]}" r="4" fill="#fff" stroke="var(--plan)" stroke-width="2" pointer-events="none"/>`
+    + `<text x="${p[0]}" y="${p[1]-8}" text-anchor="middle" class="bi-ax" fill="var(--plan)" pointer-events="none">${p[2]>dAx?"&gt;":""}${biPct(Math.min(p[2], dAx))}</text>`; });
+  return s + `</svg>`;
+}
+function biHBars(groups, attr, limit){
+  const g = groups.slice().sort((a, b)=> b.cost - a.cost).slice(0, limit || 10);
+  if(!g.length) return `<div class="empty">Нет данных</div>`;
+  const max = Math.max(1, ...g.map(x=> Math.max(x.cost, x.contrib))), cur = biState()[attr];
+  return `<div class="bi-hbars">${g.map(x=>`<div class="bi-hrow${cur===x.key?' on':''}" data-bi-set="${attr}" data-v="${biAttr(x.key)}" title="${biAttr(x.key)}: расход ${fmtNum(Math.round(x.cost))} ₸, вклад ${fmtNum(Math.round(x.contrib))} ₸, интеграций ${x.n}">
+      <div class="bi-hlabel">${escapeHtml(x.key)}</div>
+      <div class="bi-hbar"><i class="c" style="width:${(x.cost/max*100).toFixed(1)}%"></i><i class="v" style="width:${(x.contrib/max*100).toFixed(1)}%"></i></div>
+      <div class="bi-hval">${biMoney(x.cost)} <span>/ ${biMoney(x.contrib)}</span><small>ДРР ${biPct(x.drr)} · ${x.n} инт.</small></div>
+    </div>`).join("")}</div>`;
+}
+function biDonut(groups){
+  const total = groups.reduce((s, x)=> s + x.cost, 0);
+  if(!total) return `<div class="empty">Нет расходов за период</div>`;
+  let g = groups.slice().sort((a, b)=> b.cost - a.cost);
+  if(g.length > 7){ const rest = g.slice(6); g = g.slice(0, 6).concat([Object.assign({key:"Прочие", other:true}, biAgg([]), {cost:rest.reduce((s, x)=>s + x.cost, 0), contrib:rest.reduce((s, x)=>s + x.contrib, 0), n:rest.reduce((s, x)=>s + x.n, 0)})]); }
+  const C = 2 * Math.PI * 52, cur = biState().cat; let off = 0;
+  const color = i=> (CALENDAR_PALETTE[i % CALENDAR_PALETTE.length] || {}).c || "#c86dd7";
+  let s = `<svg viewBox="0 0 140 140" class="bi-donut" role="img" aria-label="Бюджет по категориям блогеров">`;
+  g.forEach((x, i)=>{ const len = C * x.cost / total;
+    s += `<circle cx="70" cy="70" r="52" fill="none" stroke="${color(i)}" stroke-width="${cur===x.key?24:18}" stroke-dasharray="${len.toFixed(2)} ${(C-len).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}" transform="rotate(-90 70 70)"><title>${biAttr(x.key)}: ${Math.round(x.cost/total*100)}% бюджета</title></circle>`;
+    off += len; });
+  s += `<text x="70" y="66" text-anchor="middle" class="bi-dn">${biMoney(total)}</text><text x="70" y="82" text-anchor="middle" class="bi-ax">₸ расход</text></svg>`;
+  return `<div class="bi-donut-wrap">${s}<div class="bi-legend">${g.map((x, i)=>`<div class="bi-lg${cur===x.key?' on':''}"${x.other?'':` data-bi-set="cat" data-v="${biAttr(x.key)}"`}><i style="background:${color(i)}"></i><span>${escapeHtml(x.key)}</span><b>${Math.round(x.cost/total*100)}%</b><small>ДРР ${biPct(x.drr)}</small></div>`).join("")}</div></div>`;
+}
+function biFunnel(a){
+  const steps = [["Интеграций", a.n, "var(--blue)"], ["Опубликовано", a.pub, "var(--action)"], ["Оплачено", a.paid, "var(--ok)"]];
+  const max = Math.max(1, a.n);
+  return `<div class="bi-funnel">${steps.map(([l, v, c])=>`<div class="bi-fstep"><div class="bi-fbar" style="width:${Math.max(6, v/max*100).toFixed(1)}%;background:${c}">${fmtNum(v)}</div><div class="bi-flbl">${l}<span>${a.n ? Math.round(v/a.n*100) : 0}%</span></div></div>`).join("")}</div>`;
+}
+function biTopBloggers(rows){
+  const m = new Map();
+  rows.forEach(r=>{ const k = r.type + "|" + r.blogger.toLowerCase(); if(!m.has(k)) m.set(k, {blogger:r.blogger, type:r.type, managers:new Set(), rows:[]}); const o = m.get(k); o.rows.push(r); o.managers.add(r.manager); });
+  const list = [...m.values()].map(o=> Object.assign(o, biAgg(o.rows))).filter(o=> o.contrib > 0).sort((a, b)=> b.contrib - a.contrib).slice(0, 10);
+  if(!list.length) return `<div class="empty">Пока нет блогеров с посчитанным вкладом за период</div>`;
+  return `<div class="table-wrap"><table class="bi-table"><thead><tr><th>Блогер</th><th>Тип</th><th>Менеджер</th><th>Инт.</th><th>Расход</th><th>Вклад</th><th>ROMI</th><th>ДРР</th></tr></thead><tbody>
+    ${list.map(o=>`<tr><td><b>${escapeHtml(o.blogger)}</b></td><td>${o.type==="large"?"крупные":"микро/ср."}</td><td>${escapeHtml([...o.managers].join(", "))}</td><td>${o.n}</td><td>${fmtNum(Math.round(o.cost))} ₸</td><td style="color:var(--ok);font-weight:600">${fmtNum(Math.round(o.contrib))} ₸</td><td>${o.romi==null?"—":o.romi.toFixed(2)}</td><td>${biPct(o.drr)}</td></tr>`).join("")}
+  </tbody></table></div>`;
+}
+function tplBiDashboard(){
+  const f = biState(), all = biRows(), rows = biFilter(all), a = biAgg(rows);
+  const opts = (key, cur)=> biGroup(biFilter(all, key), key).sort((x, y)=> String(x.key).localeCompare(String(y.key), "ru")).map(x=>`<option value="${biAttr(x.key)}"${x.key===cur?" selected":""}>${escapeHtml(x.key)} (${x.n})</option>`).join("");
+  const seg = (v, l)=> `<button class="btn btn-sm ${f.type===v?'btn-primary':'btn-ghost'}" data-bi-set="type" data-v="${v}">${l}</button>`;
+  const any = f.type!=="all" || f.manager || f.cat || f.product;
+  const kpi = (cls, num, lbl, hint)=> `<div class="kpi ${cls}"${hint?` title="${biAttr(hint)}"`:""}><div class="num">${num}</div><div class="lbl">${lbl}</div></div>`;
+  return `
+  <style>
+    .bi-slicers{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 12px}
+    .bi-slicers select{max-width:210px}
+    .bi-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+    .bi-grid .panel{margin-bottom:0}
+    .bi-wide{grid-column:1/-1}
+    @media (max-width:900px){.bi-grid{grid-template-columns:1fr}}
+    .bi-svg{width:100%;height:auto;display:block}
+    .bi-ax{font-size:10.5px;fill:var(--ink-mute)}
+    .bi-svg text{paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round}
+    .bi-hit{cursor:pointer}.bi-hit:hover rect:first-child{fill:var(--action-soft)}
+    .bi-legend-top{display:flex;gap:14px;font-size:11.5px;color:var(--ink-soft);margin:-4px 0 6px;flex-wrap:wrap}
+    .bi-legend-top i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+    .bi-hbars{display:flex;flex-direction:column;gap:6px}
+    .bi-hrow{display:grid;grid-template-columns:minmax(80px,140px) 1fr minmax(96px,auto);gap:10px;align-items:center;cursor:pointer;padding:4px 6px;border-radius:8px}
+    .bi-hrow:hover,.bi-hrow.on{background:var(--action-soft)}
+    .bi-hlabel{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .bi-hbar{display:flex;flex-direction:column;gap:3px}.bi-hbar i{display:block;height:8px;border-radius:4px;min-width:2px}
+    .bi-hbar .c{background:var(--action)}.bi-hbar .v{background:var(--ok)}
+    .bi-hval{font-size:12px;font-weight:600;text-align:right;white-space:nowrap}.bi-hval span{color:var(--ok)}.bi-hval small{display:block;font-weight:400;color:var(--ink-mute);font-size:10.5px}
+    .bi-donut-wrap{display:flex;gap:14px;align-items:center;flex-wrap:wrap}.bi-donut{width:170px;height:170px;flex:none}
+    .bi-dn{font-size:15px;font-weight:700;fill:var(--ink)}
+    .bi-legend{flex:1;min-width:180px;display:flex;flex-direction:column;gap:4px}
+    .bi-lg{display:grid;grid-template-columns:12px 1fr auto;column-gap:8px;align-items:center;font-size:12.5px;padding:3px 6px;border-radius:8px;cursor:pointer}
+    .bi-lg:hover,.bi-lg.on{background:var(--action-soft)}.bi-lg i{width:10px;height:10px;border-radius:3px}.bi-lg small{grid-column:2/4;color:var(--ink-mute);font-size:10.5px}
+    .bi-funnel{display:flex;flex-direction:column;gap:10px;padding-top:4px}
+    .bi-fstep{display:grid;grid-template-columns:1fr 120px;gap:10px;align-items:center}
+    .bi-fbar{color:#fff;font-weight:700;font-size:13px;padding:8px 10px;border-radius:8px;white-space:nowrap}
+    .bi-flbl{font-size:12.5px}.bi-flbl span{display:block;color:var(--ink-mute);font-size:11px}
+    .bi-table td,.bi-table th{white-space:nowrap}
+  </style>
+  <div class="panel" style="background:linear-gradient(180deg,#fff, var(--canvas))">
+    <div class="panel-title">Аналитика интеграций
+      <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">крупные + микро/средние · данные Barter Box обновляются сами · клик по месяцу, менеджеру, категории или товару — фильтр</span>
+    </div>
+    ${tplDashPeriodPicker()}
+    <div class="bi-slicers">
+      ${seg("all","Все")}${seg("micro","Микро/средние")}${seg("large","Крупные")}
+      <select id="bi-manager"><option value="">Все менеджеры</option>${opts("manager", f.manager)}</select>
+      <select id="bi-cat"><option value="">Все категории блогеров</option>${opts("cat", f.cat)}</select>
+      <select id="bi-product"><option value="">Все товары</option>${opts("product", f.product)}</select>
+      ${any ? `<button class="btn btn-ghost btn-sm" id="bi-reset">Сбросить фильтры</button>` : ""}
+    </div>
+    <div class="grid-kpi">
+      ${kpi("bad", biMoney(a.cost)+" ₸", "Расход", fmtNum(Math.round(a.cost))+" ₸ — оплата блогерам + товар (микро), факт.расход (крупные)")}
+      ${kpi("ok", biMoney(a.contrib)+" ₸", "Вклад в продажи", fmtNum(Math.round(a.contrib))+" ₸ — Kaspi или ручной вклад")}
+      ${kpi(a.drr==null?"":(a.drr<=50?"ok":a.drr<=100?"warn":"bad"), biPct(a.drr), "ДРР (расход ÷ вклад)")}
+      ${kpi(a.romi==null?"":(a.romi>=1?"ok":"warn"), a.romi==null?"—":a.romi.toFixed(2), "ROMI (вклад ÷ расход)")}
+      ${kpi("", biMoney(a.reach), "Охват (факт)", fmtNum(a.reach))}
+      ${kpi("", a.cpv==null?"—":a.cpv.toFixed(2)+" ₸", "CPV (расход ÷ охват)")}
+      ${kpi("", fmtNum(a.pub)+" / "+fmtNum(a.n), "Опубликовано / интеграций")}
+    </div>
+    <div class="bi-grid">
+      <div class="panel bi-wide">
+        <div class="panel-title">Расход и вклад по месяцам <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">клик по месяцу — период</span></div>
+        <div class="bi-legend-top"><span><i style="background:var(--action)"></i>Расход</span><span><i style="background:var(--ok)"></i>Вклад в продажи</span><span><i style="background:var(--plan)"></i>ДРР, % (правая шкала)</span></div>
+        ${biMonthChart(rows)}
+      </div>
+      <div class="panel"><div class="panel-title">Менеджеры <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">расход / вклад</span></div>${biHBars(biGroup(rows, "manager"), "manager", 12)}</div>
+      <div class="panel"><div class="panel-title">Бюджет по категориям блогеров</div>${biDonut(biGroup(rows, "cat"))}</div>
+      <div class="panel"><div class="panel-title">Товары <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">топ-10 по расходу</span></div>${biHBars(biGroup(rows, "product"), "product", 10)}</div>
+      <div class="panel"><div class="panel-title">Воронка интеграций</div>${biFunnel(a)}</div>
+      <div class="panel bi-wide"><div class="panel-title">Топ-10 блогеров по вкладу</div>${biTopBloggers(rows)}</div>
+    </div>
+  </div>`;
+}
+function wireBiDashboard(){
+  const st = biState();
+  document.querySelectorAll("[data-bi-set]").forEach(el=>{ el.onclick = ()=>{ const k = el.getAttribute("data-bi-set"), v = el.getAttribute("data-v");
+    if(k==="type") st.type = v; else st[k] = st[k]===v ? "" : v; renderDeskTab(); }; });
+  ["manager","cat","product"].forEach(k=>{ const s = document.getElementById("bi-"+k); if(s) s.onchange = ()=>{ st[k] = s.value; renderDeskTab(); }; });
+  document.querySelectorAll("[data-bi-month]").forEach(g=>{ g.onclick = ()=>{ const m = g.getAttribute("data-bi-month"), [y, mm] = m.split("-").map(Number);
+    const last = new Date(y, mm, 0).getDate(), per = UI.dashPeriod || {};
+    UI.dashPeriod = (per.from===m+"-01") ? {from:"", to:""} : {from:m+"-01", to:m+"-"+String(last).padStart(2,"0")}; renderDeskTab(); }; });
+  const rs = document.getElementById("bi-reset"); if(rs) rs.onclick = ()=>{ UI.bi = {type:"all", manager:"", cat:"", product:""}; renderDeskTab(); };
 }
 
 /* ---------- Блок «Инфлюенс интеграции крупные» (общий, на оба дашборда) ---------- */
@@ -7587,6 +7782,7 @@ function modalMicroDeal(existing, prefill){
    ========================================================================= */
 function wireDeskTab(){
   if(UI.tab==="dashboard" && UI.role==="marketer"){
+    wireBiDashboard();
     const dpFrom = document.getElementById("dash-period-from");
     if(dpFrom) dpFrom.onchange = e=>{ UI.dashPeriod.from = e.target.value; renderDeskTab(); };
     const dpTo = document.getElementById("dash-period-to");
