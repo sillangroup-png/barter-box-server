@@ -229,6 +229,45 @@ select.inline-edit-input{cursor:pointer}
 .modal{background:#fff;border-radius:20px;max-width:520px;width:100%;max-height:88vh;overflow:auto;padding:22px;box-shadow:0 24px 60px rgba(90,50,75,.28)}
 .modal h3{font-size:16.5px;margin-bottom:14px;letter-spacing:-.01em}
 .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
+/* 18.11.2026: кнопки формы всегда видны внизу окна; окно интеграции шире — поля в 3–4 колонки, меньше прокрутки */
+.modal .modal-actions{position:sticky;bottom:-22px;background:#fff;margin:16px -22px -22px;padding:12px 22px 14px;border-top:1px solid var(--line);z-index:3}
+.modal.modal-wide{max-width:900px !important;width:100%}
+/* действия строки закреплены справа — не нужно прокручивать таблицу до конца */
+.sticky-right{position:sticky;right:0;z-index:1;background:#fff;box-shadow:-6px 0 8px -6px rgba(140,90,120,.28);white-space:nowrap}
+th.sticky-right{z-index:2;background:var(--canvas)}
+tr:hover td.sticky-right{background:#fef9fc}
+.mbc-open{border:none;background:none;cursor:pointer;padding:2px 3px;color:var(--ink-mute);vertical-align:-2px;border-radius:6px;line-height:0}
+.mbc-open:hover{color:var(--action);background:var(--action-soft,#fde8f1)}
+.mbc-summary{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px;padding:9px 12px;border-radius:12px;background:var(--canvas);border:1px solid var(--line);font-size:12.5px;color:var(--ink)}
+.mbc-summary b{font-weight:600}.mbc-summary a{margin-left:auto;color:var(--action);font-weight:600;text-decoration:none;white-space:nowrap}
+/* карточка блогера — панель справа */
+.bd-back{position:fixed;inset:0;background:rgba(58,47,56,.32);backdrop-filter:blur(2px);z-index:120;display:flex;justify-content:flex-end}
+.bd{width:min(460px,100%);height:100%;background:#fff;box-shadow:-20px 0 50px rgba(90,50,75,.22);display:flex;flex-direction:column;animation:bdIn .18s ease-out}
+@keyframes bdIn{from{transform:translateX(30px);opacity:.4}to{transform:none;opacity:1}}
+.bd-head{display:flex;gap:12px;align-items:center;padding:20px 20px 14px}
+.bd-ava{width:48px;height:48px;border-radius:50%;background:linear-gradient(135deg,#f4a7c6,#e8578e);color:#fff;font-weight:700;font-size:19px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.bd-name{font-size:17px;font-weight:700;letter-spacing:-.01em;word-break:break-word}
+.bd-sub{font-size:12px;color:var(--ink-mute);margin-top:2px}
+.bd-x{margin-left:auto;border:none;background:var(--canvas);width:32px;height:32px;border-radius:50%;cursor:pointer;font-size:16px;color:var(--ink-mute);flex-shrink:0}
+.bd-body{flex:1;overflow:auto;padding:0 20px 16px}
+.bd-chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.bd-chip{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border-radius:999px;background:var(--canvas);border:1px solid var(--line);font-size:12px;color:var(--ink);text-decoration:none}
+a.bd-chip:hover{border-color:var(--action);color:var(--action)}
+.bd-kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:16px}
+.bd-kpi{padding:10px 12px;border-radius:12px;background:var(--canvas)}
+.bd-kpi b{display:block;font-size:17px;font-weight:700;letter-spacing:-.01em}.bd-kpi span{font-size:11.5px;color:var(--ink-mute)}
+.bd-h{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-mute);margin:4px 0 8px}
+.bd-item{display:block;width:100%;text-align:left;border:1px solid var(--line);background:#fff;border-radius:12px;padding:10px 12px;margin-bottom:8px;cursor:pointer;font:inherit;color:inherit}
+.bd-item:hover{border-color:var(--action);box-shadow:0 4px 14px rgba(232,87,142,.12)}
+.bd-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.bd-date{font-weight:600;font-size:12.5px}
+.bd-tag{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--canvas);color:var(--ink-mute)}
+.bd-tag.ok{background:#e8f7ee;color:#1f8a4c}.bd-tag.wait{background:#fff4e0;color:#a86400}
+.bd-prod{font-size:13px;margin:5px 0 4px}
+.bd-meta{font-size:11.5px;color:var(--ink-mute)}
+.bd-foot{padding:12px 20px 16px;border-top:1px solid var(--line);display:flex;gap:8px}
+.bd-foot .btn{flex:1;justify-content:center}
+
 
 #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#3a2f38;color:#fff;padding:11px 20px;border-radius:12px;font-size:13px;z-index:200;opacity:0;pointer-events:none;transition:.25s;max-width:90vw;text-align:center;box-shadow:0 8px 24px rgba(58,47,56,.28)}
 #toast.show{opacity:1;transform:translate(-50%,-4px)}
@@ -3042,48 +3081,82 @@ function microBloggerPrefill(name){
   });
   return out;
 }
+function microBloggerStats(deals){
+  const total = deals.reduce((a,d)=> a + (Number(d.cost)||0), 0);
+  const reach = deals.reduce((a,d)=> a + microDealFactReach(d), 0);
+  return {n: deals.length, total, reach, cpv: reach ? Math.round(total/reach*100)/100 : null};
+}
+// В форме интеграции — одна строка-сводка; вся история — в карточке блогера (панель справа).
 function microBloggerHistoryHtml(name, exceptId){
   const deals = microBloggerDeals(name, exceptId);
   if(!deals.length) return "";
-  const total = deals.reduce((a,d)=> a + (Number(d.cost)||0), 0);
-  const reach = deals.reduce((a,d)=> a + microDealFactReach(d), 0);
-  const rows = deals.map(d=>`<tr class="mbc-row" data-open-id="${escapeHtml(String(d.id))}" style="cursor:pointer" title="Открыть интеграцию">
-      <td>${escapeHtml(microDealDate(d)||"—")}</td><td>${escapeHtml(d.product||"—")}</td><td>${fmtNum(d.cost||0)}</td>
-      <td>${escapeHtml(d.paymentStatus||"—")}</td><td>${escapeHtml(d.videoStatus||"—")}</td><td>${fmtNum(microDealFactReach(d))}</td>
-      <td>${escapeHtml(d.responsible||"—")}</td></tr>`).join("");
-  return `<div class="mbc-history" style="margin:4px 0 12px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--canvas)">
-    <div style="font-size:12.5px;margin-bottom:6px"><b>История интеграций: ${deals.length}</b> · сумма ${fmtNum(total)} ₸ · охват ${fmtNum(reach)}</div>
-    <div style="max-height:180px;overflow:auto"><table style="width:100%;font-size:12px"><thead><tr><th>Дата</th><th>Товар</th><th>Сумма</th><th>Оплата</th><th>Видео</th><th>Охват</th><th>Ответственный</th></tr></thead><tbody>${rows}</tbody></table></div>
-  </div>`;
+  const st = microBloggerStats(deals);
+  return `<div class="mbc-summary"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="11" r="2.2"/><path d="M5.8 16.5c.6-1.6 1.8-2.4 3.2-2.4s2.6.8 3.2 2.4M15 10h3M15 13.5h3"/></svg><span>Уже в базе: <b>${st.n}</b> ${st.n===1?"интеграция":(st.n<5?"интеграции":"интеграций")} · <b>${fmtNum(st.total)} ₸</b> · охват <b>${fmtNum(st.reach)}</b></span><a href="#" class="mbc-open-card" data-name="${escapeHtml(name)}">Карточка блогера →</a></div>`;
 }
 function wireMicroHistoryRows(root){
-  (root||document).querySelectorAll(".mbc-row[data-open-id]").forEach(tr=>{
-    tr.onclick = ()=>{
-      const d = (DataManager.state.microInfluencerDeals||[]).find(x=> String(x.id)===tr.dataset.openId);
-      if(d){ closeModal(); modalMicroDeal(d); }
-    };
+  (root||document).querySelectorAll(".mbc-open-card").forEach(a=>{
+    a.onclick = e=>{ e.preventDefault(); openMicroBloggerCard(a.dataset.name); };
   });
 }
+function closeMicroBloggerCard(){ const el = document.getElementById("bd-back"); if(el) el.remove(); document.removeEventListener("keydown", microBloggerCardKey); }
+function microBloggerCardKey(e){ if(e.key==="Escape") closeMicroBloggerCard(); }
 function openMicroBloggerCard(name){
   const deals = microBloggerDeals(name);
   if(!deals.length){ toast("Интеграций с этим блогером нет", true); return; }
+  closeMicroBloggerCard();
   const pf = microBloggerPrefill(name) || {};
-  const ig = pf.instagramAccount ? `<a href="${escapeHtml(pf.instagramAccount)}" target="_blank" rel="noopener">Instagram</a>` : "";
-  const tt = pf.tiktokAccount ? `<a href="${escapeHtml(/^https?:/.test(pf.tiktokAccount) ? pf.tiktokAccount : "https://www.tiktok.com/@"+String(pf.tiktokAccount).replace(/^@/,""))}" target="_blank" rel="noopener">TikTok</a>` : "";
-  const info = [pf.phone ? escapeHtml(pf.phone) : "", pf.city ? escapeHtml(pf.city) : "", pf.bloggerCategory ? escapeHtml(normalizeBloggerCategory(pf.bloggerCategory)) : "", pf.followers ? "подписчиков IG "+fmtNum(pf.followers) : "", ig, tt].filter(Boolean).join(" · ");
-  openModal(`
-    <h3>📇 ${escapeHtml(pf.blogerName||name)}</h3>
-    <div id="mbc-warn">${microProblemWarning(name, null)}</div>
-    <div style="font-size:12.5px;color:var(--ink-mute);margin-bottom:8px">${info || "контакты не заполнены"}</div>
-    ${microBloggerHistoryHtml(name, null)}
-    <div class="modal-actions">
-      <button class="btn btn-ghost" id="mbc-close">Закрыть</button>
-      ${UI.readOnly ? "" : `<button class="btn" id="mbc-new">➕ Новая интеграция с этим блогером</button>`}
-    </div>`);
-  document.getElementById("mbc-close").onclick = closeModal;
-  const nb = document.getElementById("mbc-new");
-  if(nb) nb.onclick = ()=>{ closeModal(); modalMicroDeal(null, Object.assign({}, pf, {responsible: microDefaultResponsible()})); };
-  wireMicroHistoryRows(document.getElementById("modal-back"));
+  const st = microBloggerStats(deals);
+  const nm = pf.blogerName || name;
+  const ttUrl = pf.tiktokAccount ? (/^https?:/.test(pf.tiktokAccount) ? pf.tiktokAccount : "https://www.tiktok.com/@"+String(pf.tiktokAccount).replace(/^@/,"")) : "";
+  const wa = String(pf.phone||"").replace(/\D/g,"");
+  const chips = [
+    pf.phone ? `<a class="bd-chip" href="https://wa.me/${escapeHtml(wa)}" target="_blank" rel="noopener">WhatsApp · ${escapeHtml(pf.phone)}</a>` : "",
+    pf.instagramAccount ? `<a class="bd-chip" href="${escapeHtml(pf.instagramAccount)}" target="_blank" rel="noopener">Instagram${pf.followers ? " · "+fmtNum(pf.followers) : ""}</a>` : "",
+    ttUrl ? `<a class="bd-chip" href="${escapeHtml(ttUrl)}" target="_blank" rel="noopener">TikTok${pf.followersTT ? " · "+fmtNum(pf.followersTT) : ""}</a>` : "",
+    pf.address ? `<span class="bd-chip">${escapeHtml(pf.address)}</span>` : "",
+  ].filter(Boolean).join("");
+  const sub = [pf.bloggerCategory ? normalizeBloggerCategory(pf.bloggerCategory) : "", pf.city || "", pf.coopType || ""].filter(Boolean).map(escapeHtml).join(" · ");
+  const items = deals.map(d=>{
+    const paid = d.paymentStatus==="оплачено", pub = d.videoStatus==="опубликовано" || microDealPublished(d);
+    const cpv0 = microDealCpv(d), cpv = cpv0 ? Math.round(cpv0*100)/100 : 0;
+    return `<button type="button" class="bd-item" data-open-id="${escapeHtml(String(d.id))}">
+      <div class="bd-row"><span class="bd-date">${escapeHtml(microDealDate(d)||"без даты")}</span>
+        <span class="bd-tag ${pub?"ok":"wait"}">${pub?"вышло":"ждём видео"}</span>
+        <span class="bd-tag ${paid?"ok":""}">${escapeHtml(d.paymentStatus||"—")}</span>
+        <span style="margin-left:auto;font-weight:600">${fmtNum(d.cost||0)} ₸</span></div>
+      <div class="bd-prod">${escapeHtml(d.product||"товар не указан")}</div>
+      <div class="bd-meta">охват ${fmtNum(microDealFactReach(d))}${cpv ? " · CPV "+cpv+" ₸" : ""} · ${escapeHtml(d.responsible||"—")}</div>
+    </button>`;
+  }).join("");
+  const back = document.createElement("div");
+  back.className = "bd-back"; back.id = "bd-back";
+  back.innerHTML = `<aside class="bd" role="dialog" aria-label="Карточка блогера">
+    <div class="bd-head"><div class="bd-ava">${escapeHtml(String(nm).replace(/^@/,"").slice(0,1).toUpperCase())}</div>
+      <div style="min-width:0"><div class="bd-name">${escapeHtml(nm)}</div><div class="bd-sub">${sub || "категория и город не указаны"}</div></div>
+      <button class="bd-x" id="bd-close" title="Закрыть">✕</button></div>
+    <div class="bd-body">
+      ${microProblemWarning(name, null)}
+      ${chips ? `<div class="bd-chips">${chips}</div>` : ""}
+      <div class="bd-kpis">
+        <div class="bd-kpi"><b>${st.n}</b><span>интеграций</span></div>
+        <div class="bd-kpi"><b>${fmtNum(st.total)} ₸</b><span>сумма</span></div>
+        <div class="bd-kpi"><b>${fmtNum(st.reach)}</b><span>охват</span></div>
+        <div class="bd-kpi"><b>${st.cpv==null ? "—" : st.cpv+" ₸"}</b><span>средний CPV</span></div>
+      </div>
+      <div class="bd-h">История интеграций</div>
+      ${items}
+    </div>
+    ${UI.readOnly ? "" : `<div class="bd-foot"><button class="btn btn-primary" id="bd-new">+ Новая интеграция с этим блогером</button></div>`}
+  </aside>`;
+  back.addEventListener("click", e=>{ if(e.target===back) closeMicroBloggerCard(); });
+  document.body.appendChild(back);
+  document.addEventListener("keydown", microBloggerCardKey);
+  document.getElementById("bd-close").onclick = closeMicroBloggerCard;
+  const nb = document.getElementById("bd-new");
+  if(nb) nb.onclick = ()=>{ closeMicroBloggerCard(); closeModal(); modalMicroDeal(null, Object.assign({}, pf, {responsible: microDefaultResponsible()})); };
+  back.querySelectorAll(".bd-item[data-open-id]").forEach(b=>{
+    b.onclick = ()=>{ const d = (DataManager.state.microInfluencerDeals||[]).find(x=> String(x.id)===b.dataset.openId); if(d){ closeMicroBloggerCard(); closeModal(); modalMicroDeal(d); } };
+  });
 }
 // Тип сотрудничества: поле coopType; у старых записей (до переноса на сервере) — «За товар»/«Бартер» в категории.
 function microCoopTypeOf(d){
@@ -5008,7 +5081,7 @@ function tplInfluencerDeals(){
           <th>#</th><th class="sticky-col">Блогер</th><th>Ответственный</th><th>Категория</th><th>Платформа</th><th>Продукт</th>
           ${UI.collapsedColGroups.has("infl-dates") ? `<th title="Дата план / Дата факт свёрнуты">Даты</th>` : `<th>Дата план</th><th>Дата факт</th>`}
           ${UI.collapsedColGroups.has("infl-reach") ? `<th title="План охват/клики / Факт охват/клики свёрнуты">Охваты</th>` : `<th>План охват/клики</th><th>Факт охват/клики</th>`}
-          <th>План/факт расход</th><th>Вклад в продажи<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-mute)">план / факт</span></th><th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th><th>ROAS, ×</th><th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (оплата блогеру). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th>${UI.collapsedColGroups.has("infl-auto") ? `<th title="Вклад по заказам Kaspi (24 ч после выхода) — свёрнуто, нажмите «+ Авто (Kaspi)» выше">Авто</th>` : `<th title="Вклад по заказам Kaspi: продажи товара сверх обычного уровня в дни выхода. Обычный уровень — среднее за дни до выхода при той же цене, без других блогеров этого товара (если цена была другой — дни после). Окно — с дня выхода, пока продажи не вернутся к обычным: у мелких до 7 дней, у крупных — только день выхода и следующий. Плюс шлейф: 50% подъёма продаж над уровнем до кампании (с поправкой на общий фон магазина — товары без блогеров; в дни скидок шлейфа нет), не попавшего в пики, делится по охвату (по корню: охват в 4 раза больше — доля в 2 раза больше) с затуханием (мелкие — до 7 дней, вдвое за 2 дня; крупные — только день выхода и следующий, сторис висят 24 ч). Скидка вычитается по прошлым сменам цены. Если в те же дни выходили другие блогеры этого товара — прирост делится по охвату (крупные и мелкие делят день, только если у меньшей стороны охват от 20% другой; иначе весь день — большей). Всплеска нет — 0. «—» — если обычный уровень определить не из чего. Ручной вклад менеджера главнее.">Авто (Kaspi)</th>`}<th>Ссылка на Reels</th><th>Статус</th><th></th>
+          <th>План/факт расход</th><th>Вклад в продажи<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-mute)">план / факт</span></th><th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th><th>ROAS, ×</th><th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (оплата блогеру). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th>${UI.collapsedColGroups.has("infl-auto") ? `<th title="Вклад по заказам Kaspi (24 ч после выхода) — свёрнуто, нажмите «+ Авто (Kaspi)» выше">Авто</th>` : `<th title="Вклад по заказам Kaspi: продажи товара сверх обычного уровня в дни выхода. Обычный уровень — среднее за дни до выхода при той же цене, без других блогеров этого товара (если цена была другой — дни после). Окно — с дня выхода, пока продажи не вернутся к обычным: у мелких до 7 дней, у крупных — только день выхода и следующий. Плюс шлейф: 50% подъёма продаж над уровнем до кампании (с поправкой на общий фон магазина — товары без блогеров; в дни скидок шлейфа нет), не попавшего в пики, делится по охвату (по корню: охват в 4 раза больше — доля в 2 раза больше) с затуханием (мелкие — до 7 дней, вдвое за 2 дня; крупные — только день выхода и следующий, сторис висят 24 ч). Скидка вычитается по прошлым сменам цены. Если в те же дни выходили другие блогеры этого товара — прирост делится по охвату (крупные и мелкие делят день, только если у меньшей стороны охват от 20% другой; иначе весь день — большей). Всплеска нет — 0. «—» — если обычный уровень определить не из чего. Ручной вклад менеджера главнее.">Авто (Kaspi)</th>`}<th>Ссылка на Reels</th><th>Статус</th><th class="sticky-right"></th>
         </tr></thead>
         <tbody>
           ${rows.map((r,i)=>{
@@ -5048,7 +5121,7 @@ function tplInfluencerDeals(){
                 ? `<a href="${escapeHtml(normalizeLinkUrl(d.reelsLink))}" target="_blank" rel="noopener">${escapeHtml(d.reelsLink)}</a> ${inlineEditSpan("✎", d.id, 'reelsLink', d.reelsLink, 'text')}`
                 : inlineEditSpan("—", d.id, 'reelsLink', '', 'text')}</td>
               <td><select class="deal-status-select" data-id="${d.id}">${DEAL_STATUSES.map(st=>`<option ${st===d.status?'selected':''}>${st}</option>`).join("")}</select></td>
-              <td>
+              <td class="sticky-right">
                 <button class="btn btn-ghost btn-sm edit-deal-btn" data-id="${d.id}">✎</button>
                 <button class="btn btn-ghost btn-sm audit-row-btn" data-e="large" data-id="${d.id}" title="История изменений этой строки">🕘</button>
                 <button class="btn btn-danger btn-sm del-deal-btn" data-id="${d.id}">✕</button>
@@ -5331,7 +5404,7 @@ function tplMicroInfluencers(){
           ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
           ${sortableTh("Вклад в продажи (план/факт)","sales",mf.sort)}<th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th>${sortableTh("ROAS, ×","romi",mf.sort)}
         <th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (сумма оплаты + стоимость переданного товара). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th><th title="Вклад по заказам Kaspi: продажи товара сверх обычного уровня в дни выхода. Обычный уровень — среднее за дни до выхода при той же цене, без других блогеров этого товара (если цена была другой — дни после). Окно — с дня выхода, пока продажи не вернутся к обычным: у мелких до 7 дней, у крупных — только день выхода и следующий. Плюс шлейф: 50% подъёма продаж над уровнем до кампании (с поправкой на общий фон магазина — товары без блогеров; в дни скидок шлейфа нет), не попавшего в пики, делится по охвату (по корню: охват в 4 раза больше — доля в 2 раза больше) с затуханием (мелкие — до 7 дней, вдвое за 2 дня; крупные — только день выхода и следующий, сторис висят 24 ч). Скидка вычитается по прошлым сменам цены. Если в те же дни выходили другие блогеры этого товара — прирост делится по охвату (крупные и мелкие делят день, только если у меньшей стороны охват от 20% другой; иначе весь день — большей). Всплеска нет — 0. «—» — если обычный уровень определить не из чего. Ручной вклад менеджера главнее.">${UI.collapsedColGroups.has("infl-auto") ? `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">+ Авто</span>` : `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">− Авто (Kaspi)</span>`}</th>
-          <th>Статус товара</th><th>Статус видео</th><th title="На каком языке видео: ru / kz (в т.ч. смешанный рус+каз) / под музыку (без речи)">Язык видео</th><th>Плановая дата</th><th>Дата выкладки</th><th title="Формат (Reels + TikTok / Сторис / Reels + Сторис / Сторис + Reels + TikTok), ссылка на Reels; у сторис — охват и клики вручную (ссылки нет)">Ссылка / сторис</th><th></th>
+          <th>Статус товара</th><th>Статус видео</th><th title="На каком языке видео: ru / kz (в т.ч. смешанный рус+каз) / под музыку (без речи)">Язык видео</th><th>Плановая дата</th><th>Дата выкладки</th><th title="Формат (Reels + TikTok / Сторис / Reels + Сторис / Сторис + Reels + TikTok), ссылка на Reels; у сторис — охват и клики вручную (ссылки нет)">Ссылка / сторис</th><th class="sticky-right"></th>
         </tr></thead>
         <tbody>
           ${pageDeals.map((d,i)=>{
@@ -5344,7 +5417,7 @@ function tplMicroInfluencers(){
             return `<tr${rowStyle}>
               <td class="rowcheck"><input type="checkbox" class="micro-row-check" data-id="${d.id}" ${UI.selectedMicroIds.has(d.id)?'checked':''}></td>
               <td>${pageOffset+i+1}</td>
-              <td class="sticky-col">${pb && pb.status==="Отказ от блогера" ? '<span title="Отказ от блогера">⛔ </span>' : ""}${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')} <button type="button" class="mbc-open" data-name="${escapeHtml(d.blogerName||'')}" title="Карточка блогера: история интеграций, новая интеграция" style="border:none;background:none;cursor:pointer;padding:0 2px;font-size:13px">📇</button>${microHasStories(d) ? ` <span style="font-size:10.5px;padding:1px 6px;border-radius:8px;background:var(--canvas);border:1px solid var(--line);white-space:nowrap" title="${escapeHtml(microFormatOf(d))}">📱 сторис</span>` : ""}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
+              <td class="sticky-col">${pb && pb.status==="Отказ от блогера" ? '<span title="Отказ от блогера">⛔ </span>' : ""}${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')} <button type="button" class="mbc-open" data-name="${escapeHtml(d.blogerName||'')}" title="Карточка блогера: история интеграций, новая интеграция"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="11" r="2.2"/><path d="M5.8 16.5c.6-1.6 1.8-2.4 3.2-2.4s2.6.8 3.2 2.4M15 10h3M15 13.5h3"/></svg></button>${microHasStories(d) ? ` <span style="font-size:10.5px;padding:1px 6px;border-radius:8px;background:var(--canvas);border:1px solid var(--line);white-space:nowrap" title="${escapeHtml(microFormatOf(d))}">📱 сторис</span>` : ""}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
               <td>${microProblemCell(d, pb)}</td>
               <td>${inlineEditSpan(escapeHtml(d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "—"), d.id, 'bloggerCategory', d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : '', 'select', MICRO_BLOGGER_CATEGORIES)}</td>
               <td>${inlineEditSpan(microCoopTypeOf(d) ? `<span style="white-space:nowrap${microCoopTypeOf(d)==="За товар" ? ";color:var(--accent,#c2185b)" : ""}">${escapeHtml(microCoopTypeOf(d))}</span>` : '<span style="color:var(--ink-mute)">—</span>', d.id, 'coopType', microCoopTypeOf(d), 'select', MICRO_COOP_TYPES)}</td>
@@ -5384,7 +5457,7 @@ function tplMicroInfluencers(){
               <td>${inlineEditSpan(escapeHtml(d.plannedDate||"—"), d.id, 'plannedDate', d.plannedDate||'', 'date')}</td>
               <td>${inlineEditSpan(escapeHtml(d.publishDate||"—"), d.id, 'publishDate', d.publishDate||'', 'date')}</td>
               <td>${microLinkStoriesCell(d)}</td>
-              <td>
+              <td class="sticky-right">
                 <button class="btn btn-ghost btn-sm edit-micro-btn" data-id="${d.id}">✎</button>
                 <button class="btn btn-ghost btn-sm audit-row-btn" data-e="micro" data-id="${d.id}" title="История изменений этой строки">🕘</button>
                 <button class="btn btn-danger btn-sm del-micro-btn" data-id="${d.id}">✕</button>
@@ -7290,6 +7363,7 @@ function modalMicroDeal(existing, prefill){
     };
   };
   const formAtOpen = readMicroForm();
+  { const ms = document.querySelectorAll(".modal-back .modal"), m = ms[ms.length-1]; if(m) m.classList.add("modal-wide"); }
   if(isEdit) bindVideoStageButtons(()=>{ closeModal(); const fresh = (DataManager.state.microInfluencerDeals||[]).find(x=> x.id === existing.id); if(fresh) modalMicroDeal(fresh); render(); });
   document.getElementById("mm-save").onclick = async ()=>{
     const btn = document.getElementById("mm-save");
