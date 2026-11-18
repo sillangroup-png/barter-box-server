@@ -8555,7 +8555,9 @@ function driverOrders(){
 function renderDriverShell(){
   const app = document.getElementById("app");
   const drv = DataManager.state.drivers.find(d=>d.code===UI.driverCode);
-  if(!drv){ logout(); return; }
+  // Разлогиниваем только водителя, которого нет в базе. Раньше сюда попадал самотест комментария водителя
+  // (после await) — и при КАЖДОЙ загрузке страницы отзывал токен менеджера/маркетолога (18.11.2026).
+  if(!drv){ if(UI.role === "driver") logout(); return; }
   const own = driverOrders();
   const done = own.filter(o=>o.status==="delivered").length;
   const problem = own.filter(o=>(STATUS_META[o.status]||{}).group==="problem").length;
@@ -8689,7 +8691,7 @@ function renderDriverOrderModal(){
         await withBusy(btn, ()=> Api.deliverOrder(o.id, photoFile, document.getElementById("d-comment").value.trim()));
         UI.driverAwaiting=null; UI.openOrderId=null;
         closeModal(); toast("Доставка закрыта: Доставлено ✅");
-        await DataManager.refresh(); renderDriverShell();
+        await DataManager.refresh(); if(UI.role === "driver") renderDriverShell();
       }catch(e){ toast(e.message, true); }
     };
     return;
@@ -8731,7 +8733,7 @@ function renderDriverOrderModal(){
         await withBusy(btn, ()=> Api.problemOrder(o.id, UI.driverReasonCode, comment));
         UI.driverAwaiting=null; UI.driverReasonCode=null; UI.openOrderId=null;
         closeModal(); toast(`Зафиксировано: ${label}`);
-        await DataManager.refresh(); renderDriverShell();
+        await DataManager.refresh(); if(UI.role === "driver") renderDriverShell();
       }catch(e){ toast(e.message, true); }
     };
     return;
@@ -8762,7 +8764,7 @@ function renderDriverOrderModal(){
         await withBusy(btn, ()=> Api.updateOrder(o.id, {driverComment: val}));
         UI.driverEditingComment=false;
         closeModal(); toast("Комментарий сохранён");
-        await DataManager.refresh(); renderDriverShell();
+        await DataManager.refresh(); if(UI.role === "driver") renderDriverShell();
       }catch(e){ toast(e.message, true); }
     };
     return;
