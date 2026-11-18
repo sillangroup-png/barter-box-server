@@ -7421,8 +7421,9 @@ function modalMicroDeal(existing, prefill){
 
   if(isEdit&&(existing.flowBriefHistory||[]).length){
     const versions=existing.flowBriefHistory;const row=document.createElement('div');row.className='login-hint';
-    const title=document.createElement('span');title.textContent='Утверждённое ТЗ из Blogery Audit: ';row.appendChild(title);
+    const title=document.createElement('span');title.innerHTML='📎 <b>ТЗ из Blogery Audit прикреплено:</b> ';row.appendChild(title);
     const select=document.createElement('select');for(const v of versions){const option=document.createElement('option');option.value=v.versionId;option.textContent=(v.title||'ТЗ')+' · '+(v.status==='sent'?'отправлено':'утверждено');select.appendChild(option);}select.value=existing.flowBriefApprovedVersionId||versions[versions.length-1].versionId;row.appendChild(select);
+    const open=document.createElement('a');open.className='btn btn-ghost';open.target='_blank';open.rel='noopener';open.textContent='Открыть PDF';const setHref=()=>{const v=versions.find(x=>x.versionId===select.value);open.href=(v&&v.files&&v.files.pdf)||'#';};setHref();select.onchange=setHref;row.appendChild(open);
     const send=document.createElement('button');send.className='btn btn-ghost';send.textContent='Отправить ТЗ блогеру в WhatsApp';send.onclick=async()=>{try{const data=await apiFetch('/api/automation/brief-send/'+existing.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({versionId:select.value})});toast('ТЗ в очереди WhatsApp. Факт отправки подтвердит канал.');}catch(e){toast(e.message,true)}};row.appendChild(send);document.getElementById('mm-save').parentElement.before(row);
   }
   const blogeryRequest=document.getElementById('mm-blogery-request');
