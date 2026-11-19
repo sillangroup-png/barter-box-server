@@ -34,17 +34,20 @@ function createClient({getState,persist,fetchImpl=fetch,env=process.env}){
    if(!response.ok)throw Error('HTTP '+response.status);const result=await response.json();if(!result.id)throw Error('Ответ без ID запроса');Object.assign(row,{status:'received',remoteRequestId:result.id,url:origin+'/?flow_request='+encodeURIComponent(result.id),receivedAt:new Date().toISOString(),lastError:null});
   }catch(e){row.lastError=/^HTTP \d+$/.test(e.message)?e.message:'Ошибка связи с Blogery Audit';}persist();}
   // Готовые ТЗ из Blogery Audit (18.11.2026): забираем PDF, утверждаем версию в интеграции, включаем отправку блогеру в WhatsApp.
-  const base=String(env.BLOGERY_REQUESTS_URL||'').replace(/\/+$/,'');const waiting=store().filter(r=>r.status==='received'&&r.remoteRequestId&&(!r.readyNextAt||r.readyNextAt<=Date.now())).slice(0,30);
+  const base=String(env.BLOGERY_REQUESTS_URL||'').replace(/\/+$/,'');const waiting=store().filter(r=>['received','approved'].includes(r.status)&&r.remoteRequestId&&(!r.readyNextAt||r.readyNextAt<=Date.now())).slice(0,30);
   if(base&&waiting.length){for(const r of waiting)r.readyNextAt=Date.now()+60000;try{
    const resp=await fetchImpl(new URL(base+'/status'),{method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),headers:{Authorization:'Bearer '+env.BLOGERY_BRIDGE_SECRET,'Content-Type':'application/json'},body:JSON.stringify({ids:waiting.map(r=>r.remoteRequestId)})});
    const data=resp.ok?await resp.json():{};
    for(const it of data.items||[]){const row=waiting.find(r=>r.remoteRequestId===it.id);if(!row||it.status!=='ready'||!it.pdfUrl||!/^[a-f0-9]{64}$/.test(it.contentSha256||''))continue;
     const {large,deal}=findDeal(row.integrationId);if(!deal)continue;
     const versionId=String(it.briefId)+':'+it.contentSha256.slice(0,12);
+    // 19.11.2026: ТЗ пересобрали в Blogery Audit (снова ready, другой PDF) — перезабираем и заменяем; то же самое — пропускаем
+    if((row.status==='approved'&&row.approvedVersionId===versionId)||(row.removedVersionIds||[]).includes(versionId))continue;
+    const replaceOld=v=>{for(const x of (deal.flowBriefHistory||[]))if(x.versionId!==versionId&&x.status==='approved')x.status='replaced';};
     if(large){try{new URL(it.pdfUrl);}catch{continue;}const versions=deal.flowBriefHistory||(deal.flowBriefHistory=[]);
      if(!versions.some(v=>v.versionId===versionId))versions.push({briefId:String(it.briefId),versionId,title:String(it.title||'ТЗ'),files:{pdf:it.pdfUrl},contentSha256:it.contentSha256,approvedBy:String(it.approvedBy||'тимлид'),approvedAt:new Date().toISOString(),status:'approved'});
-     deal.flowBriefApprovedVersionId=versionId;}
-    else try{createService(getState,persist).execute('Blogery Audit',{action:'brief_approved',data:{dealId:deal.id,briefId:String(it.briefId),versionId,approvedBy:it.approvedBy||'тимлид',contentSha256:it.contentSha256,files:{pdf:it.pdfUrl},title:it.title||'ТЗ'}},'blogery-ready:'+it.id+':'+it.contentSha256.slice(0,16));}catch(e){row.lastError='ТЗ не принято: '+e.message;continue;}
+     replaceOld();deal.flowBriefApprovedVersionId=versionId;}
+    else try{createService(getState,persist).execute('Blogery Audit',{action:'brief_approved',data:{dealId:deal.id,briefId:String(it.briefId),versionId,approvedBy:it.approvedBy||'тимлид',contentSha256:it.contentSha256,files:{pdf:it.pdfUrl},title:it.title||'ТЗ'}},'blogery-ready:'+it.id+':'+it.contentSha256.slice(0,16));replaceOld();deal.flowBriefApprovedVersionId=versionId;}catch(e){row.lastError='ТЗ не принято: '+e.message;continue;}
     // ТЗ только прикрепляется к интеграции; блогеру отправляет менеджер кнопкой «Отправить ТЗ блогеру» (решение Нины 18.11).
     deal.flowBriefReadyAt=new Date().toISOString();
     Object.assign(row,{status:'approved',approvedVersionId:versionId,approvedAt:new Date().toISOString(),lastError:null});persist();
@@ -63,6 +66,17 @@ function createClient({getState,persist,fetchImpl=fetch,env=process.env}){
   if(env.FLOW_LOGISTICS_ENABLED!=='1')return;
   const staff=(req,res,next)=>['manager','marketer'].includes(req.session.role)?next():res.status(403).json({error:'Нет доступа'});
   app.post('/api/automation/brief-request/:id',requireAuth,staff,(req,res)=>{try{const {large,deal:d}=findDeal(req.params.id);if(!d)return res.status(404).json({error:'Интеграция не найдена'});let actor=req.session.name||'общий вход';try{actor=req.session.name||decodeURIComponent(req.headers['x-actor']||'')||actor}catch{}const row=request(d,actor,String(req.body?.notes||'').slice(0,5000),large);res.json(row);drain().catch(()=>{});}catch(e){res.status(400).json({error:e.message})}});
+  // 19.11.2026: убрать прикреплённое ТЗ из интеграции (например, ТЗ на другой товар). Отправленное блогеру не убираем.
+  app.post('/api/automation/brief-remove/:id',requireAuth,staff,(req,res)=>{try{const iid=String(req.params.id);const {deal}=findDeal(iid);if(!deal)return res.status(404).json({error:'Интеграция не найдена'});
+   const vid=String(req.body?.versionId||'');const list=deal.flowBriefHistory||[];const v=list.find(x=>x.versionId===vid);if(!v)return res.status(404).json({error:'Такого ТЗ в интеграции нет'});
+   if(v.status==='sent'||v.sentAt)return res.status(409).json({error:'Это ТЗ уже отправлено блогеру — убрать нельзя'});
+   deal.flowBriefHistory=list.filter(x=>x!==v&&!(x.briefId===v.briefId&&x.status==='replaced'));const left=deal.flowBriefHistory.filter(x=>x.status!=='replaced');
+   if(deal.flowBriefApprovedVersionId===vid)deal.flowBriefApprovedVersionId=left.length?left[left.length-1].versionId:'';
+   const row=store().find(r=>String(r.integrationId)===iid&&r.status!=='cancelled');
+   if(row){(row.removedVersionIds||(row.removedVersionIds=[])).push(vid);if(row.approvedVersionId===vid)Object.assign(row,{status:'received',approvedVersionId:null,readyNextAt:0});}
+   let actor=req.session.name||'общий вход';try{actor=req.session.name||decodeURIComponent(req.headers['x-actor']||'')||actor}catch{}
+   const af=getState().automationFlow;(af.events||(af.events=[])).push({id:crypto.randomUUID(),at:new Date().toISOString(),actor,action:'brief.removed',entityId:deal.id,versionId:vid,title:v.title});
+   persist();res.json({ok:true,approved:deal.flowBriefHistory,approvedId:deal.flowBriefApprovedVersionId||''});}catch(e){res.status(400).json({error:e.message})}});
   app.get('/api/automation/brief-request/:id',requireAuth,staff,(req,res)=>res.json({request:store().find(r=>r.integrationId===req.params.id)||null,approved:findDeal(req.params.id).deal?.flowBriefHistory||[]}));
   const timer=setInterval(()=>drain().catch(()=>{}),30000);timer.unref();
  }
