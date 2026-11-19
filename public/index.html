@@ -3831,6 +3831,82 @@ const VT_DIMS = [
 ];
 const VT_LANG = {ru:"Русский", kz:"Казахский", "смешанный":"Казахский + русский"};
 function vtCity(v){ v = String(v||"").trim(); return v ? v.charAt(0).toUpperCase() + v.slice(1).toLowerCase() : "Не указан"; }
+// Категория товара — сама, по товару (19.11.2026): сначала по ШК из справочника, потом по словам в названии,
+// и только если не определилась — то, что вписали руками (регистр выравнивается: «декор» = «Декор»).
+const PCAT_RULES = [
+  ["Атопик", /атопи/],
+  ["Уход", /энзим|пудр[аы]? ?для умыв/],
+  ["Декор", /тушь|ресниц|помад|блеск|палетк|тени|теней|пудр|флюид|тональн|консилер|корректор|румян|скульпт|контур|хайлайт|бронзер|праймер|фиксатор|карандаш|подводк|лайнер|для губ|губ[аы]? |lip|матирующ|салфетк|kissmas|midnight|beauty bag|spf-стик|макияж|velvet|perfectrix|lashlust|декор/],
+  ["Уход", /крем|сыворот|маск|скраб|гел[ья]|пенк|масл|тоник|пэд|патч|мист|баттер|шампун|кондиционер|бальзам|спикул|pdrn|коллаген|collagen|кератин|vitamin|витамин|мицелляр|rice|рис|mango|манго|coconut|кокос|first class|бестселлер|sos|душ|тел[оа]|волос|увлажн|лосьон|спрей|уход/],
+];
+function pcatNorm(v){
+  v = String(v||"").trim(); if(!v) return "";
+  const l = v.toLowerCase();
+  if(/^уход/.test(l)) return "Уход"; if(/^декор/.test(l)) return "Декор"; if(/^атопи/.test(l)) return "Атопик";
+  return v.charAt(0).toUpperCase() + v.slice(1);
+}
+// Товар для дашборда — одна строка на товар (19.11.2026): «пудра минеральная», «Минеральная пудра» и ШК пудры
+// склеиваются; оттенки 01/02 — один товар. Сначала по ШК, которые пишут менеджеры, потом по словам в названии.
+const PRODUCT_FAMILIES = [
+  ["Набор Kissmas Drop", /kissmas/], ["Набор Midnight Beauty Bag", /midnight|beauty bag/], ["Набор Sweet Care Lip Set", /sweet care/],
+  ["Набор First Class Set (миниатюры)", /first class|бестселлер|bestsellers|миниатюр/], ["Lip Combo", /lip combo/],
+  ["Набор PDRN", /набор.*pdrn|pdrn.*набор/], ["Набор Vitamin C", /набор.*(vitamin|витамин)|(vitamin|витамин).*набор/],
+  ["Набор Coconut Combo", /coconut|кокос/], ["Набор спикулы", /набор.*спикул/], ["Набор Collagen + Biotin", /biotin|биотин/],
+  ["Набор Коллаген и аминокислоты", /аминокисл/],
+  ["Гель для умывания (атопик)", /атопи.*умыв|умыв.*атопи/], ["Масло-гель для душа (атопик)", /атопи.*(масл|душ)|(масл|душ).*атопи/],
+  ["Крем для атопичной кожи", /атопи/],
+  ["Палетка-скульптор 3в1", /3 ?в ?1|3 ?in ?1|contour palette|палетк.*скульпт|скульпт.*палетк/],
+  ["Термотушь бургунди", /термотушь|тушь.*бургунди|бургунди.*тушь/], ["Палетка теней бургунди", /палетк.*тен|тени|теней/],
+  ["Тушь LashLust", /lashlust|тушь/],
+  ["Стик-румяна Perfectrix", /румян|blush/], ["Стик-контур Perfectrix", /контур|perfectrix|скульптор/],
+  ["Тональный флюид Velvet", /флюид|velvet|тонирующ|тональн/],
+  ["Энзимная пудра Vitamin C", /энзим/], ["Минеральная пудра", /пудр|powder/],
+  ["Спрей-фиксатор макияжа", /фиксир|фиксатор|setting spray/],
+  ["Блеск-бальзам «Вишнёвая кола»", /вишн|черри|cherry|кола/], ["Бальзам для губ Лабубу", /лабубу|labubu/],
+  ["SPF-стик 50", /spf/], ["Матирующие салфетки", /матирующ|салфетк|blotting/],
+  ["Маска ламинирующая Collagen & Keratin", /ламинир|слайм|keratin|кератин/],
+  ["Сыворотка со спикулами", /сыворот.*спикул|spicule.*serum|spicule face/], ["Крем-бустер со спикулами", /бустер/], ["Спикулы", /спикул|spicule/],
+  ["Крем Vitamin C", /крем.*(vitamin|витамин)|(vitamin|витамин).*крем/],
+  ["Vitamin C (уход)", /vitamin|витамин/], ["Пенка White Rice", /rice|рисов/], ["Гидрофильное масло Mango", /гидрофил|mango|манго/], ["Мицеллярная вода", /мицелляр/],
+  ["Пэды PDRN", /пэд|pads|pdrn/], ["SOS-стик", /\bsos\b/], ["Гель для душа «Формула мечты»", /формула мечты/],
+];
+function productFamily(s){
+  s = String(s||"").toLowerCase().replace(/ё/g,"е");
+  for(const [fam, re] of PRODUCT_FAMILIES) if(re.test(s)) return fam;
+  return "";
+}
+function productLabelOf(d){
+  const codes = String(d.barcode||"").split(/[,;\s]+/).map(c=>c.trim()).filter(Boolean);
+  const fams = new Set();
+  codes.forEach(c=>{
+    const hit = MICRO_SKU_CATALOG.find(x=>x.code===c) || (SKU_CATALOG_REMOTE||[]).find(x=>x.code===c);
+    if(hit){ fams.add(productFamily(hit.name) || String(hit.name||"").trim()); }
+  });
+  fams.delete("");
+  if(fams.size) return [...fams].sort().join(" + ");
+  const raw = String(d.product||"").trim();
+  if(!raw || raw === "—") return "Не указан";
+  const parts = raw.replace(/\([^)]*\)/g," ").split(/[,;+]|\s-\s/).map(x=>x.trim()).filter(Boolean);
+  parts.forEach(x=>{ const f = productFamily(x); if(f) fams.add(f); });
+  if(!fams.size){ const f = productFamily(raw); if(f) fams.add(f); }
+  if(fams.size) return [...fams].sort().join(" + ");
+  const clean = raw.replace(/\s+/g," ").replace(/^(mixit\s*)?(make ?up\s*)?/i,"").trim() || raw;
+  return clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
+}
+function productCategoryOf(d){
+  const codes = String(d.barcode||"").split(/[,;\s]+/).map(c=>c.trim()).filter(Boolean);
+  const cnt = {};
+  codes.forEach(c=>{ const hit = MICRO_SKU_CATALOG.find(x=>x.code===c); if(hit && /^(Уход|Декор|Атопик)$/.test(hit.group)) cnt[hit.group] = (cnt[hit.group]||0) + 1; });
+  const byCode = Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0];
+  if(byCode) return byCode;
+  const name = " " + String(d.product||"").toLowerCase().replace(/ё/g,"е") + " ";
+  if(name.trim() && name.trim() !== "—"){
+    const hit = MICRO_SKU_CATALOG.find(x=> /^(Уход|Декор|Атопик)$/.test(x.group) && name.includes(x.name.toLowerCase().replace(/ё/g,"е")));
+    if(hit) return hit.group;
+    for(const [cat, re] of PCAT_RULES) if(re.test(name)) return cat;
+  }
+  return pcatNorm(d.productCategory) || "Не указана";
+}
 const VT_MON = ["Янв","Фев","Мар","Апр","Май","Июн","Июл","Авг","Сен","Окт","Ноя","Дек"];
 const VT_KEY = "bb_vitrina_v1", VT_SAVED = "bb_vitrina_saved_v1";
 function vtDefault(){
@@ -3851,17 +3927,17 @@ function vtSavedList(){ try{ return JSON.parse(localStorage.getItem(VT_SAVED) ||
 function vtMetric(k){ return VT_METRICS.find(x=>x.k===k) || VT_METRICS[0]; }
 function vtRows(){
   const large = computeInfluencerRomi().map(r=>{ const d = r.deal; return {type:"Крупные", manager:String(d.responsible||"").trim()||"Не указан",
-    cat:String(d.bloggerCategory||"").trim()||"Не указана", blogger:String(d.blogerLogin||"—").trim(), product:String(d.product||"").trim()||"—",
+    cat:String(d.bloggerCategory||"").trim()||"Не указана", blogger:String(d.blogerLogin||"—").trim(), product:productLabelOf(d),
     format:String(d.platform||"—"), pay:String(d.status||"—"), factDate:d.publishedDate||"", planDate:d.plannedDate||d.publishedDate||"",
     cost:Number(d.cost)||0, planCost:Number(d.plannedCost)||Number(d.cost)||0, reach:Number(d.reach)||0, planReach:Number(d.plannedReach)||0,
     contrib:Number(r.netContribution)||0, planContrib:Number(d.plannedContribution)||0, clicks:Number(d.clicks)||0, planClicks:Number(d.plannedClicks)||0,
-    published:!!d.publishedDate, paid:d.status==="Оплачена"||d.status==="Закрыта", pcat:"Не указана", tz:"Без ТЗ", city:"Не указан", lang:"Не указан", coop:"Крупная интеграция"}; });
+    published:!!d.publishedDate, paid:d.status==="Оплачена"||d.status==="Закрыта", pcat:productCategoryOf(d), tz:"Без ТЗ", city:"Не указан", lang:"Не указан", coop:"Крупная интеграция"}; });
   const micro = computeMicroInfluencerRomi().map(r=>{ const d = r.deal, c = microDealTotalCost(d); return {type:"Микро/средние", manager:String(d.responsible||"").trim()||"Не указан",
-    cat:d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "Не указана", blogger:String(d.blogerName||"—").trim(), product:String(d.product||"").trim()||"—",
+    cat:d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "Не указана", blogger:String(d.blogerName||"—").trim(), product:productLabelOf(d),
     format:microFormatOf(d), pay: !(Number(d.cost) > 0) ? "Бартер (без оплаты)" : (String(d.paymentMethod||"").trim() || "Не указан"),
     factDate:d.publishDate||(microDealPublished(d)?d.plannedDate||"":""), planDate:d.plannedDate||d.publishDate||"", cost:c, planCost:c, reach:microDealFactReach(d), planReach:microDealAvgReach(d),
     contrib:Number(r.netContribution)||0, planContrib:0, clicks:0, planClicks:0, published:microDealPublished(d), paid:d.paymentStatus==="оплачено",
-    pcat:String(d.productCategory||"").trim()||"Не указана", tz:String(d.tz||"").trim()||"Без ТЗ", city:vtCity(d.city),
+    pcat:productCategoryOf(d), tz:String(d.tz||"").trim()||"Без ТЗ", city:vtCity(d.city),
     lang:VT_LANG[String(d.videoLang||"").trim()] || (String(d.videoLang||"").trim() || "Не указан"), coop:microCoopTypeOf(d)||"Не указан"}; });
   return large.concat(micro);
 }
@@ -8116,7 +8192,7 @@ function modalMicroDeal(existing, prefill){
       <div class="field"><label>Товар</label><input id="mm-product" list="product-suggestions" placeholder="Название товара как в 1С" value="${escapeHtml(d.product||'')}"></div>
       <div class="field"><label>Штрихкод (ШК) товара</label><input id="mm-barcode" placeholder="необязательно, но надёжнее" value="${escapeHtml(d.barcode||'')}"></div>
       <div class="field"><label>Подобрать товар (добавит ШК)</label><input id="mm-sku-pick" list="mm-sku-pick-list" placeholder="начните: флюид, праймер, салфетки…"><datalist id="mm-sku-pick-list">${microSkuAll().map(x=>`<option value="${escapeHtml(x.name+" — "+x.code)}"></option>`).join("")}</datalist></div>
-      <div class="field"><label>Категория товара</label><input id="mm-product-category" value="${escapeHtml(d.productCategory||'')}"></div>
+      <div class="field"><label>Категория товара <span style="font-weight:400;color:var(--ink-mute);font-size:11px">— сама по товару/ШК</span></label><input id="mm-product-category" placeholder="${escapeHtml(productCategoryOf(Object.assign({}, d, {productCategory:""})) === "Не указана" ? "не определилась — впишите" : "определилась: " + productCategoryOf(Object.assign({}, d, {productCategory:""})))}" title="Заполнять не нужно: категория для дашборда берётся по ШК и названию товара. Впишите, только если она не определилась." value="${escapeHtml(d.productCategory||'')}"></div>
       <div class="field"><label>Статус товара</label><select id="mm-product-status">${MICRO_PRODUCT_STATUSES.map(st=>`<option ${st===d.productStatus?'selected':''}>${st}</option>`).join("")}</select></div>
     </div>
     <div class="form-row">
