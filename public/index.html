@@ -3803,10 +3803,335 @@ function tplDashPeriodPicker(){
     </div>
   `;
 }
+/* ---------- Витрина показателей (19.11.2026) ----------
+   Сводная таблица по примеру «Витрины показателей маркетинга»: показатель → план-факт / год к году / месяц к месяцу,
+   месяцы колонками, строки деревом (тип → менеджер → категория → блогер → товар, порядок настраивается), отборы,
+   хорошие/средние/плохие по % выполнения, подсветка, «Все показатели», график, Excel и сохранённые витрины.
+   Данные — все интеграции Barter Box (крупные + микро/средние). План: интеграции — по плановой дате; бюджет — план.расход
+   (крупные) или сумма интеграции; охват — план.охват (крупные) или средний охват блогера из карточки (микро);
+   вклад — план вклада (крупные). Факт — только вышедшие интеграции, по дате выхода. */
+const VT_METRICS = [
+  {k:"cost",    l:"Бюджет",                  u:"₸",     main:true},
+  {k:"reach",   l:"Охват",                   u:"просм.", main:true},
+  {k:"n",       l:"Интеграции",              u:"шт",    main:true},
+  {k:"contrib", l:"Вклад в продажи",         u:"₸",     main:true},
+  {k:"cpv",     l:"CPV · цена просмотра",    u:"₸",     main:true, ratio:["cost","reach",1], low:true, dec:2},
+  {k:"cpm",     l:"CPM · цена 1000 просм.",  u:"₸",     main:true, ratio:["cost","reach",1000], low:true},
+  {k:"drr",     l:"ДРР · доля расходов",     u:"%",     main:true, ratio:["cost","contrib",100], low:true, dec:1},
+  {k:"romi",    l:"ROMI",                    u:"×",     main:true, ratio:["contrib","cost",1], dec:2},
+  {k:"cpi",     l:"Цена интеграции",         u:"₸",     ratio:["cost","n",1], low:true},
+  {k:"clicks",  l:"Клики (крупные)",         u:"шт"},
+  {k:"paid",    l:"Оплачено",                u:"шт",    noPlan:true},
+  {k:"bloggers",l:"Блогеров",                u:"чел"},
+];
+const VT_DIMS = [
+  {k:"type", l:"Тип"}, {k:"manager", l:"Менеджеры"}, {k:"cat", l:"Категории блогеров"}, {k:"blogger", l:"Блогеры"},
+  {k:"product", l:"Товары"}, {k:"format", l:"Форматы"}, {k:"pay", l:"Способ оплаты"},
+];
+const VT_MON = ["Янв","Фев","Мар","Апр","Май","Июн","Июл","Авг","Сен","Окт","Ноя","Дек"];
+const VT_KEY = "bb_vitrina_v1", VT_SAVED = "bb_vitrina_saved_v1";
+function vtDefault(){
+  const now = todayStr(), y = Number(now.slice(0,4)), m = Number(now.slice(5,7));
+  return {metric:"cost", show:VT_METRICS.filter(x=>x.main).map(x=>x.k), mode:"plan", dev:"both", perPeriod:true, year:y,
+    months:Array.from({length:m}, (_, i)=> i+1).slice(-3), filters:{}, levels:["type","manager","cat","blogger","product"],
+    levelsOn:{type:true, manager:true, cat:true, blogger:true, product:false}, expandTo:2, results:"all", good:90, bad:50,
+    hl:"perf", totals:"top", chartFirst:false, open:{}, full:false, name:"Базовая"};
+}
+function vtState(){
+  if(UI.vt) return UI.vt;
+  let s = null; try{ s = JSON.parse(localStorage.getItem(VT_KEY) || "null"); }catch(e){}
+  UI.vt = Object.assign(vtDefault(), s || {}); UI.vt.open = UI.vt.open || {}; UI.vt.full = false;
+  return UI.vt;
+}
+function vtSave(){ try{ const s = Object.assign({}, UI.vt, {full:false}); localStorage.setItem(VT_KEY, JSON.stringify(s)); }catch(e){} }
+function vtSavedList(){ try{ return JSON.parse(localStorage.getItem(VT_SAVED) || "[]"); }catch(e){ return []; } }
+function vtMetric(k){ return VT_METRICS.find(x=>x.k===k) || VT_METRICS[0]; }
+function vtRows(){
+  const large = computeInfluencerRomi().map(r=>{ const d = r.deal; return {type:"Крупные", manager:String(d.responsible||"").trim()||"—",
+    cat:String(d.bloggerCategory||"").trim()||"Не указана", blogger:String(d.blogerLogin||"—").trim(), product:String(d.product||"").trim()||"—",
+    format:String(d.platform||"—"), pay:String(d.status||"—"), factDate:d.publishedDate||"", planDate:d.plannedDate||d.publishedDate||"",
+    cost:Number(d.cost)||0, planCost:Number(d.plannedCost)||Number(d.cost)||0, reach:Number(d.reach)||0, planReach:Number(d.plannedReach)||0,
+    contrib:Number(r.netContribution)||0, planContrib:Number(d.plannedContribution)||0, clicks:Number(d.clicks)||0, planClicks:Number(d.plannedClicks)||0,
+    published:!!d.publishedDate, paid:d.status==="Оплачена"||d.status==="Закрыта"}; });
+  const micro = computeMicroInfluencerRomi().map(r=>{ const d = r.deal, c = microDealTotalCost(d); return {type:"Микро/средние", manager:String(d.responsible||"").trim()||"—",
+    cat:d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "Не указана", blogger:String(d.blogerName||"—").trim(), product:String(d.product||"").trim()||"—",
+    format:microFormatOf(d), pay: !(Number(d.cost) > 0) ? "Бартер (без оплаты)" : (String(d.paymentMethod||"").trim() || "Не указан"),
+    factDate:d.publishDate||(microDealPublished(d)?d.plannedDate||"":""), planDate:d.plannedDate||d.publishDate||"", cost:c, planCost:c, reach:microDealFactReach(d), planReach:microDealAvgReach(d),
+    contrib:Number(r.netContribution)||0, planContrib:0, clicks:0, planClicks:0, published:microDealPublished(d), paid:d.paymentStatus==="оплачено"}; });
+  return large.concat(micro);
+}
+function vtAgg(rows, plan){
+  const a = {cost:0, reach:0, n:rows.length, pub:0, contrib:0, clicks:0, paid:0, bloggers:new Set(rows.map(r=>r.type+"|"+r.blogger.toLowerCase())).size};
+  let hasReach = false, hasContrib = false, hasClicks = false;
+  for(const r of rows){
+    if(plan){ a.cost += r.planCost; a.reach += r.planReach; a.contrib += r.planContrib; a.clicks += r.planClicks; a.pub++;
+      if(r.planReach) hasReach = true; if(r.planContrib) hasContrib = true; if(r.planClicks) hasClicks = true; }
+    else { a.cost += r.cost; a.reach += r.reach; a.contrib += r.contrib; a.clicks += r.clicks; if(r.published) a.pub++; if(r.paid) a.paid++; }
+  }
+  if(plan){ if(!hasReach) a.reach = null; if(!hasContrib) a.contrib = null; if(!hasClicks) a.clicks = null; a.paid = null; }
+  return a;
+}
+function vtVal(m, a){
+  if(!a) return null;
+  if(m.ratio){ const [x, y, mult] = m.ratio, num = vtVal(vtMetric(x), a), den = vtVal(vtMetric(y), a); return num!=null && den ? num / den * mult : null; }
+  return a[m.k]==null ? null : a[m.k];
+}
+function vtShiftMonth(ym, by){ const [y, m] = ym.split("-").map(Number), d = new Date(Date.UTC(y, m - 1 + by, 1)); return d.toISOString().slice(0,7); }
+// Колонки: каждый выбранный месяц (если «по каждому периоду») + итог. В каждой — набор месяцев для факта и для базы сравнения.
+function vtColumns(st){
+  const ms = st.months.slice().sort((a, b)=>a-b).map(m=> st.year + "-" + String(m).padStart(2,"0"));
+  const n = ms.length, cols = [];
+  const base = list=> st.mode==="yoy" ? list.map(m=>vtShiftMonth(m, -12)) : st.mode==="mom" ? list.map(m=>vtShiftMonth(m, -list.length)) : list;
+  if(st.perPeriod && n > 1) ms.forEach(m=> cols.push({label:VT_MON[Number(m.slice(5))-1], fact:[m], base:base([m])}));
+  cols.push({label: n===1 ? VT_MON[Number(ms[0].slice(5))-1] : `Итого за ${n} мес`, fact:ms, base:base(ms), total:true});
+  return cols;
+}
+function vtCell(rows, col, st, m){
+  const fs = new Set(col.fact), bs = new Set(col.base);
+  const fr = rows.filter(r=> r.factDate && fs.has(String(r.factDate).slice(0,7)));
+  const fact = vtVal(m, vtAgg(fr, false));
+  let base = null;
+  if(st.mode==="plan" || st.mode==="planonly"){ if(!m.noPlan){ const pr = rows.filter(r=> bs.has(String(r.planDate).slice(0,7))); base = pr.length ? vtVal(m, vtAgg(pr, true)) : null; } }
+  else if(st.mode==="yoy" || st.mode==="mom"){ const br = rows.filter(r=> r.factDate && bs.has(String(r.factDate).slice(0,7))); base = br.length ? vtVal(m, vtAgg(br, false)) : null; }
+  // по плану было, а ничего не вышло — факт 0 (для сумм и штук; у отношений вроде CPV факта нет)
+  return {fact: fr.length ? fact : (base != null && !m.ratio ? 0 : null), base, any: fr.length > 0 || base != null};
+}
+function vtPct(m, fact, base){ if(fact==null || base==null || !base) return null; return m.low ? (fact ? base / fact * 100 : null) : fact / base * 100; }
+function vtFmt(m, v){
+  if(v==null || !isFinite(v)) return "";
+  if(m.u==="%") return v.toFixed(m.dec==null?1:m.dec).replace(".", ",") + "%";
+  if(m.u==="×") return v.toFixed(2).replace(".", ",");
+  if(m.dec) return v.toFixed(m.dec).replace(".", ",");
+  return Math.round(v).toLocaleString("ru-RU");
+}
+function vtTree(rows, st){
+  const lv = st.levels.filter(k=> st.levelsOn[k]);
+  const build = (rs, depth, path)=>{
+    if(depth >= lv.length) return [];
+    const k = lv[depth], m = new Map();
+    rs.forEach(r=>{ const v = r[k]; if(!m.has(v)) m.set(v, []); m.get(v).push(r); });
+    return [...m].map(([v, sub])=>({key:path+"|"+k+":"+v, label:v, dim:k, depth:depth+1, rows:sub, kids:null, build:()=>build(sub, depth+1, path+"|"+k+":"+v)}));
+  };
+  return {key:"ALL", label:"ВСЕГО", depth:0, rows, kids:null, build:()=>build(rows, 0, "ALL"), lv};
+}
+function vtFilterRows(all, st){
+  return all.filter(r=> VT_DIMS.every(d=>{ const f = (st.filters||{})[d.k]; return !f || !f.length || f.includes(r[d.k]); }));
+}
+function vtClass(p, st){ return p==null ? "" : p >= st.good ? "good" : p < st.bad ? "bad" : "mid"; }
+function vtColor(cls, p, st){
+  if(!cls) return "";
+  if(cls==="good") return `background:rgba(47,168,125,${Math.min(.38, .12 + (p - st.good) / 300)})`;
+  if(cls==="bad") return `background:rgba(224,69,102,${Math.min(.42, .14 + (st.bad - p) / 160)})`;
+  return "background:rgba(221,143,36,.18)";
+}
+function vtHeat(v, lo, hi, low){
+  if(v==null || hi<=lo) return "";
+  let t = (v - lo) / (hi - lo); if(low) t = 1 - t;
+  const r = t < .5 ? 224 : Math.round(224 - (t - .5) * 2 * (224 - 47)), g = t < .5 ? Math.round(69 + t * 2 * (190 - 69)) : Math.round(190 - (t - .5) * 2 * (190 - 168)), b = t < .5 ? 102 : 125;
+  return `background:rgba(${r},${g},${b},.28)`;
+}
+function tplVitrina(){
+  const st = vtState(), m = vtMetric(st.metric), all = vtRows(), rows = vtFilterRows(all, st), allMode = st.metric==="__all";
+  const cols = vtColumns(st), root = vtTree(rows, st);
+  const baseLbl = st.mode==="yoy" ? "Прошл. год" : st.mode==="mom" ? "Прошл. период" : "План";
+  const showBase = !allMode && st.mode!=="fact", showFact = allMode || st.mode!=="planonly", showDev = !allMode && (st.mode==="plan" || st.mode==="yoy" || st.mode==="mom");
+  const devAbs = showDev && st.dev!=="rel", devRel = showDev && st.dev!=="abs";
+  const metrics = allMode ? st.show.map(vtMetric) : [m];
+  const totCol = cols[cols.length-1];
+  // Видимые строки дерева
+  const visible = [];
+  const isOpen = node=> st.open[node.key]!=null ? st.open[node.key] : node.depth < st.expandTo;
+  const resFilter = !allMode && st.results!=="all" && showBase;
+  const walk = node=>{
+    const tc = vtCell(node.rows, totCol, st, allMode ? vtMetric("n") : m);
+    if(node.depth > 0 && !tc.any) return false;
+    let kidsShown = false, mine = [];
+    const open = isOpen(node) && node.depth < root.lv.length;
+    const idx = visible.length; visible.push(node);
+    if(open){ node.kids = node.build(); node.kids.sort((a, b)=> b.rows.reduce((s, r)=>s + r.cost, 0) - a.rows.reduce((s, r)=>s + r.cost, 0)); node.kids.forEach(k=>{ if(walk(k)) kidsShown = true; }); }
+    node.canOpen = node.depth < root.lv.length; node.isOpen = open;
+    if(resFilter && node.depth > 0){
+      const c = vtCell(node.rows, totCol, st, m), cls = vtClass(vtPct(m, c.fact, c.base), st);
+      if(!kidsShown && cls!==st.results){ visible.splice(idx, visible.length - idx); return false; }
+    }
+    return true;
+  };
+  walk(root);
+  if(st.totals==="bottom" && visible.length){ visible.push(visible.shift()); }
+  // Подсветка «тепловая»: границы по колонкам (без строки ВСЕГО)
+  const heatRange = {};
+  const cellCache = new Map();
+  const cell = (node, col, mm)=>{ const k = node.key+"#"+col.label+"#"+mm.k; if(!cellCache.has(k)) cellCache.set(k, vtCell(node.rows, col, st, mm)); return cellCache.get(k); };
+  // тепловая — сравниваем строки одного уровня между собой (категории с категориями, блогеры с блогерами)
+  if(st.hl==="heat") metrics.forEach(mm=> cols.forEach(col=>{ const by = {}; visible.filter(n=>n.depth>0).forEach(n=>{ const v = cell(n, col, mm).fact; if(v!=null) (by[n.depth] = by[n.depth] || []).push(v); });
+    Object.keys(by).forEach(dp=>{ const vs = by[dp]; heatRange[mm.k+"#"+col.label+"#"+dp] = vs.length > 1 ? [Math.min(...vs), Math.max(...vs)] : null; }); }));
+  const totFC = vtCell(rows, totCol, st, m);
+  const kpi = !allMode ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 10px">
+      <div class="kpi" style="min-width:160px"><div class="num" style="font-size:20px">${vtFmt(m, totFC.fact)||"—"}</div><div class="lbl">Факт ${st.year} · ${escapeHtml(m.l)}${m.u&&m.u!=="%"&&m.u!=="×"?", "+m.u:""}</div></div>
+      ${showBase ? `<div class="kpi" style="min-width:160px"><div class="num" style="font-size:20px">${vtFmt(m, totFC.base)||"—"}</div><div class="lbl">${baseLbl}</div></div>` : ""}
+      ${showDev && totFC.base!=null && totFC.fact!=null ? (()=>{ const d = totFC.fact - totFC.base, p = vtPct(m, totFC.fact, totFC.base), good = m.low ? d<=0 : d>=0;
+        return `<div class="kpi ${good?'ok':'bad'}" style="min-width:200px"><div class="num" style="font-size:20px">${d>0?"+":""}${vtFmt(m, d)}${m.u==="%"?" п.п.":""}</div><div class="lbl">Откл. от ${st.mode==="yoy"?"прошлого года":st.mode==="mom"?"прошлого периода":"плана"} · выполнение ${p==null?"—":Math.round(p)+"%"}</div></div>`; })() : ""}
+    </div>` : "";
+  const dimTitle = k=> (VT_DIMS.find(d=>d.k===k)||{}).l || k;
+  const levelNames = root.lv.slice(0, st.expandTo).map(dimTitle);
+  const periodText = st.months.length ? (st.months.length===1 ? VT_MON[st.months[0]-1] : VT_MON[Math.min(...st.months)-1]+"–"+VT_MON[Math.max(...st.months)-1]) + " " + st.year : "—";
+  const title = allMode ? `Сводный отчёт по показателям — ${levelNames.length ? "в разрезе: "+levelNames[levelNames.length-1].toLowerCase()+", " : ""}за ${periodText}`
+    : `${escapeHtml(m.l)} — ${st.mode==="plan"?"план-факт":st.mode==="yoy"?"год к году":st.mode==="mom"?"к прошлому периоду":st.mode==="planonly"?"план":"факт"}, за ${periodText}`;
+  // Шапка таблицы
+  let head1 = `<th rowspan="2" style="text-align:left;min-width:220px">Строка</th>`, head2 = "";
+  if(allMode){ metrics.forEach(mm=>{ head1 += `<th rowspan="2" style="text-align:right">${escapeHtml(mm.l)}<br><small style="font-weight:400;opacity:.8">${escapeHtml(mm.u||"")}</small></th>`; }); }
+  else cols.forEach(col=>{ const sub = [showBase&&baseLbl, showFact&&"Факт", devAbs&&"Абс.", devRel&&"Отн."].filter(Boolean);
+    head1 += `<th colspan="${sub.length}" style="text-align:center;${col.total?'background:#3d7a90':''}">${escapeHtml(col.label)}</th>`; head2 += sub.map(s=>`<th style="text-align:right">${s}</th>`).join(""); });
+  const tdNum = (txt, style)=> `<td style="text-align:right;white-space:nowrap;${style||""}">${txt}</td>`;
+  const body = visible.map(node=>{
+    const pad = node.depth * 16, isRoot = node.depth===0;
+    const lbl = `<td style="padding-left:${8+pad}px;white-space:nowrap;${isRoot?'font-weight:700':''}">${node.canOpen ? `<button class="link-btn vt-tog" data-key="${escapeHtml(node.key)}" style="width:18px;display:inline-block">${node.isOpen?"−":"+"}</button>` : `<span style="display:inline-block;width:18px"></span>`}${escapeHtml(node.label)}${node.dim==="type"||isRoot?"":""}</td>`;
+    let tds = "";
+    if(allMode){ metrics.forEach(mm=>{ const c = cell(node, totCol, mm); let style = "";
+        if(!isRoot && st.hl==="heat"){ const r = heatRange[mm.k+"#"+totCol.label+"#"+node.depth]; if(r) style = vtHeat(c.fact, r[0], r[1], mm.low); }
+        else if(!isRoot && st.hl==="perf"){ const pc = vtCell(node.rows, totCol, Object.assign({}, st, {mode:"plan"}), mm); const p = vtPct(mm, c.fact, pc.base); style = vtColor(vtClass(p, st), p, st); }
+        tds += tdNum(vtFmt(mm, c.fact), style); }); }
+    else cols.forEach(col=>{ const c = cell(node, col, m), p = vtPct(m, c.fact, c.base), cls = vtClass(p, st);
+      let fs = "";
+      if(!isRoot && st.hl==="perf" && showBase) fs = vtColor(cls, p, st);
+      if(!isRoot && st.hl==="heat"){ const r = heatRange[m.k+"#"+col.label+"#"+node.depth]; if(r) fs = vtHeat(c.fact, r[0], r[1], m.low); }
+      if(showBase) tds += tdNum(vtFmt(m, c.base), "color:var(--ink-soft)");
+      if(showFact) tds += tdNum(`<b>${vtFmt(m, c.fact)}</b>`, fs);
+      const d = c.fact!=null && c.base!=null ? c.fact - c.base : null, good = d==null ? null : (m.low ? d<=0 : d>=0), col2 = d==null ? "" : `color:${good?'var(--ok)':'var(--bad)'}`;
+      if(devAbs) tds += tdNum(d==null ? "" : (d>0?"+":"")+vtFmt(m, d)+(m.u==="%"?" п.п.":""), col2);
+      if(devRel) tds += tdNum(d==null || !c.base ? "" : ((c.fact/c.base-1)*100>0?"+":"")+((c.fact/c.base-1)*100).toFixed(1).replace(".", ",")+"%", col2);
+    });
+    return `<tr style="${isRoot?'background:var(--action-soft)':''}">${lbl}${tds}</tr>`;
+  }).join("") + (resFilter && visible.length <= 1 ? `<tr><td colspan="99" class="empty">Строк с результатом «${st.results==="good"?"хорошие":st.results==="bad"?"плохие":"средние"}» нет — попробуйте раскрыть глубже или поменять пороги</td></tr>` : "");
+  // График
+  let chart = `<div class="empty">Диаграмма «план-факт» строится по одному показателю — выберите его выше. В режиме «Все показатели» диаграмма недоступна.</div>`;
+  if(!allMode){
+    const pts = cols.length > 1 ? cols.filter(c=>!c.total).map(c=>({l:c.label, ...vtCell(rows, c, st, m)}))
+      : (root.kids || root.build()).map(k=>({l:String(k.label), ...vtCell(k.rows, totCol, st, m)})).filter(x=>x.any).slice(0, 12);
+    if(pts.length){
+      const W = 1100, H = 260, L = 70, B = 40, T = 16, ch = H - T - B, cw = (W - L - 20) / pts.length, max = Math.max(1, ...pts.map(p=>Math.max(p.fact||0, p.base||0)));
+      const y = v=> T + ch * (1 - v / max), bw = Math.min(34, cw * .3);
+      let s = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">`;
+      for(let i = 0; i <= 4; i++){ const v = max * i / 4; s += `<line x1="${L}" x2="${W-20}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${L-6}" y="${y(v)+4}" text-anchor="end" font-size="11" fill="var(--ink-mute)">${vtFmt(m, v)}</text>`; }
+      pts.forEach((p, i)=>{ const cx = L + cw * i + cw / 2;
+        if(showBase && p.base!=null) s += `<rect x="${cx-bw-1}" y="${y(p.base)}" width="${bw}" height="${T+ch-y(p.base)}" fill="var(--plan)" opacity=".45" rx="3"><title>${escapeHtml(p.l)}: ${baseLbl} ${vtFmt(m, p.base)}</title></rect>`;
+        if(p.fact!=null) s += `<rect x="${showBase?cx+1:cx-bw/2}" y="${y(p.fact)}" width="${bw}" height="${T+ch-y(p.fact)}" fill="var(--action)" rx="3"><title>${escapeHtml(p.l)}: факт ${vtFmt(m, p.fact)}</title></rect>`;
+        s += `<text x="${cx}" y="${H-B+16}" text-anchor="middle" font-size="11" fill="var(--ink-mute)">${escapeHtml(String(p.l).slice(0, 16))}</text>`; });
+      chart = `<div style="display:flex;gap:14px;font-size:11.5px;color:var(--ink-soft);margin-bottom:6px">${showBase?`<span><i style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--plan);opacity:.45;margin-right:5px"></i>${baseLbl}</span>`:""}<span><i style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--action);margin-right:5px"></i>Факт</span></div>${s}</svg>`;
+    } else chart = `<div class="empty">Нет данных за период</div>`;
+  }
+  const chip = (k, l)=> `<button class="btn btn-sm ${st.metric===k?'btn-primary':'btn-ghost'}" data-vt="metric" data-v="${k}">${escapeHtml(l)}</button>`;
+  const seg = (key, v, l)=> `<button class="btn btn-sm ${String(st[key])===String(v)?'btn-primary':'btn-ghost'}" data-vt="${key}" data-v="${v}">${l}</button>`;
+  const opt = k=>{ const vals = [...new Set(all.map(r=>r[k]))].sort((a, b)=>String(a).localeCompare(String(b), "ru")), cur = (st.filters[k]||[]);
+    return `<select class="vt-filter" data-k="${k}" style="max-width:190px"><option value="">${k==="type"?"Все типы":k==="manager"?"Все менеджеры":"Все категории"}</option>${vals.map(v=>`<option value="${escapeHtml(v)}"${cur.length===1&&cur[0]===v?" selected":""}>${escapeHtml(v)}</option>`).join("")}${cur.length>1?`<option selected>выбрано: ${cur.length}</option>`:""}</select>`; };
+  const saved = vtSavedList();
+  const table = `<div class="table-wrap" style="max-height:${st.full?'none':'560px'};overflow:auto"><table class="vt-table"><thead><tr>${head1}</tr>${head2?`<tr>${head2}</tr>`:""}</thead><tbody>${body || `<tr><td colspan="99" class="empty">Нет данных</td></tr>`}</tbody></table></div>`;
+  const chartPanel = `<div style="margin-top:12px"><div class="panel-title" style="font-size:13px">Диаграмма</div>${chart}</div>`;
+  return `
+  <style>.vt-table th{position:sticky;top:0;background:#4e8fa6;color:#fff;font-size:11.5px;z-index:1}.vt-table thead tr:nth-child(2) th{top:31px}
+    .vt-table td{font-size:12.5px;padding:6px 8px}.vt-full{position:fixed;inset:0;z-index:900;overflow:auto;margin:0!important;border-radius:0!important}
+    .vt-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px}.vt-bar .lbl2{font-size:12px;color:var(--ink-mute);margin:0 2px 0 6px}
+    .vt-bar input[type=number]{width:58px}</style>
+  <div class="panel ${st.full?'vt-full':''}" id="vt-panel">
+    <div class="panel-title">Витрина показателей <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">${escapeHtml(st.name||"Базовая")} · все интеграции Barter Box</span>
+      <span style="display:flex;gap:6px;flex-wrap:wrap">
+        ${saved.length?`<select id="vt-load" style="max-width:180px"><option value="">Мои витрины…</option>${saved.map((s, i)=>`<option value="${i}">${escapeHtml(s.name)}</option>`).join("")}</select>`:""}
+        <button class="btn btn-ghost btn-sm" id="vt-master">⚙ Мастер витрин</button>
+        <button class="btn btn-ghost btn-sm" id="vt-reset" style="color:var(--bad)">⟲ Сбросить</button>
+      </span></div>
+    ${kpi}
+    <div class="vt-bar">${st.show.map(k=>chip(k, vtMetric(k).l.split(" · ")[0])).join("")}<span style="width:8px"></span>${chip("__all", "Все показатели")}</div>
+    ${allMode?`<div style="font-size:11.5px;color:var(--ink-mute);margin:-4px 0 6px">— режим сравнения не применяется, таблица показывает факт по всем показателям</div>`:""}
+    <div class="vt-bar">${seg("mode","fact","Только факт")}${seg("mode","plan","План-факт")}${seg("mode","yoy","Год к году")}${seg("mode","mom","К прошлому периоду")}
+      ${opt("type")}${opt("manager")}${opt("cat")}</div>
+    ${showDev?`<div class="vt-bar"><span class="lbl2">Отклонение</span>${seg("dev","rel","Отн.")}${seg("dev","abs","Абс.")}${seg("dev","both","Оба")}
+      <span class="lbl2">По месяцам</span>${seg("perPeriod","false","Только в итоге")}${seg("perPeriod","true","По каждому месяцу")}</div>`:`<div class="vt-bar"><span class="lbl2">По месяцам</span>${seg("perPeriod","false","Только в итоге")}${seg("perPeriod","true","По каждому месяцу")}</div>`}
+    <div class="vt-bar"><select id="vt-year">${[st.year-2, st.year-1, st.year, st.year+1].map(y=>`<option${y===st.year?" selected":""}>${y}</option>`).join("")}</select>
+      <button class="btn btn-ghost btn-sm" id="vt-allyear">Весь год</button><button class="btn btn-ghost btn-sm" id="vt-nomonths">Сбросить месяцы</button>
+      ${VT_MON.map((l, i)=>`<button class="btn btn-sm ${st.months.includes(i+1)?'btn-primary':'btn-ghost'} vt-month" data-m="${i+1}">${l}</button>`).join("")}</div>
+    <div class="vt-bar">${showBase&&!allMode?`<span class="lbl2">Результаты</span>${seg("results","all","Все")}${seg("results","good","Хорошие")}${seg("results","mid","Средние")}${seg("results","bad","Плохие")}`:""}
+      <span class="lbl2">Порог выполнения: хор ≥</span><input type="number" id="vt-good" value="${st.good}">%<span class="lbl2">плохо &lt;</span><input type="number" id="vt-bad" value="${st.bad}">%
+      <span class="lbl2">Подсветка</span>${seg("hl","off","Выкл")}${seg("hl","perf","Выполнение")}${seg("hl","heat","Тепловая")}</div>
+    <div class="vt-bar"><span class="lbl2">Раскрыть до</span><button class="btn btn-sm ${st.expandTo===0?'btn-primary':'btn-ghost'}" data-vt="expandTo" data-v="0">Свернуть</button>
+      ${root.lv.map((k, i)=>`<button class="btn btn-sm ${st.expandTo===i+1?'btn-primary':'btn-ghost'}" data-vt="expandTo" data-v="${i+1}">${escapeHtml(dimTitle(k))}</button>`).join("")}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0">
+      <div><b style="font-size:14px">${title}</b><div style="font-size:11.5px;color:var(--ink-mute)">Строки — ${root.lv.map(dimTitle).join(" → ").toLowerCase()} (раскрывайте «+»). Факт — вышедшие интеграции по дате выхода, план — по плановой дате. ${!allMode&&cols.length>1?"Столбцы — месяцы и итог.":""} ${m.low&&!allMode?"Для этого показателя меньше — лучше, шкала выполнения обратная.":""}</div></div>
+      <span style="display:flex;gap:6px"><button class="btn btn-sm ${!st.chartFirst?'btn-primary':'btn-ghost'}" data-vt="chartFirst" data-v="false">Таблица → график</button><button class="btn btn-sm ${st.chartFirst?'btn-primary':'btn-ghost'}" data-vt="chartFirst" data-v="true">График → таблица</button>
+        <button class="btn btn-primary btn-sm" id="vt-excel">⬇ Excel</button><button class="btn btn-ghost btn-sm" id="vt-full">${st.full?"✕ Свернуть":"⤢ На весь экран"}</button></span></div>
+    ${st.chartFirst ? chartPanel + table : table + chartPanel}
+  </div>`;
+}
+function vtExport(){
+  const t = document.querySelector("#vt-panel .vt-table"); if(!t) return;
+  const rows = [...t.querySelectorAll("tr")].map(tr=> [...tr.children].map(c=>{ const txt = c.innerText.replace(/^[+−]\s*/, "").replace(/\s+/g, " ").trim().replace(/"/g, '""'); const span = Number(c.getAttribute("colspan")||1); return ['"'+txt+'"'].concat(Array(span-1).fill('""')).join(";"); }).join(";"));
+  const blob = new Blob([String.fromCharCode(0xFEFF) + rows.join("\r\n")], {type:"text/csv;charset=utf-8"}), a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "Витрина_" + (vtState().metric==="__all" ? "все_показатели" : vtMetric(vtState().metric).l.split(" ")[0]) + "_" + todayStr() + ".csv"; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 2000);
+}
+function vtMaster(){
+  const st = JSON.parse(JSON.stringify(vtState())), all = vtRows();
+  let tab = "metrics";
+  const draw = ()=>{
+    const tabs = [["metrics","Показатели"],["period","Период"],["filters","Отборы"],["groups","Группировки"],["compare","Сравнение"]];
+    let body = "";
+    if(tab==="metrics") body = `<div class="login-hint">Какие показатели держать кнопками над таблицей и в режиме «Все показатели».</div>${VT_METRICS.map(x=>`<label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:4px 0"><input type="checkbox" class="vm-met" value="${x.k}" ${st.show.includes(x.k)?"checked":""}> ${escapeHtml(x.l)} <small style="color:var(--ink-mute)">${x.low?"меньше — лучше":""}</small></label>`).join("")}`;
+    if(tab==="period") body = `<div class="field"><label>Год</label><select id="vm-year">${[st.year-2, st.year-1, st.year, st.year+1].map(y=>`<option${y===st.year?" selected":""}>${y}</option>`).join("")}</select></div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">${[0,1,2,3].map(q=>`<div><b style="font-size:12px">${["I","II","III","IV"][q]} квартал</b>${[1,2,3].map(i=>{ const mm = q*3+i; return `<label style="display:flex;gap:6px;font-size:13px"><input type="checkbox" class="vm-month" value="${mm}" ${st.months.includes(mm)?"checked":""}> ${VT_MON[mm-1]}</label>`; }).join("")}</div>`).join("")}</div>
+      <div class="field" style="margin-top:10px"><label>По периодам</label><label style="font-size:13px"><input type="radio" name="vm-per" value="false" ${!st.perPeriod?"checked":""}> Только итог</label><label style="font-size:13px"><input type="radio" name="vm-per" value="true" ${st.perPeriod?"checked":""}> По каждому месяцу — база, факт и отклонение</label></div>`;
+    if(tab==="filters") body = `<div class="login-hint">Как фильтр в Excel: отметьте нужные значения; пусто — все.</div>${VT_DIMS.filter(d=>d.k!=="blogger").map(d=>{ const vals = [...new Set(all.map(r=>r[d.k]))].sort((a, b)=>String(a).localeCompare(String(b), "ru")), cur = st.filters[d.k]||[];
+      return `<details style="border:1px solid var(--line);border-radius:10px;padding:6px 10px;margin:6px 0"><summary style="cursor:pointer;font-size:13px"><b>${escapeHtml(d.l)}</b> <span style="color:var(--ink-mute)">${cur.length?cur.length+" выбрано":"все"}</span></summary><div style="max-height:200px;overflow:auto;margin-top:6px">${vals.map(v=>`<label style="display:flex;gap:6px;font-size:12.5px"><input type="checkbox" class="vm-f" data-k="${d.k}" value="${escapeHtml(v)}" ${cur.includes(v)?"checked":""}> ${escapeHtml(v)}</label>`).join("")}</div></details>`; }).join("")}`;
+    if(tab==="groups") body = `<div class="login-hint">Уровни строк — сверху вниз.</div>${st.levels.map((k, i)=>`<div style="display:flex;gap:8px;align-items:center;margin:5px 0"><input type="checkbox" class="vm-lv" value="${k}" ${st.levelsOn[k]?"checked":""}><span style="flex:1;font-size:13px">${escapeHtml((VT_DIMS.find(d=>d.k===k)||{}).l||k)}</span><button class="btn btn-ghost btn-sm vm-up" data-i="${i}" ${i?"":"disabled"}>↑</button><button class="btn btn-ghost btn-sm vm-dn" data-i="${i}" ${i<st.levels.length-1?"":"disabled"}>↓</button></div>`).join("")}`;
+    if(tab==="compare"){ const rad = (name, key, opts)=> `<div class="field"><label>${name}</label>${opts.map(([v, l])=>`<label style="display:block;font-size:13px"><input type="radio" name="vm-${key}" value="${v}" ${String(st[key])===String(v)?"checked":""}> ${l}</label>`).join("")}</div>`;
+      body = rad("Режим", "mode", [["fact","Только факт"],["planonly","Только план"],["plan","План-факт"],["yoy","Год к году"],["mom","К прошлому периоду"]]) + rad("Отклонение", "dev", [["rel","Относительное"],["abs","Абсолютное"],["both","Оба"]])
+        + rad("Итоги", "totals", [["top","Сверху"],["bottom","Снизу"]]) + rad("Результаты", "results", [["all","Все"],["good","Хорошие"],["mid","Средние"],["bad","Плохие"]])
+        + `<div style="font-size:13px">хорошие ≥ <input type="number" id="vm-good" value="${st.good}" style="width:60px">% · плохие &lt; <input type="number" id="vm-bad" value="${st.bad}" style="width:60px">% выполнения</div>` + rad("Подсветка", "hl", [["off","Выкл"],["perf","Выполнение"],["heat","Тепловая"]]); }
+    openModal(`<h3>Мастер витрин <small style="font-weight:400;color:var(--ink-mute)">${escapeHtml(st.name||"Базовая")}</small></h3>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${tabs.map(([k, l])=>`<button class="btn btn-sm ${tab===k?'btn-primary':'btn-ghost'} vm-tab" data-t="${k}">${l}</button>`).join("")}</div>
+      <div style="max-height:60vh;overflow:auto">${body}</div>
+      <div class="modal-actions"><button class="btn btn-ghost" id="vm-cancel">Отмена</button>${vtSavedList().length?`<button class="btn btn-ghost" id="vm-delete">Удалить мои витрины</button>`:""}<button class="btn btn-ghost" id="vm-saveas">Сохранить как витрину</button><button class="btn btn-primary" id="vm-apply">Применить</button></div>`);
+    const q = s=> [...document.querySelectorAll(s)];
+    const collect = ()=>{
+      if(tab==="metrics"){ const v = q(".vm-met:checked").map(x=>x.value); if(v.length) st.show = v; }
+      if(tab==="period"){ st.year = Number(document.getElementById("vm-year").value); st.months = q(".vm-month:checked").map(x=>Number(x.value)); const p = q('input[name="vm-per"]:checked')[0]; if(p) st.perPeriod = p.value==="true"; }
+      if(tab==="filters"){ const f = {}; q(".vm-f:checked").forEach(x=>{ (f[x.dataset.k] = f[x.dataset.k] || []).push(x.value); }); st.filters = f; }
+      if(tab==="groups"){ q(".vm-lv").forEach(x=>{ st.levelsOn[x.value] = x.checked; }); }
+      if(tab==="compare"){ ["mode","dev","totals","results","hl"].forEach(k=>{ const r = q(`input[name="vm-${k}"]:checked`)[0]; if(r) st[k] = r.value; }); st.good = Number(document.getElementById("vm-good").value)||90; st.bad = Number(document.getElementById("vm-bad").value)||50; }
+    };
+    q(".vm-tab").forEach(b=> b.onclick = ()=>{ collect(); tab = b.dataset.t; draw(); });
+    q(".vm-up").forEach(b=> b.onclick = ()=>{ collect(); const i = +b.dataset.i; [st.levels[i-1], st.levels[i]] = [st.levels[i], st.levels[i-1]]; draw(); });
+    q(".vm-dn").forEach(b=> b.onclick = ()=>{ collect(); const i = +b.dataset.i; [st.levels[i+1], st.levels[i]] = [st.levels[i], st.levels[i+1]]; draw(); });
+    document.getElementById("vm-cancel").onclick = closeModal;
+    const apply = ()=>{ collect(); if(!st.months.length) st.months = [Number(todayStr().slice(5,7))]; if(!st.show.includes(st.metric) && st.metric!=="__all") st.metric = st.show[0]; st.open = {}; UI.vt = st; vtSave(); closeModal(); renderDeskTab(); };
+    document.getElementById("vm-apply").onclick = apply;
+    document.getElementById("vm-saveas").onclick = ()=>{ collect(); const name = prompt("Название витрины", st.name && st.name!=="Базовая" ? st.name : ""); if(!name) return; st.name = name.slice(0, 60);
+      const list = vtSavedList().filter(x=>x.name!==st.name); list.push(Object.assign({}, st, {open:{}, full:false})); try{ localStorage.setItem(VT_SAVED, JSON.stringify(list.slice(-20))); }catch(e){} apply(); toast("Витрина сохранена в этом браузере"); };
+    const del = document.getElementById("vm-delete"); if(del) del.onclick = ()=>{ if(confirm("Удалить все сохранённые витрины в этом браузере?")){ try{ localStorage.removeItem(VT_SAVED); }catch(e){} closeModal(); renderDeskTab(); } };
+  };
+  draw();
+}
+function wireVitrina(){
+  const st = vtState(), redraw = ()=>{ vtSave(); renderDeskTab(); };
+  document.querySelectorAll("#vt-panel [data-vt]").forEach(b=> b.onclick = ()=>{ const k = b.dataset.vt, v = b.dataset.v;
+    st[k] = (k==="expandTo") ? Number(v) : (v==="true" ? true : v==="false" ? false : v); if(k==="expandTo") st.open = {}; redraw(); });
+  document.querySelectorAll("#vt-panel .vt-tog").forEach(b=> b.onclick = ()=>{ const k = b.dataset.key; st.open[k] = b.textContent.trim()==="+"; redraw(); });
+  document.querySelectorAll("#vt-panel .vt-month").forEach(b=> b.onclick = ()=>{ const m = Number(b.dataset.m); st.months = st.months.includes(m) ? st.months.filter(x=>x!==m) : st.months.concat(m); if(!st.months.length) st.months = [m]; redraw(); });
+  document.querySelectorAll("#vt-panel .vt-filter").forEach(s=> s.onchange = ()=>{ st.filters[s.dataset.k] = s.value ? [s.value] : []; redraw(); });
+  const on = (id, fn)=>{ const el = document.getElementById(id); if(el) el[el.tagName==="SELECT"||el.tagName==="INPUT" ? "onchange" : "onclick"] = fn; };
+  on("vt-year", e=>{ st.year = Number(e.target.value); redraw(); });
+  on("vt-allyear", ()=>{ st.months = [1,2,3,4,5,6,7,8,9,10,11,12]; redraw(); });
+  on("vt-nomonths", ()=>{ st.months = [Number(todayStr().slice(5,7))]; redraw(); });
+  on("vt-good", e=>{ st.good = Number(e.target.value)||90; redraw(); });
+  on("vt-bad", e=>{ st.bad = Number(e.target.value)||50; redraw(); });
+  on("vt-reset", ()=>{ UI.vt = vtDefault(); vtSave(); renderDeskTab(); });
+  on("vt-master", ()=> vtMaster());
+  on("vt-excel", ()=> vtExport());
+  on("vt-full", ()=>{ st.full = !st.full; renderDeskTab(); });
+  on("vt-load", e=>{ const s = vtSavedList()[Number(e.target.value)]; if(s){ UI.vt = Object.assign(vtDefault(), s, {open:{}, full:false}); vtSave(); renderDeskTab(); } });
+}
 function tplMarketerDashboard(){
   const f = UI.dashPeriod;
   const ms = marketingSummary(f.from, f.to);
   return `
+    ${tplVitrina()}
     ${tplBiDashboard()}
     <div class="panel-title">Бартерные рассылки</div>
     <div class="grid-kpi">
@@ -7861,6 +8186,7 @@ function modalMicroDeal(existing, prefill){
    ========================================================================= */
 function wireDeskTab(){
   if(UI.tab==="dashboard" && UI.role==="marketer"){
+    wireVitrina();
     wireBiDashboard();
     const dpFrom = document.getElementById("dash-period-from");
     if(dpFrom) dpFrom.onchange = e=>{ UI.dashPeriod.from = e.target.value; renderDeskTab(); };
