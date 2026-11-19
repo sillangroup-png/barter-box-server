@@ -4237,8 +4237,8 @@ function tplMarketerDashboard(){
   return `
     ${tplSimpleStats()}
     ${UI.vtAdv ? tplVitrina() : `<div class="panel" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div><b>Расширенная витрина</b> <span style="color:var(--ink-mute);font-size:12px">план-факт, год к году, месяцы колонками, дерево строк, Excel — для детального разбора</span></div><button class="btn btn-ghost btn-sm" id="vt-open-adv">Открыть расширенную витрину</button></div>`}
-    ${tplBiDashboard()}
     <div class="panel-title">Бартерные рассылки</div>
+    ${tplDashPeriodPicker()}
     <div class="grid-kpi">
       <div class="kpi"><div class="num">${ms.onDelivery}</div><div class="lbl">На доставке</div></div>
       <div class="kpi"><div class="num">${ms.pubCount}</div><div class="lbl">Публикаций зафиксировано</div></div>
@@ -8294,7 +8294,7 @@ function wireDeskTab(){
     wireSimpleStats();
     { const oa = document.getElementById("vt-open-adv"); if(oa) oa.onclick = ()=>{ UI.vtAdv = true; renderDeskTab(); }; }
     if(UI.vtAdv) wireVitrina();
-    wireBiDashboard();
+    // 19.11.2026: блок «Аналитика интеграций» убран с главной — дублировал «Показатели интеграций» и витрину.
     const dpFrom = document.getElementById("dash-period-from");
     if(dpFrom) dpFrom.onchange = e=>{ UI.dashPeriod.from = e.target.value; renderDeskTab(); };
     const dpTo = document.getElementById("dash-period-to");
