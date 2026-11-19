@@ -6350,7 +6350,7 @@ function microIpDocsHtml(d, isEdit){
     ${(()=>{ const all = microBloggerDeals(d.blogerName); if(all.length < 2) return ""; return `<div class="field"><label>Какие видео блогера входят в договор и счёт</label><div id="mm-doc-deals" style="display:flex;flex-direction:column;gap:3px;max-height:140px;overflow:auto">${all.map(x=>`<label style="font-weight:400;font-size:12.5px"><input type="checkbox" class="mm-doc-deal" value="${x.id}" data-cost="${Number(x.cost)||0}" ${x.id===d.id?"checked":""}> ${escapeHtml(microDealDate(x)||"без даты")} · ${escapeHtml(x.product||"товар не указан")} · ${fmtNum(x.cost||0)} ₸</label>`).join("")}</div></div>`; })()}
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" class="btn btn-primary btn-sm" id="mm-doc-contract">Договор (Word)</button><button type="button" class="btn btn-ghost btn-sm" id="mm-doc-invoice">Счёт на оплату (Word)</button>
     <label style="font-size:12px;color:var(--action);cursor:pointer">Загрузить шаблон договора<input type="file" id="mm-doc-template" accept=".docx" style="display:none"></label><span id="mm-doc-msg" style="font-size:12px"></span></div>
-    <div class="login-hint" style="margin-top:6px">Сумма — из поля «Сумма». Счёт прикладывается сам в блоке «💳 Подать на оплату» (ИП → CRM + Bitrix).</div>` : `<div class="login-hint">Договор и счёт — после сохранения интеграции.</div>`}
+    <div class="login-hint" style="margin-top:6px">Сумма — из поля «Сумма». Счёт прикладывается сам в блоке «💳 Подать на оплату» (ИП → CRM).</div>` : `<div class="login-hint">Договор и счёт — после сохранения интеграции.</div>`}
   </details>`;
 }
 // Подача на оплату прямо в интеграции (18.11.2026): Наличные → только Blogger CRM; ИП → Blogger CRM + Bitrix «Согласование оплаты» со счётом из реквизитов.
@@ -6363,7 +6363,7 @@ function microPayHtml(d, isEdit){
     <div class="form-row" style="margin-top:8px"><div class="field"><label>Сумма к оплате, ₸</label><input id="mm-pay-amount" type="number" min="1" value="${Number(d.cost)||""}"></div><div class="field"><label>Получатель</label><input id="mm-pay-recipient" value="${escapeHtml(microIsIp(d) && d.ipRequisites && d.ipRequisites.name ? "ИП «"+d.ipRequisites.name+"»" : (d.blogerName||""))}"></div><div class="field"><label>Этап</label><select id="mm-pay-stage">${["Окончательный расчёт","Предоплата","Остаток"].map(x=>`<option>${x}</option>`).join("")}</select></div></div>
     ${rows.length > 1 ? `<div class="field"><label>Какие видео оплачиваем (сумма общая)</label><div style="display:flex;flex-direction:column;gap:3px;max-height:120px;overflow:auto">${rows.map(x=>`<label style="font-weight:400;font-size:12.5px"><input type="checkbox" class="mm-pay-deal" value="${x.id}" data-cost="${Number(x.cost)||0}" data-goods="${Number(x.productCost)||0}" ${x.id===d.id?"checked":""}> ${escapeHtml(microDealDate(x)||"без даты")} · ${escapeHtml(x.product||"товар не указан")} · ${Number(x.cost)||0} ₸${Number(x.productCost)?" · товар "+Number(x.productCost)+" ₸":""}${x.flowPaymentId?" · заявка уже есть":""}</label>`).join("")}</div></div>` : ""}
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px;margin:0 0 8px"><label style="display:flex;gap:6px;align-items:center;font-weight:600;margin:0"><input type="checkbox" id="mm-pay-goods-on"> + стоимость товара (самовыкуп на Kaspi)</label><input id="mm-pay-goods" type="number" min="0" style="width:120px" value="${rows.filter(x=>x.id===d.id).reduce((s,x)=>s+(Number(x.productCost)||0),0)||""}" placeholder="цена Kaspi, ₸"> <span id="mm-pay-total" style="color:var(--ink-mute)"></span></div>
-    <div id="mm-pay-ip" style="display:none;font-size:12.5px;margin:2px 0 8px">Счёт сформируется из реквизитов ИП (блок выше) и уйдёт в Bitrix. Свой счёт от блогера: <input id="mm-pay-file" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg" style="font-size:12px"><label style="display:flex;gap:6px;align-items:center;margin-top:6px;font-weight:600"><input type="checkbox" id="mm-pay-confirm"> Реквизиты и сумма проверены</label></div>
+    <div id="mm-pay-ip" style="display:none;font-size:12.5px;margin:2px 0 8px">Счёт сформируется из реквизитов ИП (блок выше) и прикрепится к заявке в Blogger CRM. Свой счёт от блогера: <input id="mm-pay-file" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg" style="font-size:12px"><label style="display:flex;gap:6px;align-items:center;margin-top:6px;font-weight:600"><input type="checkbox" id="mm-pay-confirm"> Реквизиты и сумма проверены</label></div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button type="button" class="btn btn-primary btn-sm" id="mm-pay-send">Отправить заявку</button><span id="mm-pay-msg" style="font-size:12px"></span></div>
     <div id="mm-pay-list" style="margin-top:6px;font-size:12px;color:var(--ink-mute)"></div>
   </div>`;
@@ -6372,7 +6372,7 @@ function wireMicroPay(dealId){
   const box = document.getElementById("mm-pay"); if(!box) return;
   const $ = id=> document.getElementById(id), msg = (t, bad)=>{ const m = $("mm-pay-msg"); m.textContent = t; m.style.color = bad ? "var(--bad)" : "var(--ok,#1f8a4c)"; };
   const route = ()=>{ const r = microPayRoute(($("mm-payment-method")||{}).value), el = $("mm-pay-route");
-    el.innerHTML = r === "ip" ? `<span style="color:#1f6b40">ИП → Blogger CRM + Bitrix (согласование оплаты)</span>` : r === "cash" ? `<span style="color:#1f6b40">Наличные → только Blogger CRM</span>` : `<span style="color:var(--bad)">Выберите «Способ оплаты»: ИП или Наличные</span>`;
+    el.innerHTML = r === "ip" ? `<span style="color:#1f6b40">ИП → Blogger CRM со счётом (выгрузка в Bitrix пока выключена)</span>` : r === "cash" ? `<span style="color:#1f6b40">Наличные → только Blogger CRM</span>` : `<span style="color:var(--bad)">Выберите «Способ оплаты»: ИП или Наличные</span>`;
     $("mm-pay-ip").style.display = r === "ip" ? "" : "none";
     const rc = $("mm-pay-recipient"), nm = ($("mm-ip-name")||{}).value; if(r === "ip" && nm && !/^ИП/i.test(rc.value)) rc.value = "ИП «"+nm+"»"; return r; };
   route(); const pm = $("mm-payment-method"); if(pm) pm.addEventListener("change", route);
@@ -6404,7 +6404,7 @@ function wireMicroPay(dealId){
       if(r === "ip"){ let f = $("mm-pay-file").files[0]; if(!f){ msg("Собираю счёт из реквизитов…"); f = await microDocBlob(dealId, "invoice", {amount, videos: ids.length}); } form.append("invoice", f); }
       form.append("payload", JSON.stringify({integrationIds: ids, amountKzt: amount, recipientName: $("mm-pay-recipient").value.trim(), settlement: r, stage: $("mm-pay-stage").value, invoiceConfirmed: r === "ip", notes: goods() ? `Гонорар ${fee} ₸ + стоимость товара (самовыкуп на Kaspi) ${goods()} ₸` : ""}));
       const data = await apiFetch("/api/automation/payment-request", {method:"POST", body: form});
-      msg(r === "ip" ? (data.bitrixItemId ? "Заявка в CRM и Bitrix №"+data.bitrixItemId : "Заявка в CRM; в Bitrix уходит в течение минуты") : (data.crmPaymentId ? "Заявка в Blogger CRM" : "Заявка в очереди в CRM"));
+      msg(r === "ip" ? (data.bitrixItemId ? "Заявка в CRM и Bitrix №"+data.bitrixItemId : "Заявка со счётом в Blogger CRM") : (data.crmPaymentId ? "Заявка в Blogger CRM" : "Заявка в очереди в CRM"));
       list();
     }catch(e){ msg("⚠ "+e.message, true); } finally{ btn.disabled = false; }
   };
@@ -7715,6 +7715,7 @@ function modalMicroDeal(existing, prefill){
     <div class="login-hint">Плановая дата — чтобы интеграция сразу попала в нужный месяц фильтра/графика, даже если видео ещё не вышло. Как только появится факт-дата выкладки — используется она.</div>
     <div class="field"><label>Комментарий</label><textarea id="mm-notes">${escapeHtml(d.notes||"")}</textarea></div>
     <label class="login-hint"${DataManager.state.automationFlow?'':' style="display:none"'}><input id="mm-brief-auto-send" type="checkbox" ${d.flowBriefAutoSend?'checked':''}> Разрешаю автоматически отправить утверждённое ТЗ в WhatsApp на проверенный телефон этой интеграции</label>
+    ${isEdit&&!UI.readOnly&&!microDealPublished(d)?`<div class="login-hint" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button type="button" class="btn btn-ghost btn-sm" id="mm-remind-now">📨 Напомнить блогеру в WhatsApp, что ждём видео</button><span id="mm-remind-msg" style="font-size:12px;color:var(--ink-mute)">${d.coordLastOutDay?'Последнее сообщение блогеру: '+escapeHtml(d.coordLastOutDay):'Автонапоминаний нет — только по кнопке'}</span></div>`:''}
     <div class="modal-actions">
       ${isEdit&&DataManager.state.automationFlow?'<button class="btn btn-ghost" id="mm-blogery-request">ТЗ → Blogery Audit</button>':''}
       <button class="btn btn-ghost" id="mm-cancel">Отмена</button>
@@ -7733,6 +7734,12 @@ function modalMicroDeal(existing, prefill){
   };
   if(isEdit){showBriefs(existing.flowBriefHistory||[],existing.flowBriefApprovedVersionId);
     apiFetch('/api/automation/brief-request/'+existing.id).then(r=>{const v=(r&&r.approved)||[];if(v.length&&v.length!==(existing.flowBriefHistory||[]).length){existing.flowBriefHistory=v;showBriefs(v,v[v.length-1].versionId);}}).catch(()=>{});}
+  // 19.11.2026: автонапоминания выключены — менеджер напоминает блогеру сам, кнопкой прямо в карточке интеграции.
+  const remindBtn=document.getElementById('mm-remind-now');
+  if(remindBtn)remindBtn.onclick=async()=>{if(!confirm('Отправить блогеру в WhatsApp напоминание, что ждём видео?'))return;
+    try{const r=await withBusy(remindBtn,()=>apiFetch('/api/coord/deal/'+existing.id+'/send-now',{method:'POST'}));toast('Напоминание отправлено в WhatsApp ✅');remindBtn.textContent='✅ Напоминание отправлено';remindBtn.disabled=true;
+      const m=document.getElementById('mm-remind-msg');if(m&&r&&r.text)m.textContent='Текст: '+r.text;}
+    catch(e){toast(e.message,true);}};
   const blogeryRequest=document.getElementById('mm-blogery-request');
   if(blogeryRequest)blogeryRequest.onclick=async()=>{try{
     const data=await apiFetch('/api/automation/brief-request/'+existing.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:document.getElementById('mm-notes').value})});if(data.url){window.open(data.url,'_blank','noopener,noreferrer');}else toast('Запрос записан в очередь передачи в Blogery Audit');
