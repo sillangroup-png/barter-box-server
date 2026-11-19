@@ -3811,14 +3811,14 @@ function tplDashPeriodPicker(){
    (крупные) или сумма интеграции; охват — план.охват (крупные) или средний охват блогера из карточки (микро);
    вклад — план вклада (крупные). Факт — только вышедшие интеграции, по дате выхода. */
 const VT_METRICS = [
-  {k:"cost",    l:"Бюджет",                  u:"₸",     main:true},
   {k:"reach",   l:"Охват",                   u:"просм.", main:true},
+  {k:"cpv",     l:"CPV · цена просмотра",    u:"₸",     main:true, ratio:["cost","reach",1], low:true, dec:2},
   {k:"n",       l:"Интеграции",              u:"шт",    main:true},
   {k:"contrib", l:"Вклад в продажи",         u:"₸",     main:true},
-  {k:"cpv",     l:"CPV · цена просмотра",    u:"₸",     main:true, ratio:["cost","reach",1], low:true, dec:2},
-  {k:"cpm",     l:"CPM · цена 1000 просм.",  u:"₸",     main:true, ratio:["cost","reach",1000], low:true},
-  {k:"drr",     l:"ДРР · доля расходов",     u:"%",     main:true, ratio:["cost","contrib",100], low:true, dec:1},
   {k:"romi",    l:"ROMI",                    u:"×",     main:true, ratio:["contrib","cost",1], dec:2},
+  {k:"drr",     l:"ДРР · доля расходов",     u:"%",     main:true, ratio:["cost","contrib",100], low:true, dec:1},
+  {k:"cost",    l:"Бюджет",                  u:"₸",     main:true},
+  {k:"cpm",     l:"CPM · цена 1000 просм.",  u:"₸",     ratio:["cost","reach",1000], low:true},
   {k:"cpi",     l:"Цена интеграции",         u:"₸",     ratio:["cost","n",1], low:true},
   {k:"clicks",  l:"Клики (крупные)",         u:"шт"},
   {k:"paid",    l:"Оплачено",                u:"шт",    noPlan:true},
@@ -3826,13 +3826,16 @@ const VT_METRICS = [
 ];
 const VT_DIMS = [
   {k:"type", l:"Тип"}, {k:"manager", l:"Менеджеры"}, {k:"cat", l:"Категории блогеров"}, {k:"blogger", l:"Блогеры"},
-  {k:"product", l:"Товары"}, {k:"format", l:"Форматы"}, {k:"pay", l:"Способ оплаты"},
+  {k:"product", l:"Товары"}, {k:"pcat", l:"Категории товаров"}, {k:"tz", l:"ТЗ"}, {k:"city", l:"Города"}, {k:"lang", l:"Язык видео"},
+  {k:"format", l:"Форматы"}, {k:"coop", l:"Тип сотрудничества"}, {k:"pay", l:"Способ оплаты"},
 ];
+const VT_LANG = {ru:"Русский", kz:"Казахский", "смешанный":"Казахский + русский"};
+function vtCity(v){ v = String(v||"").trim(); return v ? v.charAt(0).toUpperCase() + v.slice(1).toLowerCase() : "Не указан"; }
 const VT_MON = ["Янв","Фев","Мар","Апр","Май","Июн","Июл","Авг","Сен","Окт","Ноя","Дек"];
 const VT_KEY = "bb_vitrina_v1", VT_SAVED = "bb_vitrina_saved_v1";
 function vtDefault(){
   const now = todayStr(), y = Number(now.slice(0,4)), m = Number(now.slice(5,7));
-  return {metric:"cost", show:VT_METRICS.filter(x=>x.main).map(x=>x.k), mode:"plan", dev:"both", perPeriod:true, year:y,
+  return {metric:"reach", show:VT_METRICS.filter(x=>x.main).map(x=>x.k), mode:"plan", dev:"both", perPeriod:true, year:y,
     months:Array.from({length:m}, (_, i)=> i+1).slice(-3), filters:{}, levels:["type","manager","cat","blogger","product"],
     levelsOn:{type:true, manager:true, cat:true, blogger:true, product:false}, expandTo:2, results:"all", good:90, bad:50,
     hl:"perf", totals:"top", chartFirst:false, open:{}, full:false, name:"Базовая"};
@@ -3847,17 +3850,19 @@ function vtSave(){ try{ const s = Object.assign({}, UI.vt, {full:false}); localS
 function vtSavedList(){ try{ return JSON.parse(localStorage.getItem(VT_SAVED) || "[]"); }catch(e){ return []; } }
 function vtMetric(k){ return VT_METRICS.find(x=>x.k===k) || VT_METRICS[0]; }
 function vtRows(){
-  const large = computeInfluencerRomi().map(r=>{ const d = r.deal; return {type:"Крупные", manager:String(d.responsible||"").trim()||"—",
+  const large = computeInfluencerRomi().map(r=>{ const d = r.deal; return {type:"Крупные", manager:String(d.responsible||"").trim()||"Не указан",
     cat:String(d.bloggerCategory||"").trim()||"Не указана", blogger:String(d.blogerLogin||"—").trim(), product:String(d.product||"").trim()||"—",
     format:String(d.platform||"—"), pay:String(d.status||"—"), factDate:d.publishedDate||"", planDate:d.plannedDate||d.publishedDate||"",
     cost:Number(d.cost)||0, planCost:Number(d.plannedCost)||Number(d.cost)||0, reach:Number(d.reach)||0, planReach:Number(d.plannedReach)||0,
     contrib:Number(r.netContribution)||0, planContrib:Number(d.plannedContribution)||0, clicks:Number(d.clicks)||0, planClicks:Number(d.plannedClicks)||0,
-    published:!!d.publishedDate, paid:d.status==="Оплачена"||d.status==="Закрыта"}; });
-  const micro = computeMicroInfluencerRomi().map(r=>{ const d = r.deal, c = microDealTotalCost(d); return {type:"Микро/средние", manager:String(d.responsible||"").trim()||"—",
+    published:!!d.publishedDate, paid:d.status==="Оплачена"||d.status==="Закрыта", pcat:"Не указана", tz:"Без ТЗ", city:"Не указан", lang:"Не указан", coop:"Крупная интеграция"}; });
+  const micro = computeMicroInfluencerRomi().map(r=>{ const d = r.deal, c = microDealTotalCost(d); return {type:"Микро/средние", manager:String(d.responsible||"").trim()||"Не указан",
     cat:d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "Не указана", blogger:String(d.blogerName||"—").trim(), product:String(d.product||"").trim()||"—",
     format:microFormatOf(d), pay: !(Number(d.cost) > 0) ? "Бартер (без оплаты)" : (String(d.paymentMethod||"").trim() || "Не указан"),
     factDate:d.publishDate||(microDealPublished(d)?d.plannedDate||"":""), planDate:d.plannedDate||d.publishDate||"", cost:c, planCost:c, reach:microDealFactReach(d), planReach:microDealAvgReach(d),
-    contrib:Number(r.netContribution)||0, planContrib:0, clicks:0, planClicks:0, published:microDealPublished(d), paid:d.paymentStatus==="оплачено"}; });
+    contrib:Number(r.netContribution)||0, planContrib:0, clicks:0, planClicks:0, published:microDealPublished(d), paid:d.paymentStatus==="оплачено",
+    pcat:String(d.productCategory||"").trim()||"Не указана", tz:String(d.tz||"").trim()||"Без ТЗ", city:vtCity(d.city),
+    lang:VT_LANG[String(d.videoLang||"").trim()] || (String(d.videoLang||"").trim() || "Не указан"), coop:microCoopTypeOf(d)||"Не указан"}; });
   return large.concat(micro);
 }
 function vtAgg(rows, plan){
@@ -4038,6 +4043,7 @@ function tplVitrina(){
         ${saved.length?`<select id="vt-load" style="max-width:180px"><option value="">Мои витрины…</option>${saved.map((s, i)=>`<option value="${i}">${escapeHtml(s.name)}</option>`).join("")}</select>`:""}
         <button class="btn btn-ghost btn-sm" id="vt-master">⚙ Мастер витрин</button>
         <button class="btn btn-ghost btn-sm" id="vt-reset" style="color:var(--bad)">⟲ Сбросить</button>
+        <button class="btn btn-ghost btn-sm" id="vt-close-adv">Свернуть</button>
       </span></div>
     ${kpi}
     <div class="vt-bar">${st.show.map(k=>chip(k, vtMetric(k).l.split(" · ")[0])).join("")}<span style="width:8px"></span>${chip("__all", "Все показатели")}</div>
@@ -4122,16 +4128,115 @@ function wireVitrina(){
   on("vt-good", e=>{ st.good = Number(e.target.value)||90; redraw(); });
   on("vt-bad", e=>{ st.bad = Number(e.target.value)||50; redraw(); });
   on("vt-reset", ()=>{ UI.vt = vtDefault(); vtSave(); renderDeskTab(); });
+  on("vt-close-adv", ()=>{ UI.vtAdv = false; renderDeskTab(); });
   on("vt-master", ()=> vtMaster());
   on("vt-excel", ()=> vtExport());
   on("vt-full", ()=>{ st.full = !st.full; renderDeskTab(); });
   on("vt-load", e=>{ const s = vtSavedList()[Number(e.target.value)]; if(s){ UI.vt = Object.assign(vtDefault(), s, {open:{}, full:false}); vtSave(); renderDeskTab(); } });
 }
+/* ---------- Показатели интеграций — простой разрез (19.11.2026) ----------
+   Главная для всех: 1) период, 2) «по чему разложить» (менеджер, ТЗ, категория товара, город, язык видео…), 3) таблица:
+   сколько вышло, охват и его доля, CPV, средний охват ролика, вклад, ROMI, бюджет и его доля. Клик по строке — смотреть
+   внутри неё (фильтр + следующий разрез). Сложная витрина (план-факт, год к году, дерево) — ниже, по кнопке. */
+const SV_DIMS = [["manager","Менеджер"],["tz","ТЗ"],["pcat","Категория товара"],["product","Товар"],["cat","Категория блогера"],
+  ["city","Город"],["lang","Язык видео"],["format","Формат"],["coop","Тип сотрудничества"],["type","Крупные / микро"],["blogger","Блогер"]];
+const SV_KEY = "bb_simple_stats_v1";
+function svState(){
+  if(UI.sv) return UI.sv;
+  let s = null; try{ s = JSON.parse(localStorage.getItem(SV_KEY) || "null"); }catch(e){}
+  const y = Number(todayStr().slice(0,4));
+  UI.sv = Object.assign({period:"month", year:y, months:[Number(todayStr().slice(5,7))], dim:"manager", type:"all", filters:{}, sort:"reach", dir:-1}, s || {});
+  UI.sv.filters = UI.sv.filters || {};
+  return UI.sv;
+}
+function svSave(){ try{ localStorage.setItem(SV_KEY, JSON.stringify(UI.sv)); }catch(e){} }
+function svMonths(st){
+  const t = todayStr(), y = Number(t.slice(0,4)), m = Number(t.slice(5,7)), ym = (yy, mm)=> yy + "-" + String(mm).padStart(2,"0");
+  if(st.period==="month") return [ym(y, m)];
+  if(st.period==="prev") return [vtShiftMonth(ym(y, m), -1)];
+  if(st.period==="q") return [vtShiftMonth(ym(y, m), -2), vtShiftMonth(ym(y, m), -1), ym(y, m)];
+  if(st.period==="year") return Array.from({length:m}, (_, i)=> ym(y, i+1));
+  return (st.months||[]).map(mm=> ym(st.year, mm));
+}
+function svAgg(rows){
+  const a = {n:rows.length, reach:0, cost:0, contrib:0, bloggers:new Set(rows.map(r=>r.type+"|"+r.blogger.toLowerCase())).size};
+  rows.forEach(r=>{ a.reach += r.reach; a.cost += r.cost; a.contrib += r.contrib; });
+  a.cpv = a.reach > 0 && a.cost > 0 ? a.cost / a.reach : null;
+  a.avg = a.n ? a.reach / a.n : null;
+  a.romi = a.cost > 0 ? a.contrib / a.cost : null;
+  return a;
+}
+function tplSimpleStats(){
+  const st = svState(), ms = new Set(svMonths(st)), dimName = k=> (SV_DIMS.find(d=>d[0]===k)||[k,k])[1];
+  const rows = vtRows().filter(r=> r.factDate && ms.has(String(r.factDate).slice(0,7)) && (st.type==="all" || (st.type==="micro" ? r.type==="Микро/средние" : r.type==="Крупные"))
+    && Object.entries(st.filters).every(([k, v])=> r[k]===v));
+  const tot = svAgg(rows), by = new Map();
+  rows.forEach(r=>{ const k = r[st.dim]; if(!by.has(k)) by.set(k, []); by.get(k).push(r); });
+  const sortVal = (a, k)=> a[k]==null ? (st.dir < 0 ? -Infinity : Infinity) : a[k];
+  const groups = [...by].map(([k, rs])=> Object.assign({key:k}, svAgg(rs)))
+    .sort((a, b)=>{ if(st.sort==="key") return String(a.key).localeCompare(String(b.key), "ru") * st.dir;
+      if(a[st.sort]==null && b[st.sort]==null) return 0; return (sortVal(a, st.sort) - sortVal(b, st.sort)) * st.dir; });
+  const fmt = v=> v==null ? "—" : Math.round(v).toLocaleString("ru-RU");
+  const money = v=> v==null ? "—" : Math.round(v).toLocaleString("ru-RU") + " ₸";
+  const pct = (v, t)=> t ? v / t * 100 : 0;
+  const bar = (p, color)=> `<div style="display:flex;align-items:center;gap:6px;justify-content:flex-end"><span>${p.toFixed(p>=10?0:1).replace(".", ",")}%</span><span style="display:inline-block;width:54px;height:6px;border-radius:3px;background:var(--line)"><i style="display:block;height:6px;border-radius:3px;width:${Math.min(100, p).toFixed(1)}%;background:${color}"></i></span></div>`;
+  const cpvStyle = v=> v==null || tot.cpv==null ? "" : v <= tot.cpv * 0.85 ? "background:rgba(47,168,125,.22)" : v >= tot.cpv * 1.15 ? "background:rgba(224,69,102,.22)" : "";
+  const romiStyle = v=> v==null ? "" : v >= 1 ? "color:var(--ok);font-weight:600" : "color:var(--bad)";
+  const th = (k, l, title)=> `<th class="sv-sort" data-k="${k}" style="cursor:pointer;text-align:${k==="key"?"left":"right"};white-space:nowrap" title="${title||"Сортировать"}">${l}${st.sort===k ? (st.dir<0?" ↓":" ↑") : ""}</th>`;
+  const per = {month:"Этот месяц", prev:"Прошлый месяц", q:"3 месяца", year:"С начала года", custom:"Выбрать месяцы"};
+  const filt = Object.entries(st.filters);
+  const nextDimHint = (SV_DIMS.find(d=> d[0]!==st.dim && !st.filters[d[0]]) || ["",""])[1];
+  return `
+  <div class="panel" id="sv-panel">
+    <div class="panel-title">Показатели интеграций <span style="font-weight:400;color:var(--ink-mute);font-size:11.5px">только вышедшие ролики · крупные + микро/средние · считается само</span></div>
+    <div style="display:grid;gap:8px;margin-bottom:12px">
+      <div class="vt-bar" style="margin:0"><b style="font-size:12.5px;display:inline-block;min-width:126px">1. Период</b>${Object.entries(per).map(([k, l])=>`<button class="btn btn-sm ${st.period===k?'btn-primary':'btn-ghost'}" data-sv="period" data-v="${k}">${l}</button>`).join("")}</div>
+      ${st.period==="custom" ? `<div class="vt-bar" style="margin:0 0 0 126px"><select id="sv-year">${[st.year-1, st.year, st.year+1].map(y=>`<option${y===st.year?" selected":""}>${y}</option>`).join("")}</select>${VT_MON.map((l, i)=>`<button class="btn btn-sm ${st.months.includes(i+1)?'btn-primary':'btn-ghost'} sv-month" data-m="${i+1}">${l}</button>`).join("")}</div>` : ""}
+      <div class="vt-bar" style="margin:0"><b style="font-size:12.5px;display:inline-block;min-width:126px">2. Разложить по</b>${SV_DIMS.map(([k, l])=>`<button class="btn btn-sm ${st.dim===k?'btn-primary':'btn-ghost'}" data-sv="dim" data-v="${k}">${l}</button>`).join("")}</div>
+      <div class="vt-bar" style="margin:0"><b style="font-size:12.5px;display:inline-block;min-width:126px">3. Какие блогеры</b>${[["all","Все"],["micro","Микро/средние"],["large","Крупные"]].map(([k, l])=>`<button class="btn btn-sm ${st.type===k?'btn-primary':'btn-ghost'}" data-sv="type" data-v="${k}">${l}</button>`).join("")}
+        ${filt.map(([k, v])=>`<span class="pill" style="background:var(--action-soft);padding:4px 10px;border-radius:12px;font-size:12px">${escapeHtml(dimName(k))}: <b>${escapeHtml(v)}</b> <button class="link-btn sv-unf" data-k="${k}" title="Убрать">✕</button></span>`).join("")}
+        ${filt.length ? `<button class="btn btn-ghost btn-sm" id="sv-clear">Сбросить отбор</button>` : ""}</div>
+    </div>
+    <div class="grid-kpi">
+      <div class="kpi"><div class="num">${fmt(tot.n)}</div><div class="lbl">Вышло роликов<br><span style="color:var(--ink-mute)">${fmt(tot.bloggers)} блогеров</span></div></div>
+      <div class="kpi ok"><div class="num">${fmt(tot.reach)}</div><div class="lbl">Охват, просмотров</div></div>
+      <div class="kpi"><div class="num">${tot.cpv==null?"—":tot.cpv.toFixed(2).replace(".", ",")+" ₸"}</div><div class="lbl">CPV — цена 1 просмотра<br><span style="color:var(--ink-mute)">бюджет ÷ охват, меньше — лучше</span></div></div>
+      <div class="kpi"><div class="num">${fmt(tot.avg)}</div><div class="lbl">Средний охват ролика</div></div>
+      <div class="kpi ok"><div class="num">${money(tot.contrib)}</div><div class="lbl">Вклад в продажи</div></div>
+      <div class="kpi ${tot.romi==null?'':tot.romi>=1?'ok':'warn'}"><div class="num">${tot.romi==null?"—":tot.romi.toFixed(2).replace(".", ",")}</div><div class="lbl">ROMI — вклад ÷ бюджет<br><span style="color:var(--ink-mute)">больше 1 — окупилось</span></div></div>
+      <div class="kpi bad"><div class="num">${money(tot.cost)}</div><div class="lbl">Бюджет</div></div>
+    </div>
+    ${groups.length ? `<div class="table-wrap" style="max-height:520px;overflow:auto"><table class="vt-table">
+      <thead><tr>${th("key", escapeHtml(dimName(st.dim)))}${th("n","Роликов")}<th style="text-align:right">Доля роликов</th>${th("reach","Охват")}<th style="text-align:right">Доля охвата</th>${th("cpv","CPV, ₸","Цена 1 просмотра: бюджет ÷ охват. Зелёный — дешевле среднего, красный — дороже")}${th("avg","Ср. охват ролика")}${th("contrib","Вклад, ₸")}${th("romi","ROMI")}${th("cost","Бюджет, ₸")}<th style="text-align:right">Доля бюджета</th></tr></thead>
+      <tbody>
+        <tr style="background:var(--action-soft);font-weight:700"><td>Итого</td><td style="text-align:right">${fmt(tot.n)}</td><td style="text-align:right">100%</td><td style="text-align:right">${fmt(tot.reach)}</td><td style="text-align:right">100%</td><td style="text-align:right">${tot.cpv==null?"—":tot.cpv.toFixed(2).replace(".", ",")}</td><td style="text-align:right">${fmt(tot.avg)}</td><td style="text-align:right">${fmt(tot.contrib)}</td><td style="text-align:right">${tot.romi==null?"—":tot.romi.toFixed(2).replace(".", ",")}</td><td style="text-align:right">${fmt(tot.cost)}</td><td style="text-align:right">100%</td></tr>
+        ${groups.map(g=>`<tr class="sv-row" data-v="${escapeHtml(g.key)}" style="cursor:pointer" title="Нажмите — посмотреть внутри «${escapeHtml(g.key)}»${nextDimHint?" по разрезу «"+escapeHtml(nextDimHint)+"»":""}">
+          <td><b>${escapeHtml(g.key)}</b></td><td style="text-align:right">${fmt(g.n)}</td><td>${bar(pct(g.n, tot.n), "var(--blue)")}</td>
+          <td style="text-align:right">${fmt(g.reach)}</td><td>${bar(pct(g.reach, tot.reach), "var(--ok)")}</td>
+          <td style="text-align:right;${cpvStyle(g.cpv)}">${g.cpv==null?"—":g.cpv.toFixed(2).replace(".", ",")}</td><td style="text-align:right">${fmt(g.avg)}</td>
+          <td style="text-align:right">${fmt(g.contrib)}</td><td style="text-align:right;${romiStyle(g.romi)}">${g.romi==null?"—":g.romi.toFixed(2).replace(".", ",")}</td>
+          <td style="text-align:right">${fmt(g.cost)}</td><td>${bar(pct(g.cost, tot.cost), "var(--action)")}</td></tr>`).join("")}
+      </tbody></table></div>
+      <div class="login-hint" style="margin:8px 0 0">Нажмите на строку — откроется всё внутри неё (например, менеджер → его ТЗ). Нажмите на заголовок столбца — сортировка. CPV: <span style="background:rgba(47,168,125,.22);padding:0 4px">зелёный</span> — дешевле среднего, <span style="background:rgba(224,69,102,.22);padding:0 4px">красный</span> — дороже.</div>`
+    : `<div class="empty">За этот период нет вышедших роликов${filt.length?" с таким отбором":""}</div>`}
+  </div>`;
+}
+function wireSimpleStats(){
+  const st = svState(), redraw = ()=>{ svSave(); renderDeskTab(); };
+  document.querySelectorAll("#sv-panel [data-sv]").forEach(b=> b.onclick = ()=>{ st[b.dataset.sv] = b.dataset.v; if(b.dataset.sv==="dim" && st.filters[b.dataset.v]) delete st.filters[b.dataset.v]; redraw(); });
+  document.querySelectorAll("#sv-panel .sv-month").forEach(b=> b.onclick = ()=>{ const m = +b.dataset.m; st.months = st.months.includes(m) ? st.months.filter(x=>x!==m) : st.months.concat(m); if(!st.months.length) st.months = [m]; redraw(); });
+  const y = document.getElementById("sv-year"); if(y) y.onchange = ()=>{ st.year = +y.value; redraw(); };
+  document.querySelectorAll("#sv-panel .sv-sort").forEach(h=> h.onclick = ()=>{ const k = h.dataset.k; if(st.sort===k) st.dir = -st.dir; else { st.sort = k; st.dir = k==="cpv"||k==="key" ? 1 : -1; } redraw(); });
+  document.querySelectorAll("#sv-panel .sv-row").forEach(r=> r.onclick = ()=>{ st.filters[st.dim] = r.dataset.v; const next = SV_DIMS.find(d=> d[0]!==st.dim && !st.filters[d[0]]); if(next) st.dim = next[0]; redraw(); });
+  document.querySelectorAll("#sv-panel .sv-unf").forEach(b=> b.onclick = e=>{ e.stopPropagation(); delete st.filters[b.dataset.k]; redraw(); });
+  const c = document.getElementById("sv-clear"); if(c) c.onclick = ()=>{ st.filters = {}; redraw(); };
+}
 function tplMarketerDashboard(){
   const f = UI.dashPeriod;
   const ms = marketingSummary(f.from, f.to);
   return `
-    ${tplVitrina()}
+    ${tplSimpleStats()}
+    ${UI.vtAdv ? tplVitrina() : `<div class="panel" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div><b>Расширенная витрина</b> <span style="color:var(--ink-mute);font-size:12px">план-факт, год к году, месяцы колонками, дерево строк, Excel — для детального разбора</span></div><button class="btn btn-ghost btn-sm" id="vt-open-adv">Открыть расширенную витрину</button></div>`}
     ${tplBiDashboard()}
     <div class="panel-title">Бартерные рассылки</div>
     <div class="grid-kpi">
@@ -8186,7 +8291,9 @@ function modalMicroDeal(existing, prefill){
    ========================================================================= */
 function wireDeskTab(){
   if(UI.tab==="dashboard" && UI.role==="marketer"){
-    wireVitrina();
+    wireSimpleStats();
+    { const oa = document.getElementById("vt-open-adv"); if(oa) oa.onclick = ()=>{ UI.vtAdv = true; renderDeskTab(); }; }
+    if(UI.vtAdv) wireVitrina();
     wireBiDashboard();
     const dpFrom = document.getElementById("dash-period-from");
     if(dpFrom) dpFrom.onchange = e=>{ UI.dashPeriod.from = e.target.value; renderDeskTab(); };
