@@ -125,12 +125,16 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   const WD = ["в воскресенье", "в понедельник", "во вторник", "в среду", "в четверг", "в пятницу", "в субботу"];
   const whenWord = (today, ymd) => (daysBetween(today, ymd) === 1 ? "завтра" : `${WD[new Date(ymd + "T00:00:00Z").getUTCDay()]} (${ddmm(ymd)})`);
   const nameOf = (d) => String(d.blogerName || "").replace(/@/g, "").trim() || "здравствуйте";
+  // 19.11.2026: автонапоминания блогерам выключены (решение Нины) — включаются только COORD_AUTO_REMIND=on.
+  // Менеджер напоминает вручную: кнопка в карточке интеграции и «Напомнить всем без видео» (remindNow).
+  const autoRemind = () => String(process.env.COORD_AUTO_REMIND || "").toLowerCase() === "on";
   function planReminders() {
     const k = cfg();
     if (k.mode === "off") return;
     const st = getState(), c = C(), today = almatyDate(), hour = almatyHour();
     let changed = false;
     const queue = (d, kind, key, dateStr, extra) => {
+      if (!autoRemind()) return;
       c.keys[key] = new Date().toISOString();
       const vals = [nameOf(d), d.product || "интеграции", dateStr, extra || ""];
       c.queue.push({ id: crypto.randomBytes(6).toString("hex"), key, dealId: d.id, kind, chatId: waNumber(d.phone), vals,
@@ -178,6 +182,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         if (!next) next = { text: pausedTill ? `пауза до ${new Date(d.coordPausedUntil).toLocaleString("ru-RU", { timeZone: "Asia/Almaty" })}`
           : missed >= 1 ? (cfg().mode === "on" ? "срок сдачи прошёл — спросили, когда пришлёт" : "срок сдачи прошёл — бот в тестовом режиме, блогеру не писали") : today < due ? `видео на согласование ждём ${ddmm(due)}; напомним накануне` : `сегодня ждём видео на согласование` };
       }
+      if (!autoRemind() && next && !d.coordStop && !["published", "lead", "received"].includes(stage) && pd) next = { text: next.text + " · автонапоминания выключены — напомнить кнопкой" };
       const nx = JSON.stringify(next);
       if (JSON.stringify(d.coordNext) !== nx) { d.coordNext = next; changed = true; }
     }
@@ -321,6 +326,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         const d = (st.microInfluencerDeals || []).find((x) => x.id === q.dealId);
         if (Date.now() - Date.parse(q.createdAt) > STALE_MS) { q.status = "stale"; log(q.dealId, "sys", "напоминание устарело (не отправлено вовремя) — пропущено"); changed = true; continue; }
         if (!d || d.coordStop || isPublished(d) || !inPilot(d)) { q.status = "cancelled"; log(q.dealId, "sys", "напоминание отменено: опубликовано / стоп / строка удалена"); changed = true; continue; }
+        if (!autoRemind()) { q.status = "cancelled"; log(q.dealId, "sys", "напоминание отменено: автонапоминания выключены"); changed = true; continue; }
         if (d.coordLastOutDay === today) { q.nextTry = Date.now() + 12 * H; continue; } // не больше 1 сообщения в день
         const sentToday = c.log.filter((l) => l.dir === "out" && String(l.at).slice(0, 10) === new Date().toISOString().slice(0, 10)).length;
         if (sentToday >= k.dailyCap) { q.nextTry = Date.now() + 2 * H; continue; } // общий лимит в день
