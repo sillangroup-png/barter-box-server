@@ -22,7 +22,7 @@
 //    больше 7 дней, у крупных — только день выхода и следующий (v10). Начало — выше на 2×√ожидаемого, продолжение — на 1×√ (обычный разброс не всплеск).
 //    Всплеска нет → вклад 0.
 // 5. ДЕЛЁЖ: если в этот день всплеск относится к нескольким выходам этого товара — по охвату × формат
-//    (Stories ×2); выход один — весь прирост ему. Потолок: не больше 1 покупки на 100 просмотров.
+//    (Stories ×2); выход один — весь прирост ему. Потолок (v13): не больше 1 покупки на 330 просмотров и 25 ₸ на просмотр.
 // 6. Сумма = прирост в шт × фактическая цена дня. Уверенность: высокая — обычный уровень по (1)/(2) и
 //    своя доля ≥ 50%; средняя — пересчёт по цене или делёж; низкая — (4) или охват оценён.
 //
@@ -33,7 +33,13 @@
 //    один раз (строка крупных), вторая duplicate. Отменённые (cancelled) не считаются.
 // ============================================================================
 
-const PARAMS_VERSION = "attrib-v12.0-2026-10-30";
+const PARAMS_VERSION = "attrib-v13.0-2026-11-20";
+// v13 (20.11.2026, замечание Нины: «5 000 просмотров не принесут 500 000 продаж»; смены цен; Kaspi Жұма 5–8.11):
+// 1) потолок жёстче и по деньгам: не больше 1 покупки на 330 просмотров И не больше 25 ₸ вклада на просмотр
+//    (25 ₸ — 95% всех 831 выходов MIXIT в Blogery Audit; медиана 1,8 ₸). Потолок действует и когда охват оценён.
+// 2) дни общих распродаж Kaspi (Kaspi Жұма и т.п., список STORE_PROMO_DAYS / env ATTRIB_PROMO_DAYS): ожидаемые продажи
+//    поднимаются на общий рост магазина (товары без блогеров) — рост от акции блогерам не идёт; шлейфа в эти дни нет;
+//    если фона магазина нет — день не считается вовсе. В обычные дни общий рост магазина от +30% тоже учитывается.
 // v10 (21.10.2026, решение Нины): окно у крупных — только день выхода и следующий (у них часто сторис,
 // продажи в первые сутки); у мелких — как в v9, до 7 дней. В общий день прирост делится между крупными
 // и мелкими только при заметном пересечении: если охват одной стороны в этот день меньше 20% охвата
@@ -61,7 +67,21 @@ const HALF_LIFE_HOURS_STORIES = 8;
 const MIN_FIT_DAYS = 10;
 const MIN_EXPOSED_DAYS = 4;
 const PRICE_DRIFT_TOLERANCE = 0.05;
-const MAX_PURCHASES_PER_VIEW = 0.01;
+const MAX_PURCHASES_PER_VIEW = 1 / 330;
+const MAX_KZT_PER_VIEW = 25;
+const STORE_LIFT_MIN = 1.3, STORE_LIFT_MAX = 6;
+// Общие распродажи Kaspi: «YYYY-MM-DD» или «YYYY-MM-DD..YYYY-MM-DD», через запятую. Kaspi Жұма осень 2026 — 5–8 ноября.
+function promoDaysFrom(spec) {
+  const out = new Set();
+  for (const part of String(spec || "").split(/[,;\s]+/).filter(Boolean)) {
+    const [a, b] = part.split("..");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(a)) continue;
+    const end = /^\d{4}-\d{2}-\d{2}$/.test(b || "") ? b : a;
+    for (let d = a, i = 0; d <= end && i < 60; d = addDaysStr(d, 1), i++) out.add(d);
+  }
+  return out;
+}
+const STORE_PROMO_DEFAULT = "2026-11-05..2026-11-08";
 const HUBER_K = 1.5;
 
 const FORMAT_COEF_STORIES = 2;
@@ -232,7 +252,17 @@ function robustFit2(x1, x2, ys) {
 //   listedSince, feedStart, lastCompleteDay ('YYYY-MM-DD' — последний полностью загруженный день)
 // ---------------------------------------------------------------------------
 const EMPTY = Object.freeze({ lines: 0, cancelled: 0, returned: 0, netLines: 0, qty: 0, kzt: 0 });
-function planAttribution({ placements, resolution, daily, weekdayFactor, listedSince, feedStart, lastCompleteDay, control }) {
+function planAttribution({ placements, resolution, daily, weekdayFactor, listedSince, feedStart, lastCompleteDay, control, promoSpec }) {
+  // v13: дни общих распродаж Kaspi и рост магазина в день d относительно дней обычного уровня (товары без блогеров).
+  const promoDays = promoDaysFrom(promoSpec != null ? promoSpec : [STORE_PROMO_DEFAULT, process.env.ATTRIB_PROMO_DAYS || ""].join(","));
+  const storeLift = (d, bdays) => {
+    if (!control || !control.size) return null;
+    const c = control.get(d); if (c == null) return null;
+    const b = (bdays || []).map((x) => control.get(x)).filter((x) => x != null && x > 0);
+    if (b.length < 2) return null;
+    const avg = b.reduce((a, v) => a + v, 0) / b.length;
+    return avg > 0 ? Math.min(STORE_LIFT_MAX, c / avg) : null;
+  };
   // Фон магазина по дням (контрольная группа): скользящее среднее за CONTROL_SMOOTH_DAYS по товарам без блогеров.
   const ctrlAvgCache = new Map();
   const ctrlAvg = (d) => {
@@ -371,7 +401,7 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
       for (const st of steps) {
         let rows = st.rows();
         if (st.s === 1 || st.s === 4) rows = rows.slice(-7);
-        if (rows.length >= 3) return { B: rows.reduce((a, r) => a + r.y, 0) / rows.length, p0, n: rows.length, step: st.s, how: st.how, conv: rows.some((r) => r.conv) };
+        if (rows.length >= 3) return { B: rows.reduce((a, r) => a + r.y, 0) / rows.length, p0, n: rows.length, step: st.s, how: st.how, conv: rows.some((r) => r.conv), bdays: rows.map((r) => r.d) };
       }
       return null;
     };
@@ -384,21 +414,25 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
     for (const m of members) {
       const bl = baselineFor(m);
       if (!bl) { push(m.id, { code, status: "baseline_uncertain", reason: "нет хотя бы 3 дней рядом с выходом, чтобы определить обычный уровень продаж" }); continue; }
-      const rows = []; let started = false, open = false, priceGap = false;
+      const rows = []; let started = false, open = false, priceGap = false, promoGap = false;
       const maxDays = m.source === "barter_box_deals" ? LARGE_WINDOW_DAYS : KERNEL_DAYS;
       for (let k = 0; k < maxDays; k++) {
         const d = addDaysStr(m.d0, k);
         if (d > lastCompleteDay) { open = started || k <= 1; break; }
         const f = priceFactor(bl.p0, dayPrice.get(d));
         if (f == null) { priceGap = true; if (started) break; else continue; }
-        const exp = bl.B * f, q = rec(code, d).qty, ex = q - exp;
+        // v13: общий рост магазина в этот день (Kaspi Жұма, распродажи) — ожидание поднимается, блогеру не идёт
+        const lift = storeLift(d, bl.bdays), isPromo = promoDays.has(d);
+        if (isPromo && lift == null) { promoGap = true; if (started) break; else continue; }
+        const L = lift != null && (isPromo || lift >= STORE_LIFT_MIN) ? Math.max(1, lift) : 1;
+        const exp = bl.B * f * L, q = rec(code, d).qty, ex = q - exp;
         const sd = Math.sqrt(Math.max(exp, 1));
         const spike = ex > Math.max(1, (started ? 1 : 2) * sd);
-        if (spike) { started = true; rows.push({ d, q, exp, ex, price: dayPrice.get(d) }); }
+        if (spike) { started = true; rows.push({ d, q, exp, ex, price: dayPrice.get(d), lift: L, promo: isPromo }); }
         else if (started || k >= 1) break;
         if (k === maxDays - 1) open = false;
       }
-      win.set(m.id, { m, bl, rows, open, priceGap });
+      win.set(m.id, { m, bl, rows, open, priceGap, promoGap });
     }
     // Если в один день всплеск у нескольких выходов этого товара — делим по охвату × формат.
     const dayMembers = new Map();
@@ -478,6 +512,7 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
         cover.push({ m, wgt: Math.sqrt(m.reachUsed) * m.format.coef * Math.pow(0.5, k / hl) });
       }
       if (!cover.length) continue;
+      if (promoDays.has(d)) continue; // v13: в дни общих распродаж Kaspi шлейфа нет
       const pre = preBaseOf(d);
       if (pre == null || pre.promo) continue;
       const pb = pre.pb;
@@ -497,15 +532,19 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
       const tl = tail.get(m.id) || { u: 0, k: 0, days: 0, pre: [], idx: [] };
       let uS = tl.u, kS = tl.k;
       let units = u0 + uT + uS, capped = false;
-      if (!m.reachEstimated && units > 0 && units > m.reachUsed * MAX_PURCHASES_PER_VIEW) {
-        const k = (m.reachUsed * MAX_PURCHASES_PER_VIEW) / units;
-        u0 *= k; uT *= k; k0 *= k; kT *= k; uS *= k; kS *= k; units *= k; capped = true;
+      // v13: потолок по охвату — и в покупках, и в тенге; действует и при оценённом охвате
+      if (units > 0 && m.reachUsed > 0) {
+        const kU = units > m.reachUsed * MAX_PURCHASES_PER_VIEW ? (m.reachUsed * MAX_PURCHASES_PER_VIEW) / units : 1;
+        const kzt = (k0 + kT + kS) * kU;
+        const kK = kzt > m.reachUsed * MAX_KZT_PER_VIEW ? (m.reachUsed * MAX_KZT_PER_VIEW) / kzt : 1;
+        const k = kU * kK;
+        if (k < 1) { u0 *= k; uT *= k; k0 *= k; kT *= k; uS *= k; kS *= k; units *= k; capped = true; }
       }
       const conf = m.reachEstimated || bl.step === 4 ? "L" : (bl.step === 3 || minShare < 0.5 || w.priceGap ? "M" : "H");
       const preLevel = tl.pre.length ? tl.pre.reduce((a, v) => a + v, 0) / tl.pre.length : null;
       const ctrlIdx = tl.idx.length ? tl.idx.reduce((a, v) => a + v, 0) / tl.idx.length : null;
       push(m.id, { code, status: k0 + kT + kS >= 1 ? "ok" : "zero", k0: Math.floor(k0), kT: Math.floor(kT), kS: Math.floor(kS), uS, tailDays: tl.days, preLevel, ctrlIdx,
-        units, conf, bl, parts, capped, growing: w.open, priceGap: w.priceGap, q0: rec(code, m.d0).qty, price0: dayPrice.get(m.d0) });
+        units, conf, bl, parts, capped, growing: w.open, priceGap: w.priceGap, promoGap: w.promoGap, q0: rec(code, m.d0).qty, price0: dayPrice.get(m.d0) });
     }
   }
 
@@ -530,10 +569,10 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
       const base = `SKU ${q.code}: обычный уровень ${fmtQ(q.bl.B)} шт/день при цене ${fmt(q.bl.p0)} ₸ (${q.bl.how}, ${q.bl.n} дн.)`;
       const tailTxt = q.kS >= 1 ? `; шлейф ${fmt(q.kS)} ₸ (≈${fmtQ(q.uS)} шт за ${q.tailDays} дн.: 50% подъёма над уровнем до кампании ≈${fmtQ(q.preLevel)} шт/день с учётом фона магазина${q.ctrlIdx && Math.abs(q.ctrlIdx - 1) >= 0.05 ? ` ×${q.ctrlIdx.toFixed(2)}` : ""}, без дней скидок; поделено по охвату и затуханию)` : "";
       if (!q.parts.length) return `${base}; в день выхода ${fmtQ(q.q0)} шт — пика над обычным уровнем нет` + (q.priceGap ? " (в дни с другой ценой влияние цены по истории не определить — не считали)" : "") + tailTxt;
-      const ds = q.parts.map((r) => `${ddmmD(r.d)}: ${fmtQ(r.q)} шт при ожидаемых ${fmtQ(r.exp)}${Math.abs(r.price / q.bl.p0 - 1) > PRICE_DRIFT_TOLERANCE ? ` (цена ${fmt(r.price)} ₸ — ожидание с учётом цены)` : ""} → +${fmtQ(r.ex)}` +
+      const ds = q.parts.map((r) => `${ddmmD(r.d)}: ${fmtQ(r.q)} шт при ожидаемых ${fmtQ(r.exp)}${Math.abs(r.price / q.bl.p0 - 1) > PRICE_DRIFT_TOLERANCE ? ` (цена ${fmt(r.price)} ₸ — ожидание с учётом цены)` : ""} ${r.lift > 1.001 ? `(${r.promo ? "Kaspi Жұма" : "общий рост Kaspi"}: весь магазин ×${r.lift.toFixed(1)} — ожидание поднято) ` : ""}→ +${fmtQ(r.ex)}` +
         (r.sh < 0.999 ? `, доля по охвату ${Math.round(r.sh * 100)}% (в этот день также ${r.others.slice(0, 3).join(", ")}${r.others.length > 3 ? "…" : ""})` : "") +
         (r.poolNote ? ` [${r.poolNote}]` : ""));
-      return `${base}; ${ds.join("; ")}` + tailTxt + (q.capped ? "; срезано до 1 покупки на 100 просмотров" : "");
+      return `${base}; ${ds.join("; ")}` + tailTxt + (q.promoGap ? "; дни Kaspi Жұма без данных о фоне магазина не считали" : "") + (q.capped ? `; срезано по охвату: не больше 1 покупки на 330 просмотров и ${MAX_KZT_PER_VIEW} ₸ на просмотр` : "");
     });
     const head = `Итого ${fmt(t)} ₸ (≈${fmtQ(units)} шт) = день выхода ${fmt(k0)} ₸ + следующие дни ${fmt(kT)} ₸ + шлейф ${fmt(kS)} ₸. Уверенность: ${CONF_LABEL[conf]}.` +
       (growing ? " Всплеск ещё идёт — сумма может вырасти." : "");
