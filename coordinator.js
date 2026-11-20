@@ -282,6 +282,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   async function channelId() { return (await chanInfo()).id; }
   // Ручная отправка одному блогеру (кнопки «напомнить сейчас» и «тест»): через Wazzup, если задан ключ, иначе через Битрикс.
   async function sendNow(d, text) {
+    if (chatappFor(d.phone)) { const n = waNumber(d.phone); await chatapp.send({ chatId: n, text }); return { via: `через ChatApp (менеджер ${d.responsible || "—"})`, chatId: n, contactId: "—", userId: "—" }; }
     if (transport() === "bitrix") { const r = await sendViaBitrix(d, text); return { via: `через Битрикс (чат ${r.chatId})`, ...r }; }
     if (transport() !== "wazzup") throw new Error("Отправка не настроена: в Render нет WAZZUP_API_KEY / BITRIX_WEBHOOK_URL");
     const ch = await chanInfo();
@@ -291,7 +292,34 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     await wazzupSend({ channelId: ch.id, chatType: "whatsapp", chatId: n, text, crmMessageId: `bb-manual-${d.id}-${Date.now()}` });
     return { via: `через Wazzup (${ch.phone})`, chatId: n, contactId: "—", userId: "—" };
   }
+  // ChatApp (20.11.2026): блогерам менеджеров из CHATAPP_MANAGERS пишем со второго номера (ChatApp), остальным — Wazzup.
+  // Менеджер определяется по номеру получателя: интеграция с этим телефоном → ответственный. Тимлидам (согласование) — Wazzup.
+  const chatapp = require("./chatapp").createChatApp({});
+  const CHATAPP_MANAGERS_DEFAULT = "Анастасия, Надира, Сабрина, Оксана, Сая, Анеля";
+  const chatappManagers = () => String(process.env.CHATAPP_MANAGERS || CHATAPP_MANAGERS_DEFAULT).split(/[,;]+/).map((x) => personKey(x)).filter(Boolean);
+  function chatappFor(phone) {
+    if (!chatapp.configured()) return null;
+    const n = waNumber(phone); if (!n) return null;
+    const st = getState();
+    const deals = (st.microInfluencerDeals || []).concat(st.influencerDeals || []).filter((d) => waNumber(d.phone) === n && d.responsible);
+    if (!deals.length) return null;
+    const d = deals.sort((a, b) => String(b.plannedDate || b.createdAt || "").localeCompare(String(a.plannedDate || a.createdAt || "")))[0];
+    return chatappManagers().includes(personKey(d.responsible)) ? d.responsible : null;
+  }
+  if (chatapp.configured()) setTimeout(() => chatapp.check().then((r) => console.log("ChatApp:", r.ok ? `вход OK, лицензия ${r.license}, мессенджер ${r.messenger}; менеджеры: ${chatappManagers().join(", ")}` : `ошибка — ${r.error}`)).catch(() => {}), 5000).unref();
+  app.get("/api/chatapp/status", requireAuth, async (req, res) => { try { res.json(Object.assign({ configured: chatapp.configured(), managers: chatappManagers() }, req.query.fresh ? await chatapp.check() : chatapp.status() || {})); } catch (e) { res.status(500).json({ error: e.message }); } });
   async function wazzupSend(body) {
+    const m = body && !body.templateId ? chatappFor(body.chatId) : null;
+    if (m) {
+      const fileName = body.contentUri && /^brief-delivery:/.test(String(body.crmMessageId || "")) ? "ТЗ MIXIT.pdf" : undefined;
+      const r = await chatapp.send(Object.assign({}, body, fileName ? { fileName } : {}));
+      // У ChatApp статусы доставки не приходят к нам вебхуком — принятое ChatApp ТЗ считаем отправленным.
+      if (fileName) setTimeout(() => { try { if (briefDelivery.statuses([{ messageId: r.messageId, status: "sent" }])) persist(); } catch (e) {} }, 3000).unref();
+      return r;
+    }
+    return wazzupSendRaw(body);
+  }
+  async function wazzupSendRaw(body) {
     const k = cfg();
     const r = await fetch(`${WAZZUP}/message`, { method: "POST", headers: { Authorization: `Bearer ${k.apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const txt = await r.text();
