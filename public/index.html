@@ -1313,7 +1313,7 @@ function reportPeriodSummary(from, to){
   const orderIds = new Set(orders.map(o=>o.id));
   const pubsInPeriod = DataManager.state.publications.filter(p=> orderIds.has(p.orderId) && inDateRange(p.publishedAt, from, to));
 
-  const byPlatformMap = {}, byBloggerMap = {};
+  const byPlatformMap = {}, byBloggerMap = {}, bname = bloggerNamer();
   let totalReach = 0, storiesCount = 0, postsCount = 0;
   pubsInPeriod.forEach(p=>{
     const o = DataManager.find("orders", p.orderId);
@@ -1327,7 +1327,7 @@ function reportPeriodSummary(from, to){
     if(!byPlatformMap[pk]) byPlatformMap[pk] = {platform:pk, count:0, reach:0};
     byPlatformMap[pk].count++; byPlatformMap[pk].reach += reach;
 
-    const bk = o.blogger || "—";
+    const bk = bname(o.blogger);
     if(!byBloggerMap[bk]) byBloggerMap[bk] = {blogger:bk, count:0, reach:0};
     byBloggerMap[bk].count++; byBloggerMap[bk].reach += reach;
   });
@@ -2232,9 +2232,9 @@ function tplInfluencerBrandDashboard(allRows){
    по статусу оплаты. Плана (план-охват/план-расход) в этой модели нет, поэтому вместо блока
    "План/факт" показываем разбивку по статусам оплаты/публикации. */
 function microBloggerAgg(rows){
-  const map = {};
+  const map = {}, bname = bloggerNamer();
   rows.forEach(r=>{
-    const login = r.deal.blogerName || "—", key = microBloggerKey(r.deal.blogerName);
+    const login = bname(r.deal.blogerName), key = microBloggerKey(r.deal.blogerName);
     if(!map[key]) map[key] = {login, reach:0, contribution:0, cost:0, dealsCount:0};
     const a = map[key];
     a.reach += microDealFactReach(r.deal);
@@ -2496,9 +2496,9 @@ function microBloggerSummary(month){
   if(month) deals = deals.filter(d=> microDealDate(d).slice(0,7)===month);
   const romiById = {};
   computeMicroInfluencerRomi().forEach(r=>{ romiById[r.deal.id] = r; });
-  const map = {};
+  const map = {}, bname = bloggerNamer();
   deals.forEach(d=>{
-    const name = d.blogerName || "—", key = microBloggerKey(d.blogerName);
+    const name = bname(d.blogerName), key = microBloggerKey(d.blogerName);
     if(!map[key]) map[key] = {blogerName:name, dealsCount:0, totalReach:0, totalCost:0, totalContribution:0, hasAnyBaseline:false};
     const a = map[key];
     a.dealsCount++;
@@ -3040,8 +3040,21 @@ function microBloggerKey(name){
   if(at) return at[1].replace(/[^a-z0-9]/g,"") || "—";
   s = s.replace(/\([^)]*\)/g," ");
   s = s.replace(/(^|[^a-zа-я0-9])(бартер|barter|за\s*товар|черный\s*список|не\s*согласовано|доп\.?\s*видео|допик)(?=$|[^a-zа-я0-9])/g,"$1 ");
+  // 20.11.2026: «dehnara доп видео 2», «dehnara бартер №2», «dehnara 2 видео», «dehnara повтор» — тот же блогер
+  s = s.replace(/(^|[^a-zа-я0-9])(доп|допы|повтор|повторно|видео|рилс|reels|сторис|stories)(\s*№?\s*\d{1,2})?(?=$|[^a-zа-я0-9])/g,"$1 ");
+  s = s.replace(/(^|\s)(№\s*)?\d{1,2}(\s*(видео|рилс))?\s*$/,"$1 ");
   s = s.replace(/[^a-zа-я0-9]+/g,"");
   return s || "—";
+}
+// Одно имя на блогера (20.11.2026): «dehnara», «dehnara доп видео», «dehnara бартер», «@dehnara» — один блогер.
+// Ключ — microBloggerKey; показываем самый короткий вариант имени из всех записей (без приписок). Для сводок/аналитики.
+function bloggerNamer(){
+  const st = DataManager.state || {}, m = new Map();
+  const add = nm=>{ const c = String(nm||"").trim(); if(!c) return; const k = microBloggerKey(c); if(k==="—") return; const cur = m.get(k); if(!cur || c.length < cur.length || (c.length===cur.length && c < cur)) m.set(k, c); };
+  (st.microInfluencerDeals||[]).forEach(d=> add(d.blogerName));
+  (st.influencerDeals||[]).forEach(d=> add(d.blogerLogin));
+  (st.orders||[]).forEach(o=> add(o.blogger));
+  return nm=>{ const c = String(nm||"").trim(); if(!c) return "—"; const k = microBloggerKey(c); return (k!=="—" && m.get(k)) || c; };
 }
 // Менеджеры для выпадающих списков «Ответственный» (18.11.2026): те же имена, что в планах.
 function microManagerNames(cur){
@@ -3926,14 +3939,15 @@ function vtSave(){ try{ const s = Object.assign({}, UI.vt, {full:false}); localS
 function vtSavedList(){ try{ return JSON.parse(localStorage.getItem(VT_SAVED) || "[]"); }catch(e){ return []; } }
 function vtMetric(k){ return VT_METRICS.find(x=>x.k===k) || VT_METRICS[0]; }
 function vtRows(){
+  const bname = bloggerNamer();
   const large = computeInfluencerRomi().map(r=>{ const d = r.deal; return {type:"Крупные", manager:String(d.responsible||"").trim()||"Не указан",
-    cat:String(d.bloggerCategory||"").trim()||"Не указана", blogger:String(d.blogerLogin||"—").trim(), product:productLabelOf(d),
+    cat:String(d.bloggerCategory||"").trim()||"Не указана", blogger:bname(d.blogerLogin), product:productLabelOf(d),
     format:String(d.platform||"—"), pay:String(d.status||"—"), factDate:d.publishedDate||"", planDate:d.plannedDate||d.publishedDate||"",
     cost:Number(d.cost)||0, planCost:Number(d.plannedCost)||Number(d.cost)||0, reach:Number(d.reach)||0, planReach:Number(d.plannedReach)||0,
     contrib:Number(r.netContribution)||0, planContrib:Number(d.plannedContribution)||0, clicks:Number(d.clicks)||0, planClicks:Number(d.plannedClicks)||0,
     published:!!d.publishedDate, paid:d.status==="Оплачена"||d.status==="Закрыта", pcat:productCategoryOf(d), tz:"Без ТЗ", city:"Не указан", lang:"Не указан", coop:"Крупная интеграция"}; });
   const micro = computeMicroInfluencerRomi().map(r=>{ const d = r.deal, c = microDealTotalCost(d); return {type:"Микро/средние", manager:String(d.responsible||"").trim()||"Не указан",
-    cat:d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "Не указана", blogger:String(d.blogerName||"—").trim(), product:productLabelOf(d),
+    cat:d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "Не указана", blogger:bname(d.blogerName), product:productLabelOf(d),
     format:microFormatOf(d), pay: !(Number(d.cost) > 0) ? "Бартер (без оплаты)" : (String(d.paymentMethod||"").trim() || "Не указан"),
     factDate:d.publishDate||(microDealPublished(d)?d.plannedDate||"":""), planDate:d.plannedDate||d.publishDate||"", cost:c, planCost:c, reach:microDealFactReach(d), planReach:microDealAvgReach(d),
     contrib:Number(r.netContribution)||0, planContrib:0, clicks:0, planClicks:0, published:microDealPublished(d), paid:d.paymentStatus==="оплачено",
@@ -4341,12 +4355,13 @@ function tplMarketerDashboard(){
 const BI_MONTHS = ["янв","фев","мар","апр","май","июн","июл","авг","сен","окт","ноя","дек"];
 function biState(){ if(!UI.bi) UI.bi = {type:"all", manager:"", cat:"", product:""}; return UI.bi; }
 function biRows(){
+  const bname = bloggerNamer();
   const large = computeInfluencerRomi().map(r=>{ const d = r.deal; return {type:"large", date:inflDealDate(d)||"", cost:Number(d.cost)||0, contrib:Number(r.netContribution)||0,
     reach:Number(d.reach)||0, published:!!d.publishedDate, paid:d.status==="Оплачена"||d.status==="Закрыта",
-    manager:String(d.responsible||"").trim()||"—", cat:String(d.bloggerCategory||"").trim()||"Без категории", blogger:String(d.blogerLogin||"—"), product:String(d.product||"").trim()||"—"}; });
+    manager:String(d.responsible||"").trim()||"—", cat:String(d.bloggerCategory||"").trim()||"Без категории", blogger:bname(d.blogerLogin), product:String(d.product||"").trim()||"—"}; });
   const micro = computeMicroInfluencerRomi().map(r=>{ const d = r.deal; return {type:"micro", date:microDealDate(d)||"", cost:microDealTotalCost(d), contrib:Number(r.netContribution)||0,
     reach:microDealFactReach(d), published:microDealPublished(d), paid:d.paymentStatus==="оплачено",
-    manager:String(d.responsible||"").trim()||"—", cat:String(d.bloggerCategory||"").trim()||"Без категории", blogger:String(d.blogerName||"—"), product:String(d.product||"").trim()||"—"}; });
+    manager:String(d.responsible||"").trim()||"—", cat:String(d.bloggerCategory||"").trim()||"Без категории", blogger:bname(d.blogerName), product:String(d.product||"").trim()||"—"}; });
   return large.concat(micro);
 }
 function biFilter(rows, skip){
