@@ -679,6 +679,14 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     res.json({ mode: k.mode, transport: transport(), bot: C().botId || null, manager: k.manager, phones: k.phones, wazzup: !!k.apiKey, templates: { soon: !!k.tpl.soon, today: !!k.tpl.today, overdue: !!k.tpl.overdue },
       webhook: k.secret.length >= 16, queue: c.queue.filter((q) => q.status === "pending").length, log: c.log.slice(-60).reverse() });
   });
+  // Переписка по интеграции для карточки (23.11.2026): все сообщения с этим номером, по всем его интеграциям.
+  app.get("/api/coord/deal/:id/chat", requireAuth, (req, res) => {
+    const st = getState(), d = (st.microInfluencerDeals || []).find((x) => x.id === +req.params.id);
+    if (!d) return res.status(404).json({ error: "не найдено" });
+    const n = waNumber(d.phone), ids = new Set([d.id]);
+    if (n) for (const x of st.microInfluencerDeals || []) if (waNumber(x.phone) === n) ids.add(x.id);
+    res.json({ pilot: inPilot(d), transport: transport(), log: C().log.filter((l) => ids.has(l.dealId)).slice(-80) });
+  });
   app.post('/api/coord/pending-media/:messageId/attach',requireAuth,(req,res)=>{
     if(!staff(req,res))return;
     if(!videoFlow.enabled())return res.status(409).json({error:'Версионность выключена'});
