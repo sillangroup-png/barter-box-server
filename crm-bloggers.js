@@ -1,0 +1,379 @@
+'use strict';
+/* ---------- Блогеры и оплаты из Blogger CRM внутри Barter Box (22.11.2026) ----------
+   Данные лежат в схеме crm своего Supabase (BB_DB_URL):
+     crm.bloggers / crm.payments — по строке на запись, все поля CRM в data (jsonb);
+     crm.items — товары, бартеры, ТЗ, пользователи CRM и прочее;
+     crm.status_log — кто и когда менял статус блогера;
+     crm.meta — cutover (переезд завершён) и служебные отметки.
+   До переезда их заливает старая CRM, здесь — только просмотр.
+   После переезда (кнопка у Нины) CRM только для чтения, а правки идут здесь, и этот модуль
+   сам дублирует изменения в базу Константина (crm_blogers.*) и в резервную копию (public.*). */
+const { Pool } = require('pg');
+
+const USER_NAMES = { kamila: 'Камила', madina: 'Мадина', zarina: 'Зарина', zarina1234: 'Зарина', marina: 'Марина', saya: 'Сая',
+  altynay: 'Алтынай', anastasiia: 'Анастасия', sabrina: 'Сабрина', nadira: 'Надира', aneljan1: 'Анеля', elmira1: 'Эльмира',
+  ajar: 'Ажар', oxana: 'Оксана', sabina: 'Сабина', admin: 'Нина', marketing: 'Маркетинг', grok_bot: 'бот' };
+const managerName = m => !m ? null : (m.startsWith('bb:') ? m.slice(3) : (USER_NAMES[m] || m));
+
+// Статусы блогера (понятные слова, см. прототип «Статусы и даты»)
+const TALK = { new: 'Новый', contacted: 'Написали', replied: 'Ответили', considering: 'На рассмотрении' };
+const LEGACY = { in_work: 'В работе', transferred: 'Передан в работу', payment_pending: 'К оплате', payment_submitted: 'Подано на оплату', paid: 'Оплачено' };
+const DECLINE = { child: 'ребёнок', male: 'мужчина', content: 'контент', low_views: 'низкие просмотры', fake: 'накрутка', expensive: 'дорого',
+  shop: 'магазин', rf: 'РФ', no_answer: 'не отвечает', blacklist: 'чёрный список', other: 'другое' };
+const LEGACY_DECLINE = { declined_reach: 'low_views', declined_rf: 'rf', declined_shop: 'shop', declined_bad: 'content' };
+const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+const PAY_STATUS = { pending: 'К оплате', submitted: 'Подано', paid: 'Оплачено', rejected: 'Отклонено', refunded: 'Возврат' };
+
+const nickOf = url => String(url || '').replace(/#.*$/, '').replace(/[?].*$/, '').replace(/\/+$/, '').split('/').pop().replace('@', '').trim().toLowerCase() || null;
+const num = v => { const n = parseFloat(String(v ?? '').replace(/\s/g, '').replace(',', '.')); return isFinite(n) ? n : null; };
+const str = (v, n = 500) => (v === undefined || v === null) ? null : String(v).trim().slice(0, n) || null;
+
+function declineCode(status, reason) {
+  if (LEGACY_DECLINE[status]) return LEGACY_DECLINE[status];
+  if (reason && DECLINE[reason]) return reason;
+  if (reason === 'reach') return 'low_views';
+  if (reason === 'bad') return 'content';
+  if (reason === 'rf') return 'rf';
+  if (reason && /охват/i.test(reason)) return 'low_views';
+  return 'other';
+}
+
+function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
+  const URL = env.BB_DB_URL || '';
+  const pool = URL ? new Pool({ connectionString: URL, ssl: { rejectUnauthorized: false }, max: 4, idleTimeoutMillis: 30000, connectionTimeoutMillis: 10000 }) : null;
+  const need = (res) => { if (!pool) { res.status(503).json({ error: 'База не подключена (BB_DB_URL)' }); return false; } return true; };
+  const isNina = req => req.session && req.session.name === 'Нина' && req.session.canExport;
+  const canStaff = req => req.session && (req.session.role === 'manager' || req.session.role === 'marketer');
+
+  let cutoverCache = { at: 0, value: null };
+  async function cutover() {
+    if (!pool) return null;
+    if (Date.now() - cutoverCache.at < 15000) return cutoverCache.value;
+    try { const r = await pool.query("select value from crm.meta where key='cutover'"); cutoverCache = { at: Date.now(), value: r.rows[0] ? r.rows[0].value : null }; }
+    catch (e) { cutoverCache = { at: Date.now(), value: null }; }
+    return cutoverCache.value;
+  }
+
+  // Интеграции BB по нику/ID CRM — для статусов «В работе · месяц / Вышло · месяц / Работали · месяц».
+  let dealIdx = { at: 0, byNick: new Map(), byCrm: new Map() };
+  function deals() {
+    if (Date.now() - dealIdx.at < 20000) return dealIdx;
+    const byNick = new Map(), byCrm = new Map();
+    const st = getState() || {};
+    const add = (k, map, d) => { if (!k) return; if (!map.has(k)) map.set(k, []); map.get(k).push(d); };
+    for (const d of (st.microInfluencerDeals || [])) {
+      const x = { id: d.id, kind: 'micro', date: d.publishDate || d.plannedDate || '', product: d.product || '', manager: d.responsible || '',
+        done: d.videoStatus === 'опубликовано' || (num(d.factReachStories) || 0) > 0, cancelled: /отмен/i.test(String(d.problemStatus || '')), cost: num(d.cost), paymentStatus: d.paymentStatus || '' };
+      add(nickOf(d.instagramAccount) || nickOf(d.tiktokAccount), byNick, x); add(d.crmBloggerId && String(d.crmBloggerId), byCrm, x);
+    }
+    for (const d of (st.influencerDeals || [])) {
+      const x = { id: d.id, kind: 'large', date: d.publishDate || d.plannedDate || d.date || '', product: d.product || '', manager: d.responsible || '',
+        done: ['Опубликована', 'Закрыта', 'Оплачена'].includes(d.status), cancelled: d.status === 'Отменена', cost: num(d.plannedCost || d.cost), paymentStatus: d.paymentStatus || '' };
+      add(nickOf(d.instagramLink) || nickOf(d.blogerLogin), byNick, x); add(d.crmBloggerId && String(d.crmBloggerId), byCrm, x);
+    }
+    dealIdx = { at: Date.now(), byNick, byCrm };
+    return dealIdx;
+  }
+  const dealsFor = (id, nick) => { const i = deals(); const m = new Map(); for (const d of [...(i.byCrm.get(String(id)) || []), ...(nick ? (i.byNick.get(nick) || []) : [])]) m.set(d.kind + d.id, d); return [...m.values()]; };
+  const monthOf = s => { const m = /^(\d{4})-(\d{2})/.exec(String(s || '')); return m ? { ym: m[1] + '-' + m[2], name: MONTHS[+m[2] - 1] } : null; };
+
+  function statusView(status, reason, ds) {
+    if (String(status || '').startsWith('declined')) { const c = declineCode(status, reason); return { group: 'declined', label: 'Отказ: ' + DECLINE[c], code: c, note: (reason && !DECLINE[reason] && !['reach', 'bad', 'rf', 'declined'].includes(reason)) ? reason : null }; }
+    const live = ds.filter(d => !d.cancelled);
+    if (live.length) {
+      const open = live.filter(d => !d.done).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+      const now = new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 7);
+      if (open.length) { const m = monthOf(open[0].date); return { group: 'work', label: 'В работе' + (m ? ' · ' + m.name : ''), month: m && m.ym }; }
+      const last = live.sort((a, b) => String(b.date).localeCompare(String(a.date)))[0]; const m = monthOf(last.date);
+      return { group: 'worked', label: (m && m.ym === now ? 'Вышло' : 'Работали') + (m ? ' · ' + m.name : ''), month: m && m.ym };
+    }
+    if (TALK[status]) return { group: 'talk', label: TALK[status] };
+    if (LEGACY[status]) return { group: 'legacy', label: LEGACY[status] + ' (CRM)' };
+    return { group: 'talk', label: TALK.new };
+  }
+
+  function view(row) {
+    const b = row.data || {};
+    const ds = dealsFor(row.id, row.nick);
+    return {
+      id: row.id, name: b.name || null, nick: row.nick, instagram: b.instagram_url || null, tiktok: b.tiktok_url || null,
+      followers: num(b.instagram_followers), followersTT: num(b.tiktok_followers), reach: num(b.instagram_avg_reach), reachTT: num(b.tiktok_avg_reach),
+      storiesReach: num(b.stories_avg_reach), er: b.er || null, category: b.category || null,
+      price: { reels: num(b.price_reels), tiktok: num(b.price_tiktok), both: num(b.price_both), stories: num(b.price_stories) },
+      cpv: { reels: num(b.cpv_reels), tiktok: num(b.cpv_tiktok), both: num(b.cpv_both) },
+      status: b.status || 'new', declineReason: b.decline_reason || null, st: statusView(b.status, b.decline_reason, ds),
+      manager: managerName(row.manager), lastComment: b.last_comment || null, notes: b.notes || null,
+      whatsapp: b.blogger_whatsapp || null, managerWhatsapp: b.manager_whatsapp || null, managerInstagram: b.manager_instagram || null,
+      exclusive: !!b.is_exclusive, contactedAt: b.contacted_at || null, updatedAt: b.updated_at || null, createdAt: b.created_at || null,
+      deals: ds.length,
+    };
+  }
+
+  // ---------- Справочники ----------
+  app.get('/api/crm/meta', requireAuth, async (req, res) => {
+    if (!canStaff(req) || !need(res)) return;
+    try {
+      const [cnt, push, mgr] = await Promise.all([
+        pool.query("select count(*)::int n, count(*) filter (where status like 'declined%')::int declined from crm.bloggers where not deleted"),
+        pool.query("select value, updated_at from crm.meta where key='last_crm_push'"),
+        pool.query('select manager, count(*)::int n from crm.bloggers where not deleted group by 1 order by 2 desc'),
+      ]);
+      const managers = {}; for (const r of mgr.rows) { const n = managerName(r.manager) || '— без менеджера'; managers[n] = (managers[n] || 0) + r.n; }
+      res.json({ cutover: await cutover(), total: cnt.rows[0].n, declined: cnt.rows[0].declined, lastPush: push.rows[0] || null,
+        managers, talk: TALK, decline: DECLINE, payStatus: PAY_STATUS, isNina: isNina(req) });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ---------- Список блогеров ----------
+  app.get('/api/crm/bloggers', requireAuth, async (req, res) => {
+    if (!canStaff(req) || !need(res)) return;
+    const q = req.query; const where = ['not deleted']; const args = [];
+    const arg = v => { args.push(v); return '$' + args.length; };
+    if (q.q) { const s = String(q.q).toLowerCase().replace('@', '').trim(); where.push(`(search like ${arg('%' + s + '%')} or nick like ${arg('%' + s + '%')})`); }
+    if (q.status === 'talk') where.push("status in ('new','contacted','replied','considering')");
+    else if (q.status === 'declined') where.push("status like 'declined%'");
+    else if (q.status === 'notdeclined') where.push("status not like 'declined%'");
+    else if (q.status && TALK[q.status]) where.push(`status = ${arg(q.status)}`);
+    else if (q.status && q.status.startsWith('decl:')) { const c = q.status.slice(5); const legacy = Object.keys(LEGACY_DECLINE).filter(k => LEGACY_DECLINE[k] === c);
+      where.push(`(status like 'declined%' and (data->>'decline_reason' = ${arg(c)} or status = any(${arg(legacy.length ? legacy : ['__'])})))`); }
+    let mgrNames = null;
+    if (q.mine === '1') mgrNames = [req.session.name];
+    else if (q.manager) mgrNames = [String(q.manager)];
+    if (mgrNames) {
+      const users = Object.keys(USER_NAMES).filter(u => mgrNames.includes(USER_NAMES[u]));
+      if (mgrNames.includes('— без менеджера')) where.push('manager is null');
+      else where.push(`(manager = any(${arg([...users, ...mgrNames.map(n => 'bb:' + n)])}))`);
+    }
+    if (q.worked && /^\d{4}-\d{2}$/.test(q.worked)) {
+      const i = deals(); const nicks = []; const ids = [];
+      for (const [k, list] of i.byNick) if (list.some(d => !d.cancelled && String(d.date).startsWith(q.worked))) nicks.push(k);
+      for (const [k, list] of i.byCrm) if (list.some(d => !d.cancelled && String(d.date).startsWith(q.worked))) ids.push(k);
+      where.push(`(nick = any(${arg(nicks.length ? nicks : ['__'])}) or id = any(${arg(ids.length ? ids : ['__'])}))`);
+    }
+    const limit = Math.min(200, Math.max(10, parseInt(q.limit) || 50));
+    const page = Math.max(1, parseInt(q.page) || 1);
+    const order = q.sort === 'reach' ? "coalesce((data->>'instagram_avg_reach')::numeric,0) desc" : q.sort === 'name' ? 'nick asc' : "coalesce(data->>'updated_at', '') desc";
+    try {
+      const w = where.join(' and ');
+      const [rows, cnt] = await Promise.all([
+        pool.query(`select id, data, status, manager, nick from crm.bloggers where ${w} order by ${order} limit ${limit} offset ${(page - 1) * limit}`, args),
+        pool.query(`select count(*)::int n from crm.bloggers where ${w}`, args),
+      ]);
+      res.json({ items: rows.rows.map(view), total: cnt.rows[0].n, page, limit });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ---------- Карточка ----------
+  app.get('/api/crm/bloggers/:id', requireAuth, async (req, res) => {
+    if (!canStaff(req) || !need(res)) return;
+    try {
+      const r = await pool.query('select id, data, status, manager, nick from crm.bloggers where id=$1', [req.params.id]);
+      if (!r.rows[0]) return res.status(404).json({ error: 'Блогер не найден' });
+      const [pays, log] = await Promise.all([
+        pool.query('select id, data, status from crm.payments where blogger_id=$1 and not deleted order by created_at desc nulls last', [req.params.id]),
+        pool.query('select status, decline_reason, actor, at from crm.status_log where blogger_id=$1 order by at desc limit 30', [req.params.id]),
+      ]);
+      const b = view(r.rows[0]);
+      b.dealList = dealsFor(r.rows[0].id, r.rows[0].nick).sort((a, z) => String(z.date).localeCompare(String(a.date)));
+      b.payments = pays.rows.map(p => ({ id: p.id, status: p.status, statusLabel: PAY_STATUS[p.status] || p.status, amount: num(p.data.amount),
+        name: p.data.payment_name || null, recipient: p.data.recipient_name || null, isIp: !!p.data.is_ip, createdAt: p.data.created_at || null }));
+      b.log = log.rows;
+      res.json(b);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  async function requireCutover(res) {
+    if (await cutover()) return true;
+    res.status(409).json({ error: 'Пока блогеры ведутся в старой CRM — правки будут доступны после переезда (кнопка у Нины во вкладке «Блогеры»)' });
+    return false;
+  }
+  async function crmUserId(client, username) {
+    if (!username) return null;
+    const r = await client.query("select id from crm.items where collection='users' and data->>'username'=$1", [username]);
+    return r.rows[0] ? r.rows[0].id : null;
+  }
+  function managerKey(name) { const u = Object.keys(USER_NAMES).find(k => USER_NAMES[k] === name && k !== 'zarina1234'); return u || (name ? 'bb:' + name : null); }
+  const searchOf = b => [b.name, b.instagram_url, b.tiktok_url, b.last_comment, b.blogger_whatsapp].filter(Boolean).join(' ').toLowerCase();
+
+  // ---------- Правка ----------
+  app.patch('/api/crm/bloggers/:id', requireAuth, async (req, res) => {
+    if (!canStaff(req) || !need(res) || !(await requireCutover(res))) return;
+    const body = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const r = await client.query('select data, manager from crm.bloggers where id=$1 for update', [req.params.id]);
+      if (!r.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Блогер не найден' }); }
+      const b = r.rows[0].data; let manager = r.rows[0].manager; let statusChanged = false;
+      if (body.status !== undefined) {
+        const s = String(body.status);
+        if (s === 'declined') {
+          if (!DECLINE[body.declineReason]) throw Object.assign(new Error('Выберите причину отказа'), { code: 400 });
+          b.status = 'declined'; b.decline_reason = body.declineReason; b.in_work = false;
+        } else if (TALK[s]) { b.status = s; b.decline_reason = null; if (s === 'contacted' && !b.contacted_at) b.contacted_at = new Date().toISOString(); }
+        else throw Object.assign(new Error('Неизвестный статус'), { code: 400 });
+        statusChanged = true;
+      }
+      if (body.manager !== undefined) { manager = body.manager ? managerKey(String(body.manager)) : null; b.assigned_manager_id = manager && !manager.startsWith('bb:') ? await crmUserId(client, manager) : null; b.manager_name_bb = body.manager || null; }
+      const fields = { lastComment: 'last_comment', notes: 'notes', whatsapp: 'blogger_whatsapp', category: 'category', name: 'name', instagram: 'instagram_url', tiktok: 'tiktok_url' };
+      for (const [k, f] of Object.entries(fields)) if (body[k] !== undefined) b[f] = str(body[k], 2000);
+      const nums = { followers: 'instagram_followers', followersTT: 'tiktok_followers', reach: 'instagram_avg_reach', reachTT: 'tiktok_avg_reach', storiesReach: 'stories_avg_reach',
+        priceReels: 'price_reels', priceTiktok: 'price_tiktok', priceBoth: 'price_both', priceStories: 'price_stories' };
+      for (const [k, f] of Object.entries(nums)) if (body[k] !== undefined) b[f] = num(body[k]);
+      const cpv = (p, r) => p && r ? +(p / r).toFixed(2) : null;
+      b.cpv_reels = cpv(b.price_reels, b.instagram_avg_reach); b.cpv_tiktok = cpv(b.price_tiktok, b.tiktok_avg_reach);
+      b.cpv_both = cpv(b.price_both, (b.instagram_avg_reach || 0) + (b.tiktok_avg_reach || 0)); b.cpv_stories = cpv(b.price_stories, b.stories_avg_reach || b.instagram_avg_reach);
+      if (['priceReels', 'priceTiktok', 'priceBoth', 'priceStories'].some(k => body[k] !== undefined)) b.price_updated_at = new Date().toISOString();
+      b.updated_at = new Date().toISOString(); b.updated_by = req.session.name || null;
+      await client.query('update crm.bloggers set data=$2, status=$3, manager=$4, nick=$5, search=$6, updated_at=now() where id=$1',
+        [req.params.id, b, b.status, manager, nickOf(b.instagram_url) || nickOf(b.tiktok_url) || (b.name || '').replace('@', '').toLowerCase() || null, searchOf(b)]);
+      if (statusChanged) await client.query('insert into crm.status_log(blogger_id,status,decline_reason,actor) values ($1,$2,$3,$4)', [req.params.id, b.status, b.decline_reason, req.session.name || null]);
+      await client.query('COMMIT');
+      const row = await pool.query('select id, data, status, manager, nick from crm.bloggers where id=$1', [req.params.id]);
+      res.json(view(row.rows[0]));
+    } catch (e) { await client.query('ROLLBACK').catch(() => {}); res.status(e.code === 400 ? 400 : 500).json({ error: e.message }); }
+    finally { client.release(); }
+  });
+
+  // ---------- Новый блогер (с проверкой дубля по нику) ----------
+  app.post('/api/crm/bloggers', requireAuth, async (req, res) => {
+    if (!canStaff(req) || !need(res) || !(await requireCutover(res))) return;
+    const body = req.body || {};
+    const nick = nickOf(body.instagram) || nickOf(body.tiktok);
+    if (!nick) return res.status(400).json({ error: 'Нужна ссылка на Instagram или TikTok' });
+    try {
+      const dup = await pool.query('select id, data, manager from crm.bloggers where nick=$1 and not deleted limit 1', [nick]);
+      if (dup.rows[0]) return res.status(409).json({ error: 'Такой блогер уже есть — ведёт ' + (managerName(dup.rows[0].manager) || 'никто'), id: dup.rows[0].id });
+      const id = require('crypto').randomUUID();
+      const now = new Date().toISOString();
+      const manager = managerKey(req.session.name);
+      const b = { id, name: str(body.name) || '@' + nick, instagram_url: str(body.instagram), tiktok_url: str(body.tiktok), instagram_followers: num(body.followers), tiktok_followers: num(body.followersTT),
+        instagram_avg_reach: num(body.reach), tiktok_avg_reach: num(body.reachTT), price_reels: num(body.priceReels), price_tiktok: num(body.priceTiktok), price_both: null, price_stories: num(body.priceStories),
+        status: 'new', decline_reason: null, category: str(body.category), blogger_whatsapp: str(body.whatsapp), last_comment: str(body.lastComment, 2000), notes: null,
+        assigned_manager_id: null, manager_name_bb: req.session.name || null, in_work: false, created_at: now, updated_at: now, created_by: req.session.name || null };
+      b.assigned_manager_id = manager && !manager.startsWith('bb:') ? await crmUserId(pool, manager) : null;
+      b.cpv_reels = b.price_reels && b.instagram_avg_reach ? +(b.price_reels / b.instagram_avg_reach).toFixed(2) : null;
+      b.cpv_tiktok = b.price_tiktok && b.tiktok_avg_reach ? +(b.price_tiktok / b.tiktok_avg_reach).toFixed(2) : null;
+      await pool.query('insert into crm.bloggers(id,data,status,manager,nick,search) values ($1,$2,$3,$4,$5,$6)', [id, b, 'new', manager, nick, searchOf(b)]);
+      await pool.query('insert into crm.status_log(blogger_id,status,actor) values ($1,$2,$3)', [id, 'new', req.session.name || null]);
+      const row = await pool.query('select id, data, status, manager, nick from crm.bloggers where id=$1', [id]);
+      res.json(view(row.rows[0]));
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ---------- Оплаты ----------
+  function payView(p) {
+    const d = p.data || {};
+    return { id: p.id, status: p.status, statusLabel: PAY_STATUS[p.status] || p.status, bloggerId: d.blogger_id || null, blogger: p.blogger_name || null, bloggerInstagram: p.blogger_instagram || null,
+      manager: managerName(p.manager) || d.manager_name_bb || null, recipient: d.recipient_name || null, iin: d.iin || null, kaspi: d.kaspi || null, name: d.payment_name || null,
+      amount: num(d.amount), amountVideo: num(d.amount_video), amountProduct: num(d.amount_product), isIp: !!d.is_ip, notes: d.notes || null, approvalUrl: d.approval_url || null,
+      createdAt: d.created_at || null, updatedAt: d.updated_at || null, paidBy: d.paid_by || null };
+  }
+  app.get('/api/crm/payments', requireAuth, async (req, res) => {
+    if (!need(res)) return;
+    if (!isNina(req)) return res.status(403).json({ error: 'Оплаты видит только Нина' });
+    const st = String(req.query.status || 'pending');
+    try {
+      const r = await pool.query(`select p.id, p.data, p.status, p.manager, b.data->>'name' blogger_name, b.data->>'instagram_url' blogger_instagram
+        from crm.payments p left join crm.bloggers b on b.id = p.blogger_id
+        where not p.deleted ${st === 'all' ? '' : 'and p.status = $1'} order by p.created_at desc nulls last limit 2000`, st === 'all' ? [] : [st]);
+      const c = await pool.query('select status, count(*)::int n, coalesce(sum((data->>\'amount\')::numeric),0)::bigint s from crm.payments where not deleted group by 1');
+      res.json({ items: r.rows.map(payView), counts: Object.fromEntries(c.rows.map(x => [x.status, { n: x.n, sum: Number(x.s) }])) });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  app.patch('/api/crm/payments/:id', requireAuth, async (req, res) => {
+    if (!need(res)) return;
+    if (!isNina(req)) return res.status(403).json({ error: 'Только Нина' });
+    if (!(await requireCutover(res))) return;
+    const s = String((req.body || {}).status || '');
+    if (!PAY_STATUS[s]) return res.status(400).json({ error: 'Неизвестный статус оплаты' });
+    try {
+      const r = await pool.query('select data from crm.payments where id=$1', [req.params.id]);
+      if (!r.rows[0]) return res.status(404).json({ error: 'Оплата не найдена' });
+      const d = r.rows[0].data; d.status = s; d.updated_at = new Date().toISOString(); if (s === 'paid') { d.paid_by = req.session.name; d.paid_at = d.updated_at; }
+      await pool.query('update crm.payments set data=$2, status=$3, updated_at=now() where id=$1', [req.params.id, d, s]);
+      // Статус блогера «Оплачено» больше не ставим — оплата живёт отдельно (см. прототип).
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  // Менеджер подаёт на оплату. Наличные/Kaspi (не ИП) — сумма кратна 500.
+  app.post('/api/crm/payments', requireAuth, async (req, res) => {
+    if (!canStaff(req) || !need(res) || !(await requireCutover(res))) return;
+    const b = req.body || {};
+    const amount = num(b.amount);
+    if (!b.bloggerId) return res.status(400).json({ error: 'Не выбран блогер' });
+    if (!amount || amount <= 0) return res.status(400).json({ error: 'Укажите сумму' });
+    if (!b.isIp && amount % 500 !== 0) return res.status(400).json({ error: 'Сумму наличными округлите до 500 ₸ (например ' + (Math.round(amount / 500) * 500).toLocaleString('ru-RU') + ')' });
+    if (!str(b.recipient)) return res.status(400).json({ error: 'Укажите получателя (ФИО)' });
+    if (!b.isIp && !str(b.kaspi)) return res.status(400).json({ error: 'Укажите номер Kaspi' });
+    try {
+      const bl = await pool.query('select id from crm.bloggers where id=$1', [b.bloggerId]);
+      if (!bl.rows[0]) return res.status(404).json({ error: 'Блогер не найден' });
+      const id = require('crypto').randomUUID(); const now = new Date().toISOString();
+      const manager = managerKey(req.session.name);
+      const d = { id, blogger_id: b.bloggerId, manager_id: manager && !manager.startsWith('bb:') ? await crmUserId(pool, manager) : null, manager_name_bb: req.session.name || null,
+        recipient_name: str(b.recipient), iin: str(b.iin, 20), kaspi: str(b.kaspi, 40), payment_name: str(b.name), amount, amount_video: num(b.amountVideo), amount_product: num(b.amountProduct),
+        is_ip: !!b.isIp, notes: str(b.notes, 1000), status: 'pending', created_at: now, updated_at: now, created_by_bb: req.session.name || null, bb_deal_id: str(b.dealId, 80) };
+      await pool.query('insert into crm.payments(id,data,status,blogger_id,manager,created_at) values ($1,$2,$3,$4,$5,$6)', [id, d, 'pending', b.bloggerId, manager, now]);
+      res.json({ ok: true, id });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ---------- Переезд (только Нина) ----------
+  app.post('/api/crm/cutover', requireAuth, async (req, res) => {
+    if (!need(res)) return;
+    if (!isNina(req)) return res.status(403).json({ error: 'Только Нина' });
+    if ((req.body || {}).confirm !== 'ПЕРЕЕЗД') return res.status(400).json({ error: 'Нужно подтверждение' });
+    try {
+      const p = await pool.query("select value, updated_at from crm.meta where key='last_crm_push'");
+      if (!p.rows[0] || Date.now() - new Date(p.rows[0].updated_at).getTime() > 15 * 60e3) return res.status(409).json({ error: 'Свежих данных из CRM нет (последние старше 15 минут) — сначала нужно, чтобы CRM прислала данные' });
+      const value = { at: new Date().toISOString(), by: req.session.name };
+      await pool.query("insert into crm.meta(key,value) values ('cutover',$1) on conflict (key) do update set value=excluded.value, updated_at=now()", [value]);
+      cutoverCache = { at: 0, value: null };
+      res.json({ ok: true, cutover: value });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ---------- Копии после переезда: база Константина (crm_blogers.*) и резервная (public.*) ----------
+  const KOST_B = ['id', 'name', 'instagram_url', 'tiktok_url', 'instagram_followers', 'tiktok_followers', 'instagram_avg_reach', 'tiktok_avg_reach', 'price_reels', 'price_tiktok', 'price_both', 'price_stories',
+    'cpv_reels', 'cpv_tiktok', 'cpv_both', 'status', 'category', 'manager_name', 'last_comment', 'notes', 'in_work', 'created_at', 'updated_at'];
+  const KOST_P = ['id', 'blogger_id', 'blogger_name', 'manager_name', 'recipient_name', 'iin', 'payment_name', 'kaspi', 'amount', 'amount_video', 'amount_product', 'status', 'approval_url', 'notes', 'created_at', 'updated_at'];
+  const MY_B = [...KOST_B.slice(0, 18), 'assigned_manager_id', 'manager_instagram', 'last_comment', 'notes', 'in_work', 'created_at', 'updated_at'];
+  const MY_P = ['id', 'blogger_id', 'blogger_name', 'manager_id', 'manager_name', 'recipient_name', 'iin', 'payment_name', 'kaspi', 'amount', 'amount_video', 'amount_product', 'status', 'approval_url', 'notes', 'linked_payment_id', 'created_at', 'updated_at'];
+  async function upsert(db, table, cols, rows) {
+    if (!rows.length) return;
+    const vals = []; const ph = rows.map((r, i) => '(' + cols.map((c, j) => { vals.push(r[c] === undefined ? null : r[c]); return '$' + (i * cols.length + j + 1); }).join(',') + ')').join(',');
+    await db.query(`insert into ${table} (${cols.join(',')}) values ${ph} on conflict (id) do update set ${cols.filter(c => c !== 'id').map(c => c + '=excluded.' + c).join(',')}`, vals);
+  }
+  let mirroring = false;
+  async function mirror() {
+    if (!pool || mirroring || !(await cutover())) return;
+    mirroring = true; const t0 = Date.now();
+    try {
+      const m = await pool.query("select value from crm.meta where key='bb_mirror_at'");
+      const since = (m.rows[0] && m.rows[0].value && m.rows[0].value.at) || (await cutover()).at;
+      const startedAt = new Date().toISOString();
+      const bs = await pool.query('select id, data, manager, deleted from crm.bloggers where updated_at > $1', [since]);
+      const ps = await pool.query("select p.id, p.data, p.manager, p.deleted, b.data->>'name' bname from crm.payments p left join crm.bloggers b on b.id=p.blogger_id where p.updated_at > $1", [since]);
+      const bRows = bs.rows.filter(r => !r.deleted).map(r => ({ ...r.data, id: r.id, manager_name: r.manager && !r.manager.startsWith('bb:') ? r.manager : (r.data.manager_name_bb || null), in_work: !!r.data.in_work }));
+      const pRows = ps.rows.filter(r => !r.deleted).map(r => ({ ...r.data, id: r.id, blogger_name: r.bname || null, manager_name: r.manager && !r.manager.startsWith('bb:') ? r.manager : (r.data.manager_name_bb || null) }));
+      const dropB = bs.rows.filter(r => r.deleted).map(r => r.id), dropP = ps.rows.filter(r => r.deleted).map(r => r.id);
+      const chunks = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; };
+      if (kostPool && env.SUPABASE_PLACEMENTS_URL) {
+        for (const c of chunks(bRows, 300)) await upsert(kostPool, 'crm_blogers.bloggers', KOST_B, c);
+        for (const c of chunks(pRows, 300)) await upsert(kostPool, 'crm_blogers.payments', KOST_P, c);
+        if (dropB.length) await kostPool.query('delete from crm_blogers.bloggers where id = any($1)', [dropB]);
+        if (dropP.length) await kostPool.query('delete from crm_blogers.payments where id = any($1)', [dropP]);
+      }
+      for (const c of chunks(bRows, 300)) await upsert(pool, 'public.bloggers', MY_B, c);
+      for (const c of chunks(pRows, 300)) await upsert(pool, 'public.payments', MY_P, c);
+      await pool.query("insert into crm.meta(key,value) values ('bb_mirror_at',$1) on conflict (key) do update set value=excluded.value, updated_at=now()",
+        [{ at: startedAt, bloggers: bRows.length, payments: pRows.length, ms: Date.now() - t0 }]);
+      if (bRows.length || pRows.length) console.log(`CRM-копии: ${bRows.length} блогеров, ${pRows.length} оплат → Константин и резерв, ${Date.now() - t0} мс`);
+    } catch (e) { console.error('CRM-копии: ошибка', e.message); }
+    finally { mirroring = false; }
+  }
+  if (pool) { setInterval(() => mirror().catch(() => {}), 2 * 60 * 1000); setTimeout(() => mirror().catch(() => {}), 30000); }
+}
+
+module.exports = { mount, nickOf, statusLabels: { TALK, DECLINE, PAY_STATUS } };

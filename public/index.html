@@ -3601,7 +3601,11 @@ const MARKETER_TABS = [
   {id:"microCalendar",    label:"Планер блогеров"},
   {id:"report",           label:"Сводный отчёт"},
 ];
-function tabsForRole(){ return UI.role==="marketer" ? MARKETER_TABS : MANAGER_TABS; }
+function tabsForRole(){
+  const base = UI.role==="marketer" ? MARKETER_TABS : MANAGER_TABS;
+  if(UI.actorName==="Ольга") return base; // у Ольги интерфейс без изменений
+  return [base[0], {id:"crmBloggers", label:"Блогеры"}, ...base.slice(1), ...(crmIsNina() ? [{id:"crmPayments", label:"Оплаты"}] : [])];
+}
 function roleLabel(){
   const base = UI.role==="marketer" ? "📊 Маркетолог" : "👤 Менеджер / логист";
   return UI.readOnly ? base + ' <span style="color:var(--warn);font-weight:600">· только просмотр</span>' : base;
@@ -3683,6 +3687,8 @@ function renderDeskTab(){
   else if(UI.tab==="microInfluencers") main.innerHTML = tplMicroInfluencers();
   else if(UI.tab==="microCalendar") main.innerHTML = tplMicroCalendar();
   else if(UI.tab==="report") main.innerHTML = tplReport();
+  else if(UI.tab==="crmBloggers") main.innerHTML = tplCrmBloggers();
+  else if(UI.tab==="crmPayments") main.innerHTML = tplCrmPayments();
   wireDeskTab();
   if(scrollPositions.length){
     main.querySelectorAll(".table-wrap").forEach((el,i)=>{ if(scrollPositions[i]) el.scrollLeft = scrollPositions[i]; });
@@ -8394,9 +8400,314 @@ function modalMicroDeal(existing, prefill){
 }
 
 /* =========================================================================
+   8b. БЛОГЕРЫ И ОПЛАТЫ ИЗ BLOGGER CRM (22.11.2026)
+   Данные — в базе (crm.*), а не в общем состоянии: 13 000+ блогеров грузим постранично.
+   Фоновый опрос эти вкладки не перерисовывает (см. startPolling), чтобы не сбивать поиск.
+   ========================================================================= */
+const CrmApi = {
+  meta: ()=> apiFetch("/api/crm/meta"),
+  list: (p)=> apiFetch("/api/crm/bloggers?" + new URLSearchParams(p).toString()),
+  get: (id)=> apiFetch("/api/crm/bloggers/" + encodeURIComponent(id)),
+  save: (id, body)=> apiFetch("/api/crm/bloggers/" + encodeURIComponent(id), {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(body)}),
+  create: (body)=> apiFetch("/api/crm/bloggers", {method:"POST", headers:jsonHeaders, body:JSON.stringify(body)}),
+  payments: (status)=> apiFetch("/api/crm/payments?status=" + encodeURIComponent(status)),
+  setPayment: (id, status)=> apiFetch("/api/crm/payments/" + encodeURIComponent(id), {method:"PATCH", headers:jsonHeaders, body:JSON.stringify({status})}),
+  submitPayment: (body)=> apiFetch("/api/crm/payments", {method:"POST", headers:jsonHeaders, body:JSON.stringify(body)}),
+  cutover: ()=> apiFetch("/api/crm/cutover", {method:"POST", headers:jsonHeaders, body:JSON.stringify({confirm:"ПЕРЕЕЗД"})}),
+};
+const CRM = { meta:null, list:null, loading:false, err:null, f:{q:"", status:"notdeclined", who:"mine", worked:"", sort:"updated", page:1}, pay:{status:"pending", data:null, loading:false, err:null} };
+const CRM_STAFF = ["Камила","Зарина","Марина","Сабрина","Надира","Мадина","Оксана","Анастасия","Ажар","Анеля","Сая","Нина","Сауле","Мария","Ольга","Алтынай","Сабина","Эльмира"];
+function crmIsNina(){ return UI.actorName==="Нина" && !!UI.canExport; }
+function crmCutover(){ return !!(CRM.meta && CRM.meta.cutover); }
+function crmBadge(st){
+  const cls = {talk:"badge-plan", work:"badge-progress", worked:"badge-success", declined:"badge-problem", legacy:"badge-closed"}[st && st.group] || "badge-closed";
+  return `<span class="badge ${cls}">${escapeHtml((st && st.label) || "—")}</span>`;
+}
+function crmMonths(){ const out=[]; const d=new Date(Date.now()+5*3600e3); d.setUTCDate(1); for(let i=0;i<8;i++){ const y=d.getUTCFullYear(), m=d.getUTCMonth(); out.push([`${y}-${String(m+1).padStart(2,"0")}`, d.toLocaleString("ru-RU",{month:"long", timeZone:"UTC"})+" "+y]); d.setUTCMonth(m-1); } return out; }
+function crmTimeAgo(iso){ if(!iso) return "—"; const m=Math.round((Date.now()-new Date(iso).getTime())/60000); if(m<1) return "только что"; if(m<60) return m+" мин назад"; const h=Math.round(m/60); if(h<48) return h+" ч назад"; return new Date(iso).toLocaleDateString("ru-RU"); }
+function crmDate(iso){ return iso ? new Date(iso).toLocaleDateString("ru-RU",{day:"2-digit",month:"2-digit",year:"2-digit"}) : "—"; }
+function crmParams(){ const f=CRM.f; const p={page:f.page, limit:50, sort:f.sort}; if(f.q) p.q=f.q; if(f.status) p.status=f.status; if(f.who==="mine") p.mine="1"; else if(f.who && f.who!=="all") p.manager=f.who; if(f.worked) p.worked=f.worked; return p; }
+async function crmLoad(){
+  CRM.loading = true; CRM.err = null; crmRepaint();
+  try{
+    const [meta, list] = await Promise.all([CRM.meta ? Promise.resolve(CRM.meta) : CrmApi.meta(), CrmApi.list(crmParams())]);
+    CRM.meta = meta; CRM.list = list;
+  }catch(e){ CRM.err = e.message; }
+  CRM.loading = false; crmRepaint();
+}
+function crmRepaint(){ if(UI.tab==="crmBloggers" || UI.tab==="crmPayments") renderDeskTab(); }
+
+function tplCrmBloggers(){
+  if(!CRM.list && !CRM.loading && !CRM.err) setTimeout(crmLoad, 0);
+  const m = CRM.meta, L = CRM.list, f = CRM.f;
+  const declineOpts = m ? Object.entries(m.decline).map(([k,v])=>`<option value="decl:${k}" ${f.status==="decl:"+k?"selected":""}>Отказ: ${escapeHtml(v)}</option>`).join("") : "";
+  const mgrs = m ? Object.keys(m.managers).sort((a,b)=>a.localeCompare(b,"ru")) : [];
+  const banner = !m ? "" : crmCutover()
+    ? ""
+    : `<div class="login-hint" style="margin:0 0 12px;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;text-align:left">
+        <span>Сейчас это копия старой CRM, обновляется каждые 5 минут${m.lastPush ? " · последнее обновление " + crmTimeAgo(m.lastPush.updated_at) : " · данных из CRM ещё не было"}. Менять статусы и комментарии здесь можно будет после переезда.</span>
+        ${crmIsNina() ? `<button class="btn btn-primary btn-sm" id="crm-cutover">Перевести CRM в Barter Box</button>` : ""}
+      </div>`;
+  const items = (L && L.items) || [];
+  const from = L ? (L.page-1)*L.limit+1 : 0, to = L ? Math.min(L.total, L.page*L.limit) : 0;
+  return `
+  <div class="toolbar" style="justify-content:space-between">
+    <div><h2 style="margin:0">Блогеры</h2><div style="color:var(--ink-mute);font-size:12.5px">${m ? fmtNum(m.total) + " в базе · " + fmtNum(m.total - m.declined) + " без отказов" : "загружаю…"}</div></div>
+    ${crmCutover() ? `<button class="btn btn-primary" id="crm-new">+ Блогер</button>` : ""}
+  </div>
+  ${banner}
+  <div class="toolbar">
+    <input type="search" class="fill" id="crm-q" placeholder="Поиск: ник, имя, ссылка, WhatsApp, комментарий" value="${escapeHtml(f.q)}" style="min-width:300px;flex:1;max-width:420px">
+    <select id="crm-status">
+      <option value="notdeclined" ${f.status==="notdeclined"?"selected":""}>Без отказов</option>
+      <option value="" ${f.status===""?"selected":""}>Все статусы</option>
+      <option value="talk" ${f.status==="talk"?"selected":""}>Переговоры — все</option>
+      ${m ? Object.entries(m.talk).map(([k,v])=>`<option value="${k}" ${f.status===k?"selected":""}>${escapeHtml(v)}</option>`).join("") : ""}
+      <option value="declined" ${f.status==="declined"?"selected":""}>Отказы — все</option>
+      ${declineOpts}
+    </select>
+    <select id="crm-who">
+      <option value="mine" ${f.who==="mine"?"selected":""}>Мои (${escapeHtml(UI.actorName||"—")})</option>
+      <option value="all" ${f.who==="all"?"selected":""}>Все менеджеры</option>
+      ${mgrs.map(n=>`<option value="${escapeHtml(n)}" ${f.who===n?"selected":""}>${escapeHtml(n)} · ${fmtNum(m.managers[n])}</option>`).join("")}
+    </select>
+    <select id="crm-worked"><option value="">Работали — любой месяц</option>${crmMonths().map(([v,t])=>`<option value="${v}" ${f.worked===v?"selected":""}>Работали в ${t}</option>`).join("")}</select>
+    <select id="crm-sort"><option value="updated" ${f.sort==="updated"?"selected":""}>Сначала обновлённые</option><option value="reach" ${f.sort==="reach"?"selected":""}>По охвату</option><option value="name" ${f.sort==="name"?"selected":""}>По нику</option></select>
+  </div>
+  ${CRM.err ? `<div class="empty" style="color:var(--bad)">${escapeHtml(CRM.err)} <button class="btn btn-ghost btn-sm" id="crm-retry">Повторить</button></div>` : ""}
+  <div class="table-wrap" style="${CRM.loading?"opacity:.55":""}">
+    <table>
+      <thead><tr><th>Блогер</th><th>Статус</th><th>Менеджер</th><th>Подписчики</th><th>Охват reels</th><th>Цена reels</th><th>CPV</th><th>Комментарий</th><th>Обновлён</th></tr></thead>
+      <tbody>${items.length ? items.map(b=>`<tr class="crm-row" data-id="${escapeHtml(b.id)}" style="cursor:pointer">
+        <td><b>${escapeHtml(b.name || "—")}</b><div style="font-size:11.5px;color:var(--ink-mute)">${b.nick ? "@"+escapeHtml(b.nick) : ""}${b.tiktok ? " · TikTok" : ""}${b.exclusive ? " · эксклюзив" : ""}</div></td>
+        <td>${crmBadge(b.st)}</td>
+        <td>${escapeHtml(b.manager || "—")}</td>
+        <td>${fmtNum(b.followers)}</td>
+        <td>${fmtNum(b.reach)}</td>
+        <td>${b.price.reels ? fmtNum(b.price.reels) + " ₸" : "—"}</td>
+        <td>${b.cpv.reels != null ? b.cpv.reels : "—"}</td>
+        <td class="wrap" style="max-width:260px">${escapeHtml((b.lastComment || "").slice(0,140))}</td>
+        <td style="color:var(--ink-mute)">${crmTimeAgo(b.updatedAt)}</td>
+      </tr>`).join("") : `<tr><td colspan="9" class="empty">${CRM.loading ? "Загружаю…" : (f.who==="mine" ? "У вас пока нет блогеров с такими условиями — попробуйте «Все менеджеры»" : "Ничего не нашлось")}</td></tr>`}</tbody>
+    </table>
+  </div>
+  ${L && L.total > L.limit ? `<div class="toolbar" style="justify-content:flex-end;margin-top:10px">
+    <span style="color:var(--ink-mute);font-size:12.5px">${fmtNum(from)}–${fmtNum(to)} из ${fmtNum(L.total)}</span>
+    <button class="btn btn-ghost btn-sm" id="crm-prev" ${L.page<=1?"disabled":""}>‹ Назад</button>
+    <button class="btn btn-ghost btn-sm" id="crm-next" ${to>=L.total?"disabled":""}>Далее ›</button>
+  </div>` : (L ? `<div style="color:var(--ink-mute);font-size:12.5px;margin-top:8px">${fmtNum(L.total)} блогеров</div>` : "")}`;
+}
+
+let crmSearchTimer = null;
+function wireCrmBloggers(){
+  const set = (k,v)=>{ CRM.f[k]=v; CRM.f.page=1; crmLoad(); };
+  const q = document.getElementById("crm-q");
+  if(q){ q.oninput = ()=>{ clearTimeout(crmSearchTimer); crmSearchTimer = setTimeout(()=>{ CRM.f.q = q.value.trim(); CRM.f.page=1; crmLoad().then(()=>{ const el=document.getElementById("crm-q"); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }); }, 400); }; }
+  const on = (id, fn)=>{ const el=document.getElementById(id); if(el) el.onchange = ()=> fn(el.value); };
+  on("crm-status", v=>set("status", v)); on("crm-who", v=>set("who", v)); on("crm-worked", v=>set("worked", v)); on("crm-sort", v=>set("sort", v));
+  const prev=document.getElementById("crm-prev"), next=document.getElementById("crm-next");
+  if(prev) prev.onclick = ()=>{ CRM.f.page--; crmLoad(); window.scrollTo(0,0); };
+  if(next) next.onclick = ()=>{ CRM.f.page++; crmLoad(); window.scrollTo(0,0); };
+  const retry=document.getElementById("crm-retry"); if(retry) retry.onclick = crmLoad;
+  document.querySelectorAll(".crm-row").forEach(tr=> tr.onclick = ()=> modalCrmBlogger(tr.dataset.id));
+  const nb=document.getElementById("crm-new"); if(nb) nb.onclick = modalCrmNew;
+  const cut=document.getElementById("crm-cutover"); if(cut) cut.onclick = modalCrmCutover;
+}
+
+function modalCrmCutover(){
+  const m = CRM.meta || {};
+  openModal(`<h3>Перевести CRM в Barter Box?</h3>
+    <div style="font-size:13.5px;line-height:1.55">
+      После этого:<br>• блогеров, статусы, комментарии и оплаты ведут <b>только здесь</b>;<br>
+      • старая CRM станет только для просмотра — изменения там не сохранятся;<br>
+      • копия для Константина и резервная копия будут обновляться отсюда каждые 2 минуты.<br><br>
+      Последние данные из CRM: <b>${m.lastPush ? crmTimeAgo(m.lastPush.updated_at) : "нет"}</b>${m.lastPush && m.lastPush.value ? ` · ${fmtNum(m.lastPush.value.bloggers)} блогеров, ${fmtNum(m.lastPush.value.payments)} оплат` : ""}.
+      Предупредите менеджеров, что работаем здесь.
+    </div>
+    <div class="modal-actions"><button class="btn btn-ghost" id="cc-no">Отмена</button><button class="btn btn-primary" id="cc-yes">Да, переводим</button></div>`);
+  document.getElementById("cc-no").onclick = closeModal;
+  document.getElementById("cc-yes").onclick = async (e)=>{
+    try{ await withBusy(e.target, ()=> CrmApi.cutover()); closeModal(); CRM.meta = null; toast("Готово: работаем в Barter Box"); crmLoad(); }
+    catch(err){ toast(err.message, true); }
+  };
+}
+
+function crmField(label, id, value, opts){
+  opts = opts || {};
+  const dis = crmCutover() ? "" : "disabled";
+  if(opts.area) return `<div class="field" style="grid-column:1/-1"><label>${label}</label><textarea id="${id}" rows="${opts.rows||3}" ${dis}>${escapeHtml(value||"")}</textarea></div>`;
+  return `<div class="field"><label>${label}</label><input id="${id}" ${opts.type?`type="${opts.type}"`:""} value="${escapeHtml(value==null?"":String(value))}" ${dis} ${opts.ph?`placeholder="${escapeHtml(opts.ph)}"`:""}></div>`;
+}
+
+async function modalCrmBlogger(id){
+  let b;
+  try{ b = await CrmApi.get(id); }catch(e){ toast(e.message, true); return; }
+  const m = CRM.meta || {talk:{}, decline:{}};
+  const edit = crmCutover();
+  const isDecl = String(b.status||"").startsWith("declined");
+  const statusBtns = Object.entries(m.talk).map(([k,v])=>`<button class="btn btn-sm ${b.status===k?"btn-primary":"btn-ghost"} crm-st" data-st="${k}" ${edit?"":"disabled"}>${escapeHtml(v)}</button>`).join("");
+  const links = [b.instagram ? `<a href="${escapeHtml(b.instagram)}" target="_blank" rel="noopener">Instagram</a>` : "", b.tiktok ? `<a href="${escapeHtml(b.tiktok)}" target="_blank" rel="noopener">TikTok</a>` : "", b.whatsapp ? `<a href="https://wa.me/${escapeHtml(String(b.whatsapp).replace(/\D/g,""))}" target="_blank" rel="noopener">WhatsApp</a>` : ""].filter(Boolean).join(" · ");
+  openModal(`
+    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+      <div><h3 style="margin:0">${escapeHtml(b.name || "@"+b.nick)}</h3><div style="font-size:12.5px;color:var(--ink-mute);margin-top:3px">${b.nick ? "@"+escapeHtml(b.nick)+" · " : ""}${links || "нет ссылок"}</div></div>
+      <div style="text-align:right">${crmBadge(b.st)}<div style="font-size:11.5px;color:var(--ink-mute);margin-top:4px">ведёт: ${escapeHtml(b.manager||"никто")}</div></div>
+    </div>
+    ${edit ? "" : `<div class="login-hint" style="margin-top:10px;text-align:left">Пока только просмотр — правки в старой CRM до переезда.</div>`}
+    <div style="margin-top:14px"><div style="font-size:11.3px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;margin-bottom:6px">Статус переговоров</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${statusBtns}
+        <select id="cb-decline" ${edit?"":"disabled"} style="max-width:240px;border:1px solid var(--line-2);border-radius:10px;padding:6px 10px;background:#fff"><option value="">${isDecl ? "Отказ: " + escapeHtml(m.decline[b.st.code]||"") : "Отказ — причина…"}</option>${Object.entries(m.decline).map(([k,v])=>`<option value="${k}">Отказ: ${escapeHtml(v)}</option>`).join("")}</select>
+      </div>
+      <div style="font-size:11.5px;color:var(--ink-mute);margin-top:5px">«В работе», «Вышло» и «Работали» ставятся сами по интеграциям — с месяцем.${b.st.note ? " Примечание CRM: " + escapeHtml(b.st.note) : ""}</div>
+    </div>
+    <div class="form-row" style="margin-top:14px">
+      <div class="field"><label>Менеджер</label><select id="cb-manager" ${edit?"":"disabled"}><option value="">— никто —</option>${CRM_STAFF.map(n=>`<option ${n===b.manager?"selected":""}>${n}</option>`).join("")}${b.manager && !CRM_STAFF.includes(b.manager) ? `<option selected>${escapeHtml(b.manager)}</option>` : ""}</select></div>
+      ${crmField("WhatsApp блогера", "cb-wa", b.whatsapp, {ph:"+7 7xx xxx xx xx"})}
+      ${crmField("Подписчики IG", "cb-fol", b.followers, {type:"number"})}
+      ${crmField("Охват reels", "cb-reach", b.reach, {type:"number"})}
+      ${crmField("Охват TikTok", "cb-reachtt", b.reachTT, {type:"number"})}
+      ${crmField("Охват сторис", "cb-reachst", b.storiesReach, {type:"number"})}
+      ${crmField("Цена reels, ₸", "cb-pr", b.price.reels, {type:"number"})}
+      ${crmField("Цена TikTok, ₸", "cb-pt", b.price.tiktok, {type:"number"})}
+      ${crmField("Цена reels+TikTok, ₸", "cb-pb", b.price.both, {type:"number"})}
+      ${crmField("Цена сторис, ₸", "cb-ps", b.price.stories, {type:"number"})}
+      ${crmField("Последний комментарий", "cb-comment", b.lastComment, {area:true, rows:2})}
+      ${crmField("Заметки", "cb-notes", b.notes, {area:true, rows:2})}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:6px">
+      <div><div style="display:flex;justify-content:space-between;align-items:center"><b>Интеграции · ${b.dealList.length}</b><button class="btn btn-ghost btn-sm" id="cb-add-deal">+ Интеграция</button></div>
+        ${b.dealList.length ? `<div style="font-size:12.5px;margin-top:6px">${b.dealList.slice(0,8).map(d=>`<div style="padding:5px 0;border-bottom:1px solid var(--line)">${escapeHtml(d.date||"без даты")} · ${escapeHtml(d.product||"—")} · <span style="color:${d.cancelled?"var(--bad)":d.done?"var(--ok)":"var(--warn)"}">${d.cancelled?"отменена":d.done?"вышла":"в работе"}</span>${d.manager?` · ${escapeHtml(d.manager)}`:""}</div>`).join("")}</div>` : `<div style="font-size:12.5px;color:var(--ink-mute);margin-top:6px">Интеграций в Barter Box ещё нет</div>`}
+      </div>
+      <div><div style="display:flex;justify-content:space-between;align-items:center"><b>Оплаты · ${b.payments.length}</b>${edit ? `<button class="btn btn-ghost btn-sm" id="cb-pay">Подать на оплату</button>` : ""}</div>
+        ${b.payments.length ? `<div style="font-size:12.5px;margin-top:6px">${b.payments.slice(0,8).map(p=>`<div style="padding:5px 0;border-bottom:1px solid var(--line)">${crmDate(p.createdAt)} · <b>${fmtNum(p.amount)} ₸</b> · ${escapeHtml(p.statusLabel)}${p.isIp?" · ИП":""}</div>`).join("")}</div>` : `<div style="font-size:12.5px;color:var(--ink-mute);margin-top:6px">Оплат не было</div>`}
+      </div>
+    </div>
+    ${b.log && b.log.length ? `<details style="margin-top:12px;font-size:12.5px"><summary style="cursor:pointer;color:var(--ink-soft)">История статусов</summary>${b.log.map(l=>`<div style="padding:3px 0">${new Date(l.at).toLocaleString("ru-RU")} · ${escapeHtml((m.talk[l.status]) || (l.decline_reason ? "Отказ: "+(m.decline[l.decline_reason]||l.decline_reason) : l.status))} · ${escapeHtml(l.actor||"")}</div>`).join("")}</details>` : ""}
+    <div class="modal-actions"><button class="btn btn-ghost" id="cb-close">Закрыть</button>${edit ? `<button class="btn btn-primary" id="cb-save">Сохранить</button>` : ""}</div>
+  `);
+  const back = document.querySelector("#modal-back .modal"); if(back) back.classList.add("modal-wide");
+  const done = (nb)=>{ if(CRM.list){ const i = CRM.list.items.findIndex(x=>x.id===nb.id); if(i>=0) CRM.list.items[i] = nb; } crmRepaint(); };
+  document.getElementById("cb-close").onclick = closeModal;
+  document.querySelectorAll(".crm-st").forEach(btn=> btn.onclick = async ()=>{
+    try{ const nb = await withBusy(btn, ()=> CrmApi.save(b.id, {status: btn.dataset.st})); toast("Статус: " + nb.st.label); closeModal(); done(nb); modalCrmBlogger(b.id); }catch(e){ toast(e.message, true); }
+  });
+  const dsel = document.getElementById("cb-decline");
+  if(dsel) dsel.onchange = async ()=>{ if(!dsel.value) return;
+    try{ const nb = await CrmApi.save(b.id, {status:"declined", declineReason: dsel.value}); toast(nb.st.label); closeModal(); done(nb); }catch(e){ toast(e.message, true); } };
+  const save = document.getElementById("cb-save");
+  if(save) save.onclick = async ()=>{
+    const v = id=> document.getElementById(id).value;
+    const body = { manager: v("cb-manager"), whatsapp: v("cb-wa"), followers: v("cb-fol"), reach: v("cb-reach"), reachTT: v("cb-reachtt"), storiesReach: v("cb-reachst"),
+      priceReels: v("cb-pr"), priceTiktok: v("cb-pt"), priceBoth: v("cb-pb"), priceStories: v("cb-ps"), lastComment: v("cb-comment"), notes: v("cb-notes") };
+    try{ const nb = await withBusy(save, ()=> CrmApi.save(b.id, body)); toast("Сохранено"); closeModal(); done(nb); }catch(e){ toast(e.message, true); }
+  };
+  document.getElementById("cb-add-deal").onclick = ()=>{
+    closeModal(); UI.tab = "microInfluencers"; render();
+    modalMicroDeal(null, { crmBloggerId: b.id, blogerName: b.name || ("@"+b.nick), instagramAccount: b.instagram || "", tiktokAccount: b.tiktok || "", phone: b.whatsapp || "",
+      responsible: UI.actorName || b.manager || "", followers: b.followers || 0, avgReach: b.reach || 0, followersTT: b.followersTT || 0, avgReachTT: b.reachTT || 0,
+      cost: b.price.reels || 0, er: 0, conditions: b.lastComment || "" });
+  };
+  const pay = document.getElementById("cb-pay"); if(pay) pay.onclick = ()=>{ closeModal(); modalCrmPayment(b); };
+}
+
+function modalCrmPayment(b){
+  const suggested = b.price.reels || "";
+  openModal(`<h3>Подать на оплату — ${escapeHtml(b.name || "@"+b.nick)}</h3>
+    <div class="form-row">
+      <div class="field"><label>Как платим</label><select id="cp-ip"><option value="0">Kaspi / наличные</option><option value="1">ИП (по счёту)</option></select></div>
+      <div class="field"><label>Сумма, ₸</label><input id="cp-amount" type="number" step="500" value="${suggested}"><div id="cp-hint" style="font-size:11.5px;color:var(--ink-mute);margin-top:3px">наличными — кратно 500 ₸</div></div>
+      <div class="field"><label>Получатель (ФИО)</label><input id="cp-rec"></div>
+      <div class="field"><label>ИИН</label><input id="cp-iin" maxlength="12"></div>
+      <div class="field"><label>Номер Kaspi</label><input id="cp-kaspi" placeholder="+7 7xx xxx xx xx"></div>
+      <div class="field"><label>За что</label><input id="cp-name" placeholder="Reels · товар · дата выхода"></div>
+      <div class="field" style="grid-column:1/-1"><label>Примечание</label><textarea id="cp-notes" rows="2"></textarea></div>
+    </div>
+    <div class="modal-actions"><button class="btn btn-ghost" id="cp-cancel">Отмена</button><button class="btn btn-primary" id="cp-send">Подать Нине</button></div>`);
+  const amt = document.getElementById("cp-amount"), ip = document.getElementById("cp-ip"), hint = document.getElementById("cp-hint");
+  const check = ()=>{ const a = Number(amt.value)||0; if(ip.value==="0" && a && a%500!==0){ const r = Math.round(a/500)*500; hint.innerHTML = `<span style="color:var(--warn)">округлите до 500: <a href="#" id="cp-round">${fmtNum(r)} ₸</a></span>`; document.getElementById("cp-round").onclick = (e)=>{ e.preventDefault(); amt.value = r; check(); }; } else hint.textContent = ip.value==="0" ? "наличными — кратно 500 ₸" : "по счёту ИП — точная сумма"; };
+  amt.oninput = check; ip.onchange = check; check();
+  document.getElementById("cp-cancel").onclick = closeModal;
+  document.getElementById("cp-send").onclick = async (e)=>{
+    const v = id=> document.getElementById(id).value.trim();
+    try{ await withBusy(e.target, ()=> CrmApi.submitPayment({ bloggerId: b.id, isIp: ip.value==="1", amount: amt.value, recipient: v("cp-rec"), iin: v("cp-iin"), kaspi: v("cp-kaspi"), name: v("cp-name"), notes: v("cp-notes") }));
+      closeModal(); toast("Подано на оплату — Нина увидит в «Оплатах»"); }catch(err){ toast(err.message, true); }
+  };
+}
+
+function modalCrmNew(){
+  openModal(`<h3>Новый блогер</h3>
+    <div class="form-row">
+      <div class="field"><label>Instagram (ссылка или @ник)</label><input id="cn-ig" placeholder="https://instagram.com/…"></div>
+      <div class="field"><label>TikTok</label><input id="cn-tt"></div>
+      <div class="field"><label>Имя</label><input id="cn-name"></div>
+      <div class="field"><label>WhatsApp</label><input id="cn-wa"></div>
+      <div class="field"><label>Подписчики IG</label><input id="cn-fol" type="number"></div>
+      <div class="field"><label>Охват reels</label><input id="cn-reach" type="number"></div>
+      <div class="field"><label>Цена reels, ₸</label><input id="cn-pr" type="number"></div>
+      <div class="field"><label>Цена TikTok, ₸</label><input id="cn-pt" type="number"></div>
+      <div class="field" style="grid-column:1/-1"><label>Комментарий</label><textarea id="cn-comment" rows="2"></textarea></div>
+    </div>
+    <div class="login-hint" style="text-align:left">Сначала проверим, нет ли его уже в базе. Ответственным будете вы (${escapeHtml(UI.actorName||"—")}).</div>
+    <div class="modal-actions"><button class="btn btn-ghost" id="cn-cancel">Отмена</button><button class="btn btn-primary" id="cn-save">Добавить</button></div>`);
+  document.getElementById("cn-cancel").onclick = closeModal;
+  document.getElementById("cn-save").onclick = async (e)=>{
+    const v = id=> document.getElementById(id).value.trim();
+    let ig = v("cn-ig"); if(ig && !/^https?:/i.test(ig)) ig = "https://www.instagram.com/" + ig.replace(/^@/,"") + "/";
+    try{ const nb = await withBusy(e.target, ()=> CrmApi.create({ instagram: ig, tiktok: v("cn-tt"), name: v("cn-name"), whatsapp: v("cn-wa"), followers: v("cn-fol"), reach: v("cn-reach"), priceReels: v("cn-pr"), priceTiktok: v("cn-pt"), lastComment: v("cn-comment") }));
+      closeModal(); toast("Добавлен"); CRM.meta = null; crmLoad(); modalCrmBlogger(nb.id); }
+    catch(err){ toast(err.message, true); }
+  };
+}
+
+/* ---------- Оплаты (только Нина) ---------- */
+async function crmPayLoad(){
+  CRM.pay.loading = true; CRM.pay.err = null; crmRepaint();
+  try{ if(!CRM.meta) CRM.meta = await CrmApi.meta(); CRM.pay.data = await CrmApi.payments(CRM.pay.status); }catch(e){ CRM.pay.err = e.message; }
+  CRM.pay.loading = false; crmRepaint();
+}
+function crmPayRowText(p){ return [p.recipient||"", p.iin||"", p.kaspi||"", p.amount||"", p.name||"", p.blogger||"", p.manager||"", p.isIp?"ИП":"", p.notes||""].join("\t"); }
+function tplCrmPayments(){
+  if(!crmIsNina()) return `<div class="empty">Оплаты видит только Нина (вход по своему логину).</div>`;
+  if(!CRM.pay.data && !CRM.pay.loading && !CRM.pay.err) setTimeout(crmPayLoad, 0);
+  const d = CRM.pay.data, c = (d && d.counts) || {}, st = CRM.pay.status;
+  const chips = [["pending","К оплате"],["submitted","Подано"],["paid","Оплачено"],["rejected","Отклонено"],["refunded","Возврат"],["all","Все"]];
+  const items = (d && d.items) || [];
+  const edit = crmCutover();
+  return `
+  <div class="toolbar" style="justify-content:space-between"><div><h2 style="margin:0">Оплаты блогерам</h2><div style="color:var(--ink-mute);font-size:12.5px">как в CRM — без изменений, можно копировать в банк</div></div>
+    <button class="btn btn-ghost" id="cpay-copyall" ${items.length?"":"disabled"}>Скопировать все строки (${items.length})</button></div>
+  ${edit ? "" : `<div class="login-hint" style="margin:0 0 12px;text-align:left">До переезда отметки «Оплачено» ставятся в старой CRM. Здесь — просмотр и копирование.</div>`}
+  <div class="toolbar">${chips.map(([k,t])=>`<button class="btn btn-sm ${st===k?"btn-primary":"btn-ghost"} cpay-chip" data-st="${k}">${t}${c[k] ? ` · ${c[k].n} · ${fmtNum(c[k].sum)} ₸` : ""}</button>`).join("")}</div>
+  ${CRM.pay.err ? `<div class="empty" style="color:var(--bad)">${escapeHtml(CRM.pay.err)}</div>` : ""}
+  <div class="table-wrap" style="${CRM.pay.loading?"opacity:.55":""}"><table>
+    <thead><tr><th>Дата</th><th>Получатель</th><th>ИИН</th><th>Kaspi</th><th>Сумма</th><th>За что</th><th>Блогер</th><th>Менеджер</th><th>ИП</th><th>Примечание</th><th>Статус</th><th></th></tr></thead>
+    <tbody>${items.length ? items.map(p=>`<tr>
+      <td>${crmDate(p.createdAt)}</td><td>${escapeHtml(p.recipient||"—")}</td><td>${escapeHtml(p.iin||"")}</td><td>${escapeHtml(p.kaspi||"")}</td>
+      <td><b>${fmtNum(p.amount)}</b>${p.amountVideo||p.amountProduct ? `<div style="font-size:11px;color:var(--ink-mute)">видео ${fmtNum(p.amountVideo)} · товар ${fmtNum(p.amountProduct)}</div>` : ""}</td>
+      <td class="wrap">${escapeHtml(p.name||"")}</td><td>${escapeHtml(p.blogger||"—")}</td><td>${escapeHtml(p.manager||"—")}</td><td>${p.isIp?"ИП":""}</td>
+      <td class="wrap">${escapeHtml(p.notes||"")}</td><td>${escapeHtml(p.statusLabel)}</td>
+      <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm cpay-copy" data-id="${escapeHtml(p.id)}" title="Скопировать строку">⧉</button>
+        ${edit && p.status!=="paid" ? `<button class="btn btn-primary btn-sm cpay-set" data-id="${escapeHtml(p.id)}" data-st="paid">Оплачено</button>` : ""}
+        ${edit && p.status==="pending" ? `<button class="btn btn-ghost btn-sm cpay-set" data-id="${escapeHtml(p.id)}" data-st="rejected">Отклонить</button>` : ""}</td>
+    </tr>`).join("") : `<tr><td colspan="12" class="empty">${CRM.pay.loading ? "Загружаю…" : "Пусто"}</td></tr>`}</tbody>
+  </table></div>`;
+}
+async function crmCopy(text){ try{ await navigator.clipboard.writeText(text); toast("Скопировано"); }catch(e){ toast("Не удалось скопировать", true); } }
+function wireCrmPayments(){
+  document.querySelectorAll(".cpay-chip").forEach(b=> b.onclick = ()=>{ CRM.pay.status = b.dataset.st; CRM.pay.data = null; crmPayLoad(); });
+  const items = (CRM.pay.data && CRM.pay.data.items) || [];
+  document.querySelectorAll(".cpay-copy").forEach(b=> b.onclick = ()=>{ const p = items.find(x=>x.id===b.dataset.id); if(p) crmCopy(crmPayRowText(p)); });
+  const all = document.getElementById("cpay-copyall"); if(all) all.onclick = ()=> crmCopy(items.map(crmPayRowText).join("\n"));
+  document.querySelectorAll(".cpay-set").forEach(b=> b.onclick = async ()=>{
+    try{ await withBusy(b, ()=> CrmApi.setPayment(b.dataset.id, b.dataset.st)); toast(b.dataset.st==="paid" ? "Отмечено: оплачено" : "Отклонено"); crmPayLoad(); }catch(e){ toast(e.message, true); }
+  });
+}
+
+/* =========================================================================
    9. ОБРАБОТЧИКИ ВКЛАДОК
    ========================================================================= */
 function wireDeskTab(){
+  if(UI.tab==="crmBloggers"){ wireCrmBloggers(); return; }
+  if(UI.tab==="crmPayments"){ wireCrmPayments(); return; }
   if(UI.tab==="dashboard" && UI.role==="marketer"){
     wireSimpleStats();
     { const oa = document.getElementById("vt-open-adv"); if(oa) oa.onclick = ()=>{ UI.vtAdv = true; renderDeskTab(); }; }
@@ -9663,6 +9974,7 @@ function startPolling(){
     try{
       await DataManager.refresh();
       setConnStatus(true);
+      if(UI.tab==="crmBloggers" || UI.tab==="crmPayments") return; // свои данные, не сбиваем поиск
       if(UI.role) render();
     }catch(e){
       setConnStatus(false);
