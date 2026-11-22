@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Barter Box · управление бартер-рассылками, доставкой и маркетингом</title>
@@ -327,6 +328,57 @@ a.bd-chip:hover{border-color:var(--action);color:var(--action)}
   .tabs{padding:0 8px}
   .topbar{padding:0 10px}
 }
+/* ===== Оформление по прототипу (22.11.2026): Montserrat, белая шапка, вкладки с розовой чертой, кнопки-«пилюли» ===== */
+:root{--blue:#D6337E;--action:#D6337E;--action-d:#B0215F;--action-soft:#FCE4EF;--action-soft-2:#F9D3E3;--canvas:#FBF6F8;--ink:#2B2228;--ink-soft:#6E6168;--ink-mute:#8A7F86;
+  --line:#F1E1E8;--line-2:#EBCFDC;--ok:#1E9E6A;--ok-bg:#E2F6EC;--warn:#9A6400;--warn-bg:#FFF1D6;--bad:#C42B45;--bad-bg:#FDE6EA;--grad:#D6337E;--radius:14px;
+  --shadow-sm:0 1px 2px rgba(90,30,60,.04),0 8px 24px -14px rgba(150,40,90,.14);--shadow-md:0 2px 6px rgba(90,30,60,.06),0 12px 28px -14px rgba(150,40,90,.2)}
+body{font-family:Montserrat,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:13px;color:#2B2228;background:#FBF6F8;background-image:none;font-variant-numeric:tabular-nums;caret-color:#D6337E}
+input,select,textarea{font-family:inherit;font-size:12.5px;accent-color:#D6337E}
+::selection{background:#F9D3E3}
+.topbar{background:#fff;backdrop-filter:none;border-bottom:0;height:50px;padding:0 20px;gap:10px;box-shadow:none}
+.logo{font-size:13px;font-weight:800;gap:8px}.logo .mark{width:24px;height:24px;border-radius:7px;background:#D6337E;box-shadow:none;font-size:10px;font-weight:800}
+.role-pill{background:#F4EEF1;color:#6E6168;font-size:12px;font-weight:600;height:26px;padding:0 12px;border-radius:999px}
+.topbar .btn,.topbar .btn-ghost{height:26px;padding:0 12px;border-radius:999px;background:#FCE4EF;color:#C2306F;border:0;font-size:12px;font-weight:600;box-shadow:none}
+.tabs{background:#fff;backdrop-filter:none;border-bottom:0;padding:0 20px;gap:0;position:sticky;top:50px;z-index:49;box-shadow:0 1px 0 #F3DDE7,0 8px 20px -14px rgba(120,30,70,.22)}
+.tab{font-size:12.5px;font-weight:600;color:#4A3F46;padding:0 2px;margin-right:18px;height:44px;border-bottom:2px solid transparent;border-radius:0;transition:color .15s,border-color .15s}
+.tab:hover{color:#D6337E}.tab.active{color:#D6337E;border-bottom-color:#D6337E;font-weight:700}.tab.active::after{display:none}
+.tab .cnt{background:#FCE4EF;color:#D6337E;font-size:10.5px;border-radius:999px;padding:1px 6px;margin-left:5px}
+main{max-width:1440px;padding:22px 20px 48px}
+.btn{height:32px;padding:0 14px;border-radius:999px;border:1px solid #F0C9DA;background:#fff;color:#C2306F;font-weight:700;font-size:12px;box-shadow:none;transition:background-color .15s,border-color .15s,transform .1s}
+.btn:hover{background:#FDF0F6}
+.btn-primary{background:#D6337E;border-color:#D6337E;color:#fff;box-shadow:0 1px 2px rgba(150,30,80,.22),0 4px 10px -6px rgba(214,51,126,.5)}.btn-primary:hover{background:#B0215F;color:#fff}
+.btn-ghost{background:#fff;color:#C2306F;border:1px solid #F0C9DA}.btn-ghost:hover{background:#FDF0F6}
+.btn-sm{height:28px;padding:0 12px;font-size:12px;border-radius:999px}
+.btn-danger{background:#fff;border:1px solid #F5C6D0;color:#C42B45}
+.panel{border:1px solid #F1E1E8;border-radius:14px;padding:18px 20px;box-shadow:var(--shadow-sm)}
+.panel-title{font-size:15px;font-weight:800;color:#2B2228}
+.kpi{border:1px solid #F1E1E8;border-radius:12px;box-shadow:0 1px 2px rgba(90,30,60,.04)}.kpi::before{display:none}
+.kpi .num{font-size:18px;font-weight:800}
+table{font-size:12.5px}
+th{background:#FFF9FB;color:#8A6F7C;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;padding:10px;border-bottom:1px solid #F3DDE7}
+td{padding:9px 8px;border-bottom:1px solid #F8E9EF}
+tbody tr:hover td{background:#FFF7FA}
+.table-wrap{border:1px solid #F1E1E8;border-radius:12px;background:#fff}
+.toolbar input[type=text],.toolbar input[type=search],.toolbar select,.toolbar input[type=date]{height:32px;border:1px solid #EBCFDC;border-radius:8px;padding:0 10px;font-size:12.5px}
+.field label{font-size:11.5px;font-weight:700;color:#6E6168;text-transform:none;letter-spacing:0}
+.field input,.field select,.field textarea{border:1px solid #EBCFDC;border-radius:8px;padding:8px 10px;font-size:12.5px}
+.login-hint{background:#FBEFF4;color:#7A5A69;border:0;border-radius:10px}
+.badge{border-radius:6px;height:22px;padding:0 8px;font-size:11.5px}
+.modal{border-radius:16px}
+h2{font-size:22px;font-weight:800;letter-spacing:-.015em}
+/* общие классы прототипа */
+.pv-st{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;font-size:11.5px;font-weight:700;white-space:nowrap;border:0}
+.s-ok{background:#E2F6EC;color:#1E8C5C}.s-w{background:#FFF1D6;color:#9A6400}.s-b{background:#FDE6EA;color:#C42B45}.s-a{background:#FCE4EF;color:#C2306F}.s-m{background:#F4EEF1;color:#6E6168}.s-blue{background:#E6EEFB;color:#2F5FB3}
+select.pv-st{appearance:none;-webkit-appearance:none;cursor:pointer;padding-right:18px;background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 9px) 9px,calc(100% - 5px) 9px;background-size:4px 4px;background-repeat:no-repeat;font-family:inherit}
+.pv-chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border-radius:999px;background:#FCE4EF;color:#C2306F;font:600 12px Montserrat,sans-serif;border:0;cursor:pointer;white-space:nowrap}
+.pv-chip.on{background:#D6337E;color:#fff}.pv-chip .n{font-size:10.5px;font-weight:700;background:#fff;color:#C2306F;border-radius:999px;padding:0 6px}.pv-chip.on .n{color:#D6337E}
+.pv-note{background:#FBEFF4;border-radius:10px;padding:9px 12px;font-size:12px;color:#7A5A69;line-height:1.5}
+.pv-lbl{font-size:10.5px;font-weight:700;color:#6E6168;text-transform:uppercase;letter-spacing:.03em}
+.pv-inp{height:32px;border:1px solid #EBCFDC;border-radius:8px;padding:0 10px;font:12.5px Montserrat,sans-serif;background:#fff;color:#2B2228}
+.pv-inp:focus{outline:none;border-color:#D6337E;box-shadow:0 0 0 3px #FCE4EF}
+.mut{color:#8A7F86}
+a{color:#D6337E;text-decoration:none}a:hover{color:#B0215F}
+select.pv-st{width:auto;max-width:210px;height:24px}
 </style>
 </head>
 <body>
@@ -3606,7 +3658,14 @@ const MARKETER_TABS = [
 function tabsForRole(){
   const base = UI.role==="marketer" ? MARKETER_TABS : MANAGER_TABS;
   if(UI.actorName==="Ольга") return base; // у Ольги интерфейс без изменений
-  return [base[0], {id:"desk", label:"Рабочий стол"}, {id:"crmBloggers", label:"Блогеры"}, {id:"crmProducts", label:"Товары"}, ...base.slice(1), ...(crmIsNina() ? [{id:"crmPayments", label:"Оплаты"}] : [])];
+  // Вкладки по прототипу: Дашборд · Рабочий стол · Блогеры · База ТЗ · Интеграции крупные · микро/средние · Планер.
+  // Логистика (менеджер/логист) — свои вкладки после основных. Тимлидам — Товары, Публикации, Сводный; Нине — Оплаты.
+  const lead = crmIsLeadName();
+  const main = UI.role==="marketer"
+    ? [{id:"dashboard",label:"Дашборд"},{id:"desk",label:"Рабочий стол"},{id:"crmBloggers",label:"Блогеры"},{id:"tzBase",label:"База ТЗ"},{id:"influencerDeals",label:"Интеграции крупные"},{id:"microInfluencers",label:"Интеграции микро/средние"},{id:"microCalendar",label:"Планер блогеров"}]
+    : [base[0],{id:"desk",label:"Рабочий стол"},{id:"crmBloggers",label:"Блогеры"},...base.slice(1)];
+  const extra = UI.role==="marketer" && lead ? [{id:"crmProducts",label:"Товары"},{id:"publications",label:"Публикации"},{id:"report",label:"Сводный отчёт"}] : (UI.role==="marketer" ? [{id:"crmProducts",label:"Товары"}] : []);
+  return [...main, ...extra, ...(crmIsNina() ? [{id:"crmPayments", label:"Оплаты"}] : [])];
 }
 function roleLabel(){
   const base = UI.role==="marketer" ? "📊 Маркетолог" : "👤 Менеджер / логист";
@@ -3694,6 +3753,7 @@ function renderDeskTab(){
   else if(UI.tab==="crmPayments") main.innerHTML = tplCrmPayments();
   else if(UI.tab==="crmProducts") main.innerHTML = tplCrmProducts();
   else if(UI.tab==="desk") main.innerHTML = tplDesk();
+  else if(UI.tab==="tzBase"){ UI.microTzCatalogOpen = true; main.innerHTML = `<div style="margin-bottom:14px"><h1 style="margin:0;font-size:22px;font-weight:800">База ТЗ</h1><div class="mut" style="margin-top:3px">варианты ТЗ по товарам — в карточке интеграции ТЗ выбирается отсюда; товары и ШК — во вкладке «Товары»</div></div>` + tplMicroTzCatalog(); }
   wireDeskTab();
   if(scrollPositions.length){
     main.querySelectorAll(".table-wrap").forEach((el,i)=>{ if(scrollPositions[i]) el.scrollLeft = scrollPositions[i]; });
@@ -6066,7 +6126,7 @@ function tplMicroInfluencers(){
     ${tplMicroPlanProducts(UI.microMonth)}
     ${tplMicroCategorySummary()}
     <div style="font-size:12.5px;color:var(--ink-mute);margin:0 0 10px">Справочник ШК / SKU, себестоимость и базовые ТЗ — во вкладке <a href="#" onclick="UI.tab='crmProducts';render();return false">«Товары»</a>. В карточке интеграции ШК подбирается из него же.</div>
-    ${tplMicroTzCatalog()}
+    <div style="font-size:12.5px;color:var(--ink-mute);margin:0 0 10px">Варианты ТЗ — во вкладке <a href="#" onclick="UI.tab='tzBase';render();return false">«База ТЗ»</a>.</div>
     ${microSkuDatalist()}
 
     <div class="toolbar" style="margin-bottom:8px;align-items:center;flex-wrap:wrap">
@@ -8425,7 +8485,7 @@ const CrmApi = {
   submitPayment: (body)=> apiFetch("/api/crm/payments", {method:"POST", headers:jsonHeaders, body:JSON.stringify(body)}),
   cutover: ()=> apiFetch("/api/crm/cutover", {method:"POST", headers:jsonHeaders, body:JSON.stringify({confirm:"ПЕРЕЕЗД"})}),
 };
-const CRM = { meta:null, list:null, loading:false, err:null, f:{q:"", status:"notdeclined", who:"mine", worked:"", sort:"updated", page:1}, pay:{status:"pending", data:null, loading:false, err:null} };
+const CRM = { meta:null, list:null, loading:false, err:null, f:{q:"", status:"", who:"all", worked:"", sort:"updated", page:1}, pay:{status:"pending", data:null, loading:false, err:null} };
 const CRM_STAFF = ["Камила","Зарина","Марина","Сабрина","Надира","Мадина","Оксана","Анастасия","Ажар","Анеля","Сая","Нина","Сауле","Мария","Ольга","Алтынай","Сабина","Эльмира"];
 function TALK_OR(prev){ return prev; }
 function crmIsNina(){ return UI.actorName==="Нина" && !!UI.canExport; }
@@ -8456,8 +8516,8 @@ const CRM_COLS = [
 const CRM_SORTABLE = new Set(["followers","reach","followersTT","reachTT","priceReels","cpvReels","priceTiktok","cpvTiktok","priceBoth","cpvBoth","storiesReach","priceStories","cpvStories","created"]);
 function crmColsOn(){ try{ const v = JSON.parse(localStorage.getItem("bb_crm_cols")||"null"); if(Array.isArray(v)) return new Set(v); }catch(e){} return new Set(CRM_COLS.map(c=>c[0]).filter(k=>k!=="updated")); }
 CRM.cols = crmColsOn(); CRM.sel = new Set(); CRM.showFilters = true; CRM.batches = null;
-Object.assign(CRM.f, {sort:"default", col:"", dir:"desc", platform:"", cpv_min:"", cpv_max:"", reach_min:"", followers_min:"", followers_max:"", category:"", exclude_category:"", reels_min:"", reels_max:"", tt_min:"", tt_max:"", no_price:false, no_manager:false, in_work:false, exclude_in_work:false, exclude_transferred:false, exclude_declined:false, batch_id:""});
-const CRM_FILTER_KEYS = ["platform","cpv_min","cpv_max","reach_min","followers_min","followers_max","category","exclude_category","reels_min","reels_max","tt_min","tt_max","no_price","no_manager","in_work","exclude_in_work","exclude_transferred","exclude_declined","batch_id"];
+Object.assign(CRM.f, {sort:"default", col:"", dir:"desc", platform:"", cpv_min:"", cpv_max:"", reach_min:"", followers_min:"", followers_max:"", category:"", exclude_category:"", reels_min:"", reels_max:"", tt_min:"", tt_max:"", no_price:false, no_manager:false, in_work:false, exclude_in_work:false, exclude_transferred:false, exclude_considering:false, exclude_declined:false, batch_id:""});
+const CRM_FILTER_KEYS = ["platform","cpv_min","cpv_max","reach_min","followers_min","followers_max","category","exclude_category","reels_min","reels_max","tt_min","tt_max","no_price","no_manager","in_work","exclude_in_work","exclude_transferred","exclude_considering","exclude_declined","batch_id"];
 crmParams = function(){ const f=CRM.f; const p={page:f.page, limit:50, sort:f.sort}; if(f.col){ p.col=f.col; p.dir=f.dir; } if(f.q) p.q=f.q; if(f.status) p.status=f.status; if(f.who==="mine") p.mine="1"; else if(f.who && f.who!=="all") p.manager=f.who; if(f.worked) p.worked=f.worked;
   for(const k of CRM_FILTER_KEYS){ const v=f[k]; if(v===true) p[k]="1"; else if(v) p[k]=v; } return p; };
 function crmIsLead(){ return !!UI.canExport; }
@@ -8483,6 +8543,23 @@ function crmCell(k, b){
   return "";
 }
 function crmFiltersActive(){ return CRM_FILTER_KEYS.filter(k=>k!=="batch_id" && CRM.f[k]).length; }
+const CRM_CATS = [["","Не выбрано","s-m"],["blogger","Блогер","s-blue"],["visazhist","Визажист","s-a"],["expert","Эксперт","s-w"],["barter","Бартер","s-m"]];
+function crmStCls(st){ return {talk:"s-w", work:"s-ok", worked:"s-m", declined:"s-b", legacy:"s-m"}[st && st.group] || "s-m"; }
+function crmStatusCell(b, edit){
+  const m = CRM.meta || {talk:{}, decline:{}};
+  if(!edit) return `<span class="pv-st ${crmStCls(b.st)}">${escapeHtml(b.st.label)}</span>`;
+  const auto = b.st.group==="work" || b.st.group==="worked" || b.st.group==="legacy";
+  const isDecl = b.st.group==="declined";
+  return `<select class="pv-st ${crmStCls(b.st)} crm-ist" data-id="${escapeHtml(b.id)}" data-prev="${escapeHtml(isDecl?"decl:"+b.st.code:b.status)}" title="${auto?"Ставится сам по интеграциям; можно поменять на статус переговоров":""}">
+    ${auto?`<option value="" selected>${escapeHtml(b.st.label)}</option>`:""}
+    ${Object.entries(m.talk).map(([k,v])=>`<option value="${k}" ${!auto&&!isDecl&&b.status===k?"selected":""}>${escapeHtml(v)}</option>`).join("")}
+    ${Object.entries(m.decline).map(([k,v])=>`<option value="decl:${k}" ${isDecl&&b.st.code===k?"selected":""}>Отказ: ${escapeHtml(v)}</option>`).join("")}</select>`;
+}
+function crmCatCell(b, edit){
+  const c = CRM_CATS.find(x=>x[0]===(b.category||"")) || [b.category, b.category, "s-m"];
+  if(!edit) return `<span class="pv-st ${c[2]}">${escapeHtml(c[1]||"Не выбрано")}</span>`;
+  return `<select class="pv-st ${c[2]} crm-icat" data-id="${escapeHtml(b.id)}">${CRM_CATS.map(x=>`<option value="${x[0]}" ${x[0]===(b.category||"")?"selected":""}>${x[1]}</option>`).join("")}${c[0] && !CRM_CATS.some(x=>x[0]===c[0])?`<option selected>${escapeHtml(c[0])}</option>`:""}</select>`;
+}
 function tplCrmBloggers(){
   if(!CRM.list && !CRM.loading && !CRM.err) setTimeout(crmLoad, 0);
   if(!CRM.batches){ CRM.batches = []; apiFetch("/api/crm/batches").then(x=>{ CRM.batches = x; crmRepaint(); }).catch(()=>{}); }
@@ -8490,94 +8567,99 @@ function tplCrmBloggers(){
   const declineOpts = m ? Object.entries(m.decline).map(([k,v])=>`<option value="decl:${k}" ${f.status==="decl:"+k?"selected":""}>Отказ: ${escapeHtml(v)}</option>`).join("") : "";
   const legacyOpts = [["in_work","В работе (CRM)"],["transferred","Передан в работу (CRM)"],["payment_pending","К оплате (CRM)"],["paid","Оплачено (CRM)"]].map(([k,v])=>`<option value="${k}" ${f.status===k?"selected":""}>${v}</option>`).join("");
   const mgrs = m ? Object.keys(m.managers).sort((a,b)=>a.localeCompare(b,"ru")) : [];
-  const banner = !m || edit ? "" : `<div class="login-hint" style="margin:0 0 12px;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;text-align:left">
-        <span>Сейчас это копия старой CRM, обновляется каждые 5 минут${m.lastPush ? " · последнее обновление " + crmTimeAgo(m.lastPush.updated_at) : " · данных из CRM ещё не было"}. Менять статусы, импортировать и добавлять можно будет после переезда.</span>
-        ${crmIsNina() ? `<button class="btn btn-primary btn-sm" id="crm-cutover">Перевести CRM в Barter Box</button>` : ""}</div>`;
   const items = (L && L.items) || [];
   const from = L ? (L.page-1)*L.limit+1 : 0, to = L ? Math.min(L.total, L.page*L.limit) : 0;
-  const cols = CRM_COLS.filter(c=>CRM.cols.has(c[0]));
-  const inp = (k, ph)=> `<input class="crm-fi" data-k="${k}" value="${escapeHtml(f[k]||"")}" placeholder="${ph}" inputmode="decimal" style="width:120px;border:1px solid var(--line-2);border-radius:8px;padding:6px 8px;background:#fff;font-size:13px">`;
-  const chk = (k, t)=> `<label style="display:inline-flex;gap:5px;align-items:center;font-size:12.5px;white-space:nowrap"><input type="checkbox" class="crm-fc" data-k="${k}" ${f[k]?"checked":""}>${t}</label>`;
-  const lbl = (t, html)=> `<label style="display:flex;flex-direction:column;gap:4px;font-size:10.5px;font-weight:700;color:var(--ink-soft);text-transform:uppercase">${t}${html}</label>`;
+  const cols = CRM_COLS.filter(c=>CRM.cols.has(c[0]) && !["status","category","comment","manager"].includes(c[0]));
+  const inp = (k, ph)=> `<input class="pv-inp crm-fi" data-k="${k}" value="${escapeHtml(f[k]||"")}" placeholder="${ph}" inputmode="decimal" style="width:100%">`;
+  const chk = (k, t)=> `<label style="display:inline-flex;gap:6px;align-items:center;font-size:12.5px;white-space:nowrap;cursor:pointer"><input type="checkbox" class="crm-fc" data-k="${k}" ${f[k]?"checked":""}>${t}</label>`;
   const excl = String(f.exclude_category||"").split(",").filter(Boolean);
-  const sel = CRM.sel;
-  const selItems = items.filter(b=>sel.has(b.id));
+  const exChk = (v,t)=> `<label style="display:inline-flex;gap:6px;align-items:center;font-size:12.5px;white-space:nowrap;cursor:pointer"><input type="checkbox" class="crm-fx" value="${v}" ${excl.includes(v)?"checked":""}>${t}</label>`;
+  const fl = (t, html)=> `<label style="display:flex;flex-direction:column;gap:5px"><span class="pv-lbl">${t}</span>${html}</label>`;
+  const sel = CRM.sel, selItems = items.filter(b=>sel.has(b.id));
+  const num = (v)=> v ? fmtNum(v) : `<span class="mut">—</span>`;
+  const cpv = (v)=> v==null ? `<span class="mut">—</span>` : `<span class="pv-st ${v<=10?"s-ok":v<=30?"s-a":"s-b"}" style="${v>10&&v<=30?"background:#EFE8FB;color:#6B48C8":""}">${String(v).replace(".",",")} ₸</span>`;
+  const cell = (k,b)=>{ switch(k){
+    case "links": return [b.instagram?`<a href="${escapeHtml(b.instagram)}" target="_blank" rel="noopener" title="Instagram">IG</a>`:"", b.tiktok?`<a href="${escapeHtml(b.tiktok)}" target="_blank" rel="noopener" title="TikTok">TT</a>`:""].filter(Boolean).join(" · ")||"—";
+    case "followers": return num(b.followers); case "reach": return num(b.reach); case "followersTT": return num(b.followersTT); case "reachTT": return num(b.reachTT);
+    case "priceReels": return num(b.price.reels); case "cpvReels": return cpv(b.cpv.reels); case "priceTiktok": return num(b.price.tiktok); case "cpvTiktok": return cpv(b.cpv.tiktok);
+    case "priceBoth": return num(b.price.both); case "cpvBoth": return cpv(b.cpv.both); case "storiesReach": return num(b.storiesReach); case "priceStories": return num(b.price.stories); case "cpvStories": return cpv(b.cpv.stories);
+    case "created": return `<span class="mut">${crmDate(b.createdAt)}</span>`; case "updated": return `<span class="mut">${crmTimeAgo(b.updatedAt)}</span>`; } return ""; };
+  const right = new Set(["followers","reach","followersTT","reachTT","priceReels","priceTiktok","priceBoth","storiesReach","priceStories"]);
   return `
-  <div class="toolbar" style="justify-content:space-between;align-items:flex-start">
-    <div><h2 style="margin:0">Блогеры</h2><div style="color:var(--ink-mute);font-size:12.5px">${L ? fmtNum(L.total) + " по фильтру · " : ""}${m ? fmtNum(m.total) + " в базе" : "загружаю…"}</div></div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
-      <button class="btn btn-ghost btn-sm" id="crm-cols">Колонки</button>
-      <button class="btn btn-ghost btn-sm" id="crm-template">Шаблон</button>
-      ${crmIsLead() ? `<button class="btn btn-ghost btn-sm" id="crm-excel">Excel</button>` : ""}
-      <button class="btn btn-ghost btn-sm" id="crm-dups">Дубли</button>
-      ${edit ? `<button class="btn btn-ghost btn-sm" id="crm-import">Импорт</button><input type="file" id="crm-import-file" accept=".xlsx,.xls,.csv" style="display:none">` : ""}
-      ${edit ? `<button class="btn btn-primary btn-sm" id="crm-new">+ Добавить</button>` : ""}
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+    <div><h1 style="margin:0;font-size:22px;font-weight:800">Блогеры</h1><div class="mut" style="margin-top:3px">${m ? fmtNum(m.total) + " в базе" : "загружаю…"}${L && L.total!==(m&&m.total) ? " · по фильтру " + fmtNum(L.total) : ""} · бывшая Blogger CRM, теперь вкладка Barter Box</div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn" id="crm-cols">Колонки</button><button class="btn" id="crm-template">Шаблон</button>${crmIsLead() ? `<button class="btn" id="crm-excel">Excel</button>` : ""}<button class="btn" id="crm-dups">Дубли</button>
+      ${edit ? `<button class="btn" id="crm-import">Импорт</button><input type="file" id="crm-import-file" accept=".xlsx,.xls,.csv" style="display:none"><button class="btn btn-primary" id="crm-new">+ Добавить</button>` : ""}
     </div>
   </div>
-  ${banner}
-  <div class="toolbar">
-    <input type="search" class="fill" id="crm-q" placeholder="Поиск: ник, имя, ссылка, WhatsApp, комментарий" value="${escapeHtml(f.q)}" style="min-width:240px;max-width:360px">
-    <select id="crm-status">
-      <option value="notdeclined" ${f.status==="notdeclined"?"selected":""}>Без отказов</option>
-      <option value="" ${f.status===""?"selected":""}>Все статусы</option>
-      <option value="talk" ${f.status==="talk"?"selected":""}>Переговоры — все</option>
-      ${m ? Object.entries(m.talk).map(([k,v])=>`<option value="${k}" ${f.status===k?"selected":""}>${escapeHtml(v)}</option>`).join("") : ""}
-      ${legacyOpts}
-      <option value="declined" ${f.status==="declined"?"selected":""}>Отказы — все</option>
-      ${declineOpts}
-    </select>
-    <select id="crm-who">
-      <option value="mine" ${f.who==="mine"?"selected":""}>Мои (${escapeHtml(UI.actorName||"—")})</option>
-      <option value="all" ${f.who==="all"?"selected":""}>Все менеджеры</option>
-      ${mgrs.map(n=>`<option value="${escapeHtml(n)}" ${f.who===n?"selected":""}>${escapeHtml(n)} · ${fmtNum(m.managers[n])}</option>`).join("")}
-    </select>
-    <select id="crm-sort">${[["default","Новые цены сверху"],["created_desc","Дата добавления ↓"],["cpv_asc","CPV: дешевле"],["cpv_desc","CPV: дороже"],["reach","По охвату"],["updated","Сначала обновлённые"],["name","По нику"]].map(([v,t])=>`<option value="${v}" ${!f.col && f.sort===v?"selected":""}>${t}</option>`).join("")}${f.col ? `<option selected>По колонке</option>` : ""}</select>
-    <select id="crm-batch"><option value="">Все партии</option>${(CRM.batches||[]).map(x=>`<option value="${escapeHtml(x.id)}" ${f.batch_id===x.id?"selected":""}>${escapeHtml((x.name||"партия")+" · "+crmDate(x.createdAt)+(x.n?" · "+x.n:""))}</option>`).join("")}</select>
-    <select id="crm-worked"><option value="">Работали — любой месяц</option>${crmMonths().map(([v,t])=>`<option value="${v}" ${f.worked===v?"selected":""}>Работали в ${t}</option>`).join("")}</select>
-    <button class="btn btn-sm ${CRM.showFilters||crmFiltersActive()?"btn-primary":"btn-ghost"}" id="crm-ftoggle">${CRM.showFilters?"▲":"▼"} Фильтры${crmFiltersActive()?" · "+crmFiltersActive():""}</button>
+  ${!m || edit ? "" : `<div class="pv-note" style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><span>Пока это копия старой CRM (обновляется каждые 5 минут${m.lastPush ? ", последнее — " + crmTimeAgo(m.lastPush.updated_at) : ""}). Статусы, категории и комментарии меняются прямо в строке после переезда.</span>${crmIsNina() ? `<button class="btn btn-primary btn-sm" id="crm-cutover">Перевести CRM в Barter Box</button>` : ""}</div>`}
+  <div style="background:#fff;border:1px solid #F1E1E8;border-radius:14px;box-shadow:var(--shadow-sm);padding:16px 18px;margin-bottom:14px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input type="search" class="pv-inp" id="crm-q" placeholder="Поиск…" value="${escapeHtml(f.q)}" style="width:220px">
+      <select class="pv-inp" id="crm-status"><option value="" ${f.status===""?"selected":""}>Все статусы</option><option value="notdeclined" ${f.status==="notdeclined"?"selected":""}>Без отказов</option><option value="talk" ${f.status==="talk"?"selected":""}>Переговоры — все</option>${m ? Object.entries(m.talk).map(([k,v])=>`<option value="${k}" ${f.status===k?"selected":""}>${escapeHtml(v)}</option>`).join("") : ""}${legacyOpts}<option value="declined" ${f.status==="declined"?"selected":""}>Отказы — все</option>${declineOpts}</select>
+      <select class="pv-inp" id="crm-who"><option value="all" ${f.who==="all"?"selected":""}>Все менеджеры</option><option value="mine" ${f.who==="mine"?"selected":""}>Мои (${escapeHtml(UI.actorName||"—")})</option>${mgrs.map(n=>`<option value="${escapeHtml(n)}" ${f.who===n?"selected":""}>${escapeHtml(n)} · ${fmtNum(m.managers[n])}</option>`).join("")}</select>
+      <select class="pv-inp" id="crm-sort">${[["default","Новые цены сверху"],["created_desc","Дата добавления ↓"],["cpv_asc","CPV: дешевле"],["cpv_desc","CPV: дороже"],["reach","По охвату"],["updated","Сначала обновлённые"],["name","По нику"]].map(([v,t])=>`<option value="${v}" ${!f.col && f.sort===v?"selected":""}>${t}</option>`).join("")}${f.col ? `<option selected>По колонке</option>` : ""}</select>
+      <select class="pv-inp" id="crm-batch"><option value="">Все партии</option>${(CRM.batches||[]).map(x=>`<option value="${escapeHtml(x.id)}" ${f.batch_id===x.id?"selected":""}>${escapeHtml((x.name||"партия")+" · "+crmDate(x.createdAt)+(x.n?" · "+x.n:""))}</option>`).join("")}</select>
+      <button class="btn" id="crm-ftoggle">${CRM.showFilters?"▴":"▾"} Фильтры${crmFiltersActive()?" · "+crmFiltersActive():""}</button>
+    </div>
+    ${CRM.showFilters ? `<div style="margin-top:14px;background:#FFF9FB;border:1px solid #F3DDE7;border-radius:12px;padding:14px 16px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:10px">
+        ${fl("Платформа", `<select class="pv-inp crm-fs" data-k="platform"><option value="">Любая</option><option value="instagram" ${f.platform==="instagram"?"selected":""}>Только Инст</option><option value="tiktok" ${f.platform==="tiktok"?"selected":""}>Только ТТ</option><option value="both" ${f.platform==="both"?"selected":""}>Инст + ТТ</option></select>`)}
+        ${fl("CPV от, ₸", inp("cpv_min","напр. 5"))}${fl("CPV до, ₸", inp("cpv_max","напр. 30"))}${fl("Охват от", inp("reach_min","20000"))}
+        ${fl("Подписчики от", inp("followers_min","10000"))}${fl("Подписчики до", inp("followers_max","100000"))}
+        ${fl("Работали в", `<select class="pv-inp" id="crm-worked"><option value="">Любой месяц</option>${crmMonths().map(([v,t])=>`<option value="${v}" ${f.worked===v?"selected":""}>${t}</option>`).join("")}</select>`)}
+        ${fl("Категория", `<select class="pv-inp crm-fs" data-k="category"><option value="">Все</option>${CRM_CATS.filter(x=>x[0]).map(([v,t])=>`<option value="${v}" ${f.category===v?"selected":""}>${t}</option>`).join("")}</select>`)}
+        ${fl("Рилс от, ₸", inp("reels_min","30000"))}${fl("Рилс до, ₸", inp("reels_max","200000"))}${fl("TikTok от, ₸", inp("tt_min","30000"))}${fl("TikTok до, ₸", inp("tt_max","200000"))}
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-top:12px">
+        ${chk("no_price","Без цены")}${chk("no_manager","Без менеджера")}${chk("in_work","Только в работе")}${chk("exclude_in_work","Исключить в работе")}${chk("exclude_considering","Исключить «На рассмотрении»")}${chk("exclude_declined","Исключить отказы")}${exChk("visazhist","Исключить визажистов")}${exChk("expert","Исключить экспертов")}
+      </div>
+      <button class="btn btn-sm" id="crm-freset" style="margin-top:12px">Сбросить</button>
+    </div>` : ""}
   </div>
-  ${CRM.showFilters ? `<div class="card" style="background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;margin-bottom:12px;display:flex;flex-direction:column;gap:10px">
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-      ${lbl("Платформа", `<select class="crm-fs" data-k="platform" style="width:130px;border:1px solid var(--line-2);border-radius:8px;padding:6px 8px;background:#fff;font-size:13px"><option value="">Любая</option><option value="instagram" ${f.platform==="instagram"?"selected":""}>Только Инст</option><option value="tiktok" ${f.platform==="tiktok"?"selected":""}>Только ТТ</option><option value="both" ${f.platform==="both"?"selected":""}>Инст + ТТ</option></select>`)}
-      ${lbl("CPV от (₸)", inp("cpv_min","напр. 5"))}${lbl("CPV до (₸)", inp("cpv_max","напр. 30"))}
-      ${lbl("Охват от", inp("reach_min","напр. 20000"))}
-      ${lbl("Подписчики от", inp("followers_min","напр. 10000"))}${lbl("Подписчики до", inp("followers_max","напр. 100000"))}
-      ${lbl("Категория", `<select class="crm-fs" data-k="category" style="width:130px;border:1px solid var(--line-2);border-radius:8px;padding:6px 8px;background:#fff;font-size:13px"><option value="">Все</option>${[["blogger","Блогер"],["visazhist","Визажист"],["expert","Эксперт"]].map(([v,t])=>`<option value="${v}" ${f.category===v?"selected":""}>${t}</option>`).join("")}</select>`)}
-      ${lbl("Исключить категории", `<span style="display:flex;flex-direction:column;gap:2px;text-transform:none;font-weight:400">${[["visazhist","Визажисты"],["expert","Эксперты"]].map(([v,t])=>`<label style="display:flex;gap:5px;font-size:12.5px;color:var(--ink)"><input type="checkbox" class="crm-fx" value="${v}" ${excl.includes(v)?"checked":""}>${t}</label>`).join("")}</span>`)}
-      ${lbl("Рилс от (₸)", inp("reels_min","напр. 30000"))}${lbl("Рилс до (₸)", inp("reels_max","напр. 200000"))}
-      ${lbl("TikTok от (₸)", inp("tt_min","напр. 30000"))}${lbl("TikTok до (₸)", inp("tt_max","напр. 200000"))}
-    </div>
-    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
-      ${chk("no_price","Без цены")}${chk("no_manager","Без менеджера")}${chk("in_work","Только в работе")}${chk("exclude_in_work","Исключить в работе")}${chk("exclude_transferred","Исключить «Передано в работу»")}${chk("exclude_declined","Исключить отказы")}
-      <button class="btn btn-ghost btn-sm" id="crm-freset">Сбросить</button>
-    </div>
-  </div>` : ""}
-  ${sel.size ? `<div style="background:var(--action-soft);border:1px solid var(--line-2);border-radius:var(--radius);padding:9px 14px;margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px">
+  ${sel.size ? `<div style="background:#FCE4EF;border-radius:12px;padding:10px 14px;margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px">
     <b>Выбрано: ${fmtNum(sel.size)}</b>
-    <select id="crm-ptype" style="padding:4px 8px"><option value="reels">Рилс</option><option value="tiktok">TikTok</option><option value="both">Рилс+ТТ</option><option value="stories">Сторис</option></select>
-    <b id="crm-psum">Σ ${fmtNum(selItems.reduce((s,b)=>s+(b.price[CRM.ptype||"reels"]||0),0))} ₸</b>${selItems.length<sel.size?`<span style="color:var(--ink-mute);font-size:11.5px">(сумма по этой странице)</span>`:""}
-    ${crmIsLead() ? `<button class="btn btn-ghost btn-sm" id="crm-sel-excel">Excel выбранных</button>` : ""}
-    ${crmIsLead() && edit ? `<button class="btn btn-ghost btn-sm" id="crm-sel-mgr">Распределить</button><button class="btn btn-ghost btn-sm" id="crm-sel-status">Статус</button><button class="btn btn-ghost btn-sm" id="crm-sel-del" style="color:var(--bad)">Удалить</button>` : ""}
-    ${L && sel.size < L.total ? `<button class="btn btn-ghost btn-sm" id="crm-sel-all">Выбрать все ${fmtNum(L.total)}</button>` : ""}
-    <button class="btn btn-ghost btn-sm" id="crm-sel-clear">Снять выделение</button>
-  </div>` : ""}
-  ${CRM.err ? `<div class="empty" style="color:var(--bad)">${escapeHtml(CRM.err)} <button class="btn btn-ghost btn-sm" id="crm-retry">Повторить</button></div>` : ""}
+    <select id="crm-ptype" class="pv-inp" style="height:28px"><option value="reels">Рилс</option><option value="tiktok">TikTok</option><option value="both">Рилс+ТТ</option><option value="stories">Сторис</option></select>
+    <b>Σ ${fmtNum(selItems.reduce((s,b)=>s+(b.price[CRM.ptype||"reels"]||0),0))} ₸</b>${selItems.length<sel.size?`<span class="mut" style="font-size:11.5px">(по этой странице)</span>`:""}
+    ${crmIsLead() ? `<button class="btn btn-sm" id="crm-sel-excel">Excel выбранных</button>` : ""}
+    ${crmIsLead() && edit ? `<button class="btn btn-sm" id="crm-sel-mgr">Распределить</button><button class="btn btn-sm" id="crm-sel-status">Статус</button><button class="btn btn-sm" id="crm-sel-del" style="color:#C42B45">Удалить</button>` : ""}
+    ${L && sel.size < L.total ? `<button class="btn btn-sm" id="crm-sel-all">Выбрать все ${fmtNum(L.total)}</button>` : ""}
+    <button class="btn btn-sm" id="crm-sel-clear">Снять</button></div>` : ""}
+  ${CRM.err ? `<div class="empty" style="color:var(--bad)">${escapeHtml(CRM.err)} <button class="btn btn-sm" id="crm-retry">Повторить</button></div>` : ""}
   <div class="table-wrap" style="${CRM.loading?"opacity:.55":""}">
     <table>
-      <thead><tr><th style="width:28px"><input type="checkbox" id="crm-sel-page" ${items.length && items.every(b=>sel.has(b.id))?"checked":""}></th><th class="sticky-col">Блогер</th>${cols.map(([k,t])=> CRM_SORTABLE.has(k) ? `<th class="th-sort ${f.col===k?"th-sort-active":""}" data-col="${k}">${t} ${f.col===k?(f.dir==="asc"?"↑":"↓"):"↕"}</th>` : `<th>${t}</th>`).join("")}<th></th></tr></thead>
+      <thead><tr><th style="width:30px"><input type="checkbox" id="crm-sel-page" ${items.length && items.every(b=>sel.has(b.id))?"checked":""}></th><th style="width:26px">★</th><th>Ник</th><th>Категория</th><th>Статус</th><th>Комментарий</th><th>Менеджер</th>${cols.map(([k,t])=> CRM_SORTABLE.has(k) ? `<th class="th-sort ${f.col===k?"th-sort-active":""} ${right.has(k)?"r":""}" data-col="${k}" style="${right.has(k)?"text-align:right":""}">${t} ${f.col===k?(f.dir==="asc"?"↑":"↓"):""}</th>` : `<th>${t}</th>`).join("")}<th></th></tr></thead>
       <tbody>${items.length ? items.map(b=>`<tr class="crm-row" data-id="${escapeHtml(b.id)}" style="cursor:pointer">
         <td><input type="checkbox" class="crm-sel" data-id="${escapeHtml(b.id)}" ${sel.has(b.id)?"checked":""}></td>
-        <td class="sticky-col" style="background:#fff"><b>${escapeHtml(b.name || "—")}</b><div style="font-size:11.5px;color:var(--ink-mute)">${b.nick ? "@"+escapeHtml(b.nick) : ""}${b.exclusive ? " · эксклюзив" : ""}</div></td>
-        ${cols.map(([k])=>`<td${k==="comment"?' class="wrap" style="max-width:220px"':""}>${crmCell(k,b)}</td>`).join("")}
-        <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm crm-deal" data-id="${escapeHtml(b.id)}" title="Завести интеграцию">+ Интеграция</button>${crmIsLead() && edit ? ` <button class="btn btn-ghost btn-sm crm-del" data-id="${escapeHtml(b.id)}" title="Удалить" style="color:var(--bad)">✕</button>` : ""}</td>
-      </tr>`).join("") : `<tr><td colspan="${cols.length+3}" class="empty">${CRM.loading ? "Загружаю…" : (f.who==="mine" ? "У вас пока нет блогеров с такими условиями — попробуйте «Все менеджеры»" : "Ничего не нашлось")}</td></tr>`}</tbody>
+        <td><button class="crm-star" data-id="${escapeHtml(b.id)}" data-on="${b.exclusive?1:0}" title="${b.exclusive?"Эксклюзив":"Отметить звёздочкой"}" style="background:none;border:0;font-size:15px;line-height:1;cursor:${edit&&crmIsLead()?"pointer":"default"};color:${b.exclusive?"#F2B54A":"#CBB8C2"}">${b.exclusive?"★":"☆"}</button></td>
+        <td><b>${escapeHtml(b.nick ? "@"+b.nick : (b.name||"—"))}</b></td>
+        <td>${crmCatCell(b, edit)}</td>
+        <td>${crmStatusCell(b, edit)}</td>
+        <td style="max-width:210px;overflow:hidden;text-overflow:ellipsis">${edit ? `<span class="crm-icom" data-id="${escapeHtml(b.id)}" title="${escapeHtml(b.lastComment||"")}" style="cursor:text;${b.lastComment?"color:#6E6168":"color:#D6337E"}">${escapeHtml((b.lastComment||"добавить…").slice(0,40))}${(b.lastComment||"").length>40?"…":""}</span>` : `<span class="mut" title="${escapeHtml(b.lastComment||"")}">${escapeHtml((b.lastComment||"—").slice(0,40))}</span>`}</td>
+        <td>${b.manager ? `<span class="pv-st s-m">${escapeHtml(b.manager)}</span>` : `<span class="mut">—</span>`}</td>
+        ${cols.map(([k])=>`<td${right.has(k)?' style="text-align:right"':""}>${cell(k,b)}</td>`).join("")}
+        <td style="white-space:nowrap"><button class="btn btn-sm crm-deal" data-id="${escapeHtml(b.id)}">+ Интеграция</button>${crmIsLead() && edit ? ` <button class="btn btn-sm crm-del" data-id="${escapeHtml(b.id)}" title="Удалить" style="color:#C42B45;padding:0 9px">✕</button>` : ""}</td>
+      </tr>`).join("") : `<tr><td colspan="${cols.length+8}" class="empty">${CRM.loading ? "Загружаю…" : "Ничего не нашлось"}</td></tr>`}</tbody>
     </table>
   </div>
-  ${L && L.total > L.limit ? `<div class="toolbar" style="justify-content:flex-end;margin-top:10px">
-    <span style="color:var(--ink-mute);font-size:12.5px">${fmtNum(from)}–${fmtNum(to)} из ${fmtNum(L.total)}</span>
-    <button class="btn btn-ghost btn-sm" id="crm-prev" ${L.page<=1?"disabled":""}>‹ Назад</button>
-    <button class="btn btn-ghost btn-sm" id="crm-next" ${to>=L.total?"disabled":""}>Далее ›</button>
-  </div>` : ""}`;
+  ${L && L.total > L.limit ? `<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:10px"><span class="mut" style="font-size:12.5px">${fmtNum(from)}–${fmtNum(to)} из ${fmtNum(L.total)}</span><button class="btn btn-sm" id="crm-prev" ${L.page<=1?"disabled":""}>‹ Назад</button><button class="btn btn-sm" id="crm-next" ${to>=L.total?"disabled":""}>Далее ›</button></div>` : ""}`;
+}
+async function crmInlineSave(id, body, label){
+  const prevItem = CRM.list && CRM.list.items.find(x=>x.id===id);
+  try{ const nb = await CrmApi.save(id, body); if(CRM.list){ const i = CRM.list.items.findIndex(x=>x.id===id); if(i>=0) CRM.list.items[i] = nb; } crmRepaint();
+    if(prevItem) undoBar(label, async ()=>{ const back = {}; if("status" in body){ if(prevItem.st.group==="declined"){ back.status="declined"; back.declineReason=prevItem.st.code; } else back.status = prevItem.status; }
+      if("category" in body) back.category = prevItem.category || ""; if("lastComment" in body) back.lastComment = prevItem.lastComment || ""; if("exclusive" in body) back.exclusive = !!prevItem.exclusive;
+      const r = await CrmApi.save(id, back); const i = CRM.list.items.findIndex(x=>x.id===id); if(i>=0) CRM.list.items[i] = r; crmRepaint(); });
+  }catch(e){ toast(e.message, true); crmRepaint(); }
+}
+function wireCrmInline(){
+  document.querySelectorAll(".crm-ist").forEach(s=>{ s.onclick = e=> e.stopPropagation(); s.onchange = ()=>{ const v = s.value; if(!v) return; crmInlineSave(s.dataset.id, v.startsWith("decl:") ? {status:"declined", declineReason:v.slice(5)} : {status:v}, "Статус: " + s.options[s.selectedIndex].text); }; });
+  document.querySelectorAll(".crm-icat").forEach(s=>{ s.onclick = e=> e.stopPropagation(); s.onchange = ()=> crmInlineSave(s.dataset.id, {category: s.value}, "Категория: " + s.options[s.selectedIndex].text); });
+  document.querySelectorAll(".crm-star").forEach(b=> b.onclick = e=>{ e.stopPropagation(); if(!(crmCutover() && crmIsLead())) return; crmInlineSave(b.dataset.id, {exclusive: b.dataset.on!=="1"}, b.dataset.on==="1" ? "Звёздочка снята" : "Отмечено звёздочкой"); });
+  document.querySelectorAll(".crm-icom").forEach(sp=> sp.onclick = e=>{ e.stopPropagation(); const item = CRM.list.items.find(x=>x.id===sp.dataset.id); const inp = document.createElement("input"); inp.className = "pv-inp"; inp.style.width = "200px"; inp.value = item && item.lastComment || ""; sp.replaceWith(inp); inp.focus();
+    let saved = false; const save = ()=>{ if(saved) return; saved = true; if((item.lastComment||"") === inp.value.trim()){ crmRepaint(); return; } crmInlineSave(item.id, {lastComment: inp.value.trim()}, "Комментарий сохранён"); };
+    inp.onkeydown = ev=>{ if(ev.key==="Enter") save(); if(ev.key==="Escape"){ saved = true; crmRepaint(); } }; inp.onblur = save; inp.onclick = ev=> ev.stopPropagation(); });
 }
 
 let crmSearchTimer = null, crmFilterTimer = null;
@@ -8609,7 +8691,7 @@ function wireCrmBloggers(){
   if(prev) prev.onclick = ()=>{ CRM.f.page--; crmLoad(); window.scrollTo(0,0); };
   if(next) next.onclick = ()=>{ CRM.f.page++; crmLoad(); window.scrollTo(0,0); };
   const retry=document.getElementById("crm-retry"); if(retry) retry.onclick = crmLoad;
-  document.querySelectorAll(".crm-row").forEach(tr=> tr.onclick = (e)=>{ if(e.target.closest("input,button,a")) return; modalCrmBlogger(tr.dataset.id); });
+  document.querySelectorAll(".crm-row").forEach(tr=> tr.onclick = (e)=>{ if(e.target.closest("input,button,a,select,.crm-icom")) return; modalCrmBlogger(tr.dataset.id); });
   document.querySelectorAll(".crm-sel").forEach(cb=> cb.onchange = ()=>{ cb.checked ? CRM.sel.add(cb.dataset.id) : CRM.sel.delete(cb.dataset.id); crmRepaint(); });
   const sp=document.getElementById("crm-sel-page"); if(sp) sp.onchange = ()=>{ for(const b of (CRM.list?CRM.list.items:[])) sp.checked ? CRM.sel.add(b.id) : CRM.sel.delete(b.id); crmRepaint(); };
   const sa=document.getElementById("crm-sel-all"); if(sa) sa.onclick = async ()=>{ try{ const r = await CrmApi.list(Object.assign(crmParams(), {ids_only:"1"})); r.ids.forEach(id=>CRM.sel.add(id)); crmRepaint(); }catch(e){ toast(e.message,true); } };
@@ -8635,6 +8717,7 @@ function wireCrmBloggers(){
     catch(e){ toast(e.message, true); } ifile.value=""; }; }
   const nb=document.getElementById("crm-new"); if(nb) nb.onclick = modalCrmNew;
   const cut=document.getElementById("crm-cutover"); if(cut) cut.onclick = modalCrmCutover;
+  wireCrmInline();
 }
 async function modalCrmDups(){
   let groups; try{ groups = await apiFetch("/api/crm/duplicates"); }catch(e){ toast(e.message,true); return; }
@@ -9066,54 +9149,120 @@ function modalDeskList(title, deals){
   openModal(`<h3>${escapeHtml(title)} · ${deals.length}</h3><div style="max-height:62vh;overflow:auto;font-size:13px">${deals.map(d=>`<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line)"><span><b>${escapeHtml(d.blogerName||"—")}</b> · ${escapeHtml(d.product||"товар не выбран")} · ${d.plannedDate?ddmmStr(d.plannedDate):"без даты"}${crmIsLeadName()&&d.responsible?` · ${escapeHtml(d.responsible)}`:""}</span><button class="btn btn-ghost btn-sm" onclick="closeModal();openMicroById(${d.id})">Открыть</button></div>`).join("")}</div><div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Закрыть</button></div>`);
   const back = document.querySelector("#modal-back .modal"); if(back) back.classList.add("modal-wide");
 }
+function deskTeamPlace(){
+  const month = todayStr().slice(0,7), cnt = {};
+  for(const d of (DataManager.state.microInfluencerDeals||[])) if(d.responsible && microDealPublished(d) && String(d.publishDate||d.plannedDate||"").startsWith(month)) cnt[d.responsible] = (cnt[d.responsible]||0) + 1;
+  const arr = Object.entries(cnt).sort((a,b)=> b[1]-a[1]); const i = arr.findIndex(x=> x[0]===UI.actorName);
+  return i>=0 ? i+1 : null;
+}
+// Разделы «Рабочего стола»: в каждом — строка с одним главным действием.
+function deskSections(){
+  const today = todayStr(), in7 = addDaysYMD(today, 7);
+  const mine = deskMyDeals().filter(d=> !/отмен/i.test(String(d.problemStatus||"")));
+  const pub = d=> microDealPublished(d) || !!d.publishDate;
+  const isIp = d=> /ИП/i.test(String(d.paymentMethod||""));
+  const S = {video:[], tz:[], pay:[], links:[], wait:[]};
+  for(const d of mine){
+    const vd = microVideoDue(d), pd = String(d.plannedDate||"").slice(0,10);
+    if(!pub(d) && vd && vd <= today && pd >= today) S.video.push({d, tag: vd < today ? `видео ждали ${ddmmStr(vd)}` : "видео сегодня", cls: vd < today ? "s-b" : "s-w", act:"wa", wa: vd < today ? "Здравствуйте! Напоминаю про видео для MIXIT — когда сможете прислать?" : "Доброе утро! Сегодня ждём видео для MIXIT 🙌"});
+    if(!pub(d) && !String(d.tz||"").trim() && pd >= today) S.tz.push({d, tag:"ТЗ не выбрано", cls:"s-a", act:"tz"});
+    if(pub(d) && (Number(d.cost)||0) > 0 && d.paymentStatus === "не оплачено") S.pay.push({d, tag:"вышло — оплата не подана", cls:"s-b", act:"pay"});
+    else if(pub(d) && isIp(d) && !d.avrReceived) S.pay.push({d, tag:"запросите АВР и ЭСФ", cls:"s-a", act:"avr", wa:"Здравствуйте! Публикация вышла, спасибо 🙌 Пришлите, пожалуйста, АВР и ЭСФ по договору."});
+    if(!pub(d) && pd && pd < today) S.links.push({d, tag:`выход был ${ddmmStr(pd)} — нет ссылки`, cls:"s-b", act:"link"});
+    else if(pub(d) && !d.reelsLink && !d.tiktokVideoLink && !(Number(d.factReachStories)>0)) S.links.push({d, tag:"вышло, ссылки нет", cls:"s-w", act:"link"});
+    if(!pub(d) && vd > today && vd <= in7) S.wait.push({d, tag:`видео ${ddmmStr(vd)} · выход ${ddmmStr(pd)}`, cls:"s-m", act:"wa", wa:"Здравствуйте! Напоминаю: ждём видео для MIXIT " + ddmmStr(vd)});
+  }
+  for(const k in S) S[k].sort((a,b)=> String(a.d.plannedDate).localeCompare(String(b.d.plannedDate)));
+  return S;
+}
+UI.deskSec = UI.deskSec || "";
+function deskNick(d){ const n = String(d.instagramAccount||"").replace(/\/+$/,"").split("/").pop(); return n ? "@"+n.replace("@","") : (d.blogerName||"—"); }
+function deskAction(x){
+  const d = x.d, wa = x.wa && waLink(d.phone, x.wa);
+  if(x.act==="wa") return wa ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(wa)}">Напомнить в WhatsApp</a>` : `<button class="btn btn-sm" onclick="openMicroById(${d.id})">Нет телефона — открыть</button>`;
+  if(x.act==="tz") return microTzCell(d).replace('class="micro-tz-select"','class="micro-tz-select pv-inp desk-tz"');
+  if(x.act==="pay") return `<button class="btn btn-sm btn-primary desk-pay" data-id="${d.id}">Подать на оплату · ${fmtNum(d.cost)} ₸</button>`;
+  if(x.act==="avr") return `${wa?`<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(wa)}">Запросить АВР и ЭСФ</a>`:""}<button class="btn btn-sm desk-avr" data-id="${d.id}">Получены</button>`;
+  if(x.act==="link") return `<input class="pv-inp desk-link" data-id="${d.id}" placeholder="Вставьте ссылку на Reels / TikTok" style="width:250px">`;
+  return "";
+}
 function tplDesk(){
   const name = UI.actorName || "—";
   const items = attentionItems();
-  const urgent = items.filter(x=> x.sev>=2).slice(0,3).concat(items.filter(x=>x.sev<2)).slice(0,3);
-  const groups = [["all","Все"],["video","Видео"],["links","Выход и ссылки"],["pay","Оплаты"]].map(([k,t])=>[k,t,k==="all"?items.length:items.filter(x=>deskGroupOf(x)===k).length]);
-  const shown = UI.deskGroup==="all" ? items : items.filter(x=> deskGroupOf(x)===UI.deskGroup);
-  const p = deskPlan(), gaps = deskGaps(), ret = deskReturnList().slice(0,5);
+  const urgent = items.filter(x=> x.sev>=2).concat(items.filter(x=>x.sev<2)).slice(0,3);
+  const S = deskSections();
+  const secs = [["video","Видео"],["tz","ТЗ"],["pay","Оплаты и документы"],["links","Ссылки"],["wait","Ждём"]];
+  if(!UI.deskSec || !S[UI.deskSec]) UI.deskSec = (secs.find(([k])=> S[k].length)||secs[0])[0];
+  const cur = S[UI.deskSec] || [];
+  const p = deskPlan(), gaps = deskGaps(), retAll = deskReturnList(), ret = retAll.slice(0,3), place = deskTeamPlace();
   const dateStr = new Date().toLocaleDateString("ru-RU",{weekday:"long", day:"numeric", month:"long"});
-  const col = s=> s>=3 ? "var(--bad)" : s===2 ? "var(--warn)" : "var(--action)";
-  const card = (title, body)=> `<div class="panel" style="margin:0">${title?`<div class="panel-title" style="margin:0 0 8px">${title}</div>`:""}${body}</div>`;
+  const monthName = new Date().toLocaleDateString("ru-RU",{month:"long"});
+  const col = s=> s>=3 ? "#E0405A" : s===2 ? "#E0405A" : "#D6337E";
+  const daysLeft = (()=>{ const t = new Date(todayStr()+"T12:00:00"); const e = new Date(t.getFullYear(), t.getMonth()+1, 0); return Math.round((e-t)/86400000); })();
+  const forecast = p.plan ? Math.min(p.plan, new Set((DataManager.state.microInfluencerDeals||[]).filter(d=> d.responsible===UI.actorName && String(d.plannedDate||"").startsWith(todayStr().slice(0,7)) && !/отмен/i.test(String(d.problemStatus||""))).map(d=> String(d.instagramAccount||d.blogerName||"").toLowerCase())).size) : 0;
   const pct = p.plan ? Math.min(100, Math.round(p.uniq/p.plan*100)) : 0;
+  const pctF = p.plan ? Math.min(100, Math.round(forecast/p.plan*100)) : 0;
   return `
-  <div class="toolbar" style="justify-content:space-between;align-items:flex-end">
-    <div><h2 style="margin:0">Рабочий стол</h2><div style="color:var(--ink-mute);font-size:12.5px">${escapeHtml(name)} · ${dateStr}${crmIsLeadName()?" · видны все менеджеры":""}</div></div>
-    <div style="display:flex;gap:8px"><button class="btn btn-ghost btn-sm" onclick="modalQuickSearch()">Найти · Ctrl+K</button><button class="btn btn-primary btn-sm" onclick="UI.tab='microInfluencers';render();modalMicroDeal(null,{responsible:UI.actorName||''})">+ Интеграция</button></div>
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+    <div><h1 style="margin:0;font-size:22px;font-weight:800">Рабочий стол</h1><div class="mut" style="margin-top:3px">${escapeHtml(name)} · ${dateStr}${crmIsLeadName()?" · видны все менеджеры":""}</div></div>
+    <div style="display:flex;gap:8px;align-items:center"><input class="pv-inp" placeholder="Найти блогера…   Ctrl+K" style="width:240px" onfocus="this.blur();modalQuickSearch()">
+      <button class="btn" onclick="UI.tab='microInfluencers';render();toast('Загрузка нескольких — кнопка «Импорт» над таблицей')">Добавить несколько</button>
+      <button class="btn btn-primary" onclick="UI.tab='microInfluencers';render();modalMicroDeal(null,{responsible:UI.actorName||''})">+ Интеграция</button></div>
   </div>
-  <div style="display:grid;grid-template-columns:minmax(0,1.65fr) minmax(300px,1fr);gap:14px;align-items:start">
-    <div style="display:flex;flex-direction:column;gap:14px">
-      ${urgent.length ? `<div><div style="font-size:12px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;margin-bottom:6px">Срочно сегодня <span style="font-weight:400;text-transform:none;color:var(--ink-mute)">· не больше трёх — самое горящее</span></div>
-        <div style="display:grid;grid-template-columns:repeat(${urgent.length},minmax(0,1fr));gap:10px">${urgent.map(x=>`<div class="panel" style="margin:0;border-top:3px solid ${col(x.sev)}">
-          <div style="font-size:11px;font-weight:800;color:${col(x.sev)};text-transform:uppercase;letter-spacing:.03em">${escapeHtml(x.what)}</div>
-          <div style="margin-top:6px;font-weight:700">${escapeHtml(x.d.blogerName||"—")}</div>
-          <div style="font-size:12.5px;color:var(--ink-soft);margin-top:2px">${escapeHtml(x.d.product||"")}${crmIsLeadName()&&x.d.responsible?` · ${escapeHtml(x.d.responsible)}`:""}</div>
-          <div style="font-size:12.5px;margin-top:8px">${escapeHtml(x.next)}</div>
-          <div style="display:flex;gap:6px;margin-top:10px">${x.wa && waLink(x.d.phone,x.wa)?`<a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="${escapeHtml(waLink(x.d.phone,x.wa))}">WhatsApp</a>`:""}<button class="btn btn-primary btn-sm" onclick="openMicroById(${x.d.id})">Открыть →</button></div></div>`).join("")}</div></div>` : ""}
-      ${card("", `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">${groups.map(([k,t,n])=>`<button class="btn btn-sm ${UI.deskGroup===k?"btn-primary":"btn-ghost"}" onclick="UI.deskGroup='${k}';renderDeskTab()">${t}${n?` · ${n}`:""}</button>`).join("")}</div>
-        ${shown.length ? shown.slice(0,60).map(x=>`<div style="display:grid;grid-template-columns:8px minmax(0,1.2fr) minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--line);font-size:13px">
-          <span style="width:8px;height:8px;border-radius:9px;background:${col(x.sev)}"></span>
-          <span><b>${escapeHtml(x.d.blogerName||"—")}</b> · ${escapeHtml(x.what)}${crmIsLeadName()&&x.d.responsible?` <span style="color:var(--ink-mute)">· ${escapeHtml(x.d.responsible)}</span>`:""}</span>
-          <span style="color:var(--ink-soft)">${escapeHtml(x.next)}</span>
-          <span style="display:flex;gap:6px;justify-content:flex-end">${x.wa && waLink(x.d.phone,x.wa)?`<a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="${escapeHtml(waLink(x.d.phone,x.wa))}">WhatsApp</a>`:""}<button class="btn btn-ghost btn-sm" onclick="openMicroById(${x.d.id})">Открыть</button></span></div>`).join("")
-          + (shown.length>60?`<div style="font-size:12px;color:var(--ink-mute);padding-top:6px">и ещё ${shown.length-60}</div>`:"")
-          : `<div style="font-size:13px;color:var(--ink-mute);padding:8px 0">Здесь ничего не горит 👌</div>`}`)}
+  <div style="display:grid;grid-template-columns:minmax(0,1fr) 316px;gap:16px;align-items:start">
+    <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+      ${urgent.length ? `<div><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px"><b style="font-size:15px">Срочно сегодня</b><span class="mut" style="font-size:12px">не больше трёх — самое горящее</span></div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">${urgent.map(x=>`<div style="background:#fff;border:1px solid #F3C7D7;border-radius:12px;padding:12px 14px">
+          <div style="font-size:11px;font-weight:800;color:${col(x.sev)};text-transform:uppercase;letter-spacing:.02em">${escapeHtml(x.what)}</div>
+          <div style="font-weight:800;margin-top:6px">${escapeHtml(deskNick(x.d))}${x.d.product?` · <span style="font-weight:700">${escapeHtml(x.d.product)}</span>`:""}</div>
+          <div class="mut" style="font-size:12px;margin-top:3px">${escapeHtml(x.next)}${crmIsLeadName()&&x.d.responsible?` · ${escapeHtml(x.d.responsible)}`:""}</div>
+          <a href="#" style="display:inline-block;margin-top:8px;font-weight:700;font-size:12.5px" onclick="openMicroById(${x.d.id});return false">Открыть →</a></div>`).join("")}</div></div>` : ""}
+      <div style="background:#fff;border:1px solid #F1E1E8;border-radius:14px;box-shadow:var(--shadow-sm);overflow:hidden">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;padding:12px 16px;background:#FFF9FB;border-bottom:1px solid #F3DDE7">${secs.map(([k,t])=>`<button class="pv-chip ${UI.deskSec===k?"on":""}" style="${UI.deskSec===k?"":"background:transparent;color:#6E6168"}" onclick="UI.deskSec='${k}';renderDeskTab()">${t}${S[k].length?` <span class="n" style="${UI.deskSec===k?"":"background:#F4EEF1;color:#6E6168"}">${S[k].length}</span>`:""}</button>`).join("")}</div>
+        ${cur.length ? cur.slice(0,80).map(x=>`<div style="display:grid;grid-template-columns:180px minmax(0,1fr) auto;gap:14px;align-items:center;padding:12px 18px;border-bottom:1px solid #F8E9EF">
+          <b style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><a href="#" style="color:#2B2228" onclick="openMicroById(${x.d.id});return false">${escapeHtml(deskNick(x.d))}</a></b>
+          <div style="min-width:0"><div class="mut" style="font-size:12px">${escapeHtml(x.d.product||"товар не выбран")}${x.d.plannedDate?` · выход ${ddmmStr(x.d.plannedDate)}`:""}${crmIsLeadName()&&x.d.responsible?` · ${escapeHtml(x.d.responsible)}`:""}</div><span class="pv-st ${x.cls}" style="margin-top:3px">${escapeHtml(x.tag)}</span></div>
+          <div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">${deskAction(x)}</div></div>`).join("")
+          + (cur.length>80?`<div class="mut" style="padding:10px 18px;font-size:12px">и ещё ${cur.length-80}</div>`:"")
+          : `<div class="mut" style="padding:18px">Здесь пусто — всё сделано 👌</div>`}
+        <div class="mut" style="padding:10px 18px;font-size:12px">Сделанное уходит из списка само.</div>
+      </div>
     </div>
     <div style="display:flex;flex-direction:column;gap:14px">
-      ${card(`Мой план · ${new Date().toLocaleDateString("ru-RU",{month:"long"})}`, p.plan ? `<div style="font-size:22px;font-weight:800">${p.uniq} <span style="font-size:13px;font-weight:600;color:var(--ink-mute)">из ${p.plan} блогеров вышло</span></div>
-        <div style="height:8px;background:var(--canvas);border-radius:9px;margin:8px 0;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--action)"></div></div>
-        <div style="font-size:12.5px;color:var(--ink-soft)">интеграций вышло ${p.done} из ${p.planned} запланированных · CPV ${p.cpv!=null?p.cpv.toFixed(2)+" ₸":"—"} · сегодня вышло ${p.todayOut}</div>`
-        : `<div style="font-size:12.5px;color:var(--ink-soft)">Личного плана нет. Вышло в этом месяце: ${p.done} из ${p.planned}${p.cpv!=null?` · CPV ${p.cpv.toFixed(2)} ₸`:""}</div>`)}
-      ${card("Мои оплаты · месяц", `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center">${[["вышло, не подано",p.pay.unpaid,"var(--warn)"],["к оплате",p.pay.toPay,"var(--action)"],["оплачено",p.pay.paid,"var(--ok)"]].map(([t,n,c])=>`<div><div style="font-size:20px;font-weight:800;color:${c}">${n}</div><div style="font-size:11.5px;color:var(--ink-mute)">${t}</div></div>`).join("")}</div>`)}
-      ${card(`Незаполненное${gaps.length?` · ${gaps.reduce((s,g)=>s+g[1].length,0)}`:""}`, gaps.length ? gaps.map((g,i)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:${i?"1px solid var(--line)":"0"};font-size:13px"><span>${g[0]}</span><button class="btn btn-ghost btn-sm" data-gap="${i}">${g[1].length} ›</button></div>`).join("") : `<div style="font-size:13px;color:var(--ink-mute)">Всё заполнено</div>`)}
-      ${card("Кого вернуть", ret.length ? `<div style="font-size:11.5px;color:var(--ink-mute);margin:-4px 0 6px">хороший CPV, давно не работали</div>`+ret.map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--line);font-size:13px"><span><b>${escapeHtml(r.d.blogerName||"—")}</b><div style="font-size:11.5px;color:var(--ink-mute)">CPV ${r.cpv.toFixed(2)} ₸ · ${r.n} инт. · последняя ${ddmmStr(r.last)}.${String(r.last).slice(2,4)}</div></span><button class="btn btn-ghost btn-sm" onclick="deskRepeat(${r.d.id})">Повторить</button></div>`).join("") : `<div style="font-size:13px;color:var(--ink-mute)">Пока некого</div>`)}
+      <div class="panel" style="margin:0"><div style="font-size:15px;font-weight:800">Мой план · ${monthName}</div>
+        ${p.plan ? `<div style="margin-top:8px"><b style="font-size:26px;font-weight:800">${p.uniq}</b> <span class="mut">из ${p.plan} вышло · осталось ${Math.max(0,p.plan-p.uniq)}</span></div>
+        <div style="position:relative;height:8px;background:#F8E9EF;border-radius:9px;margin:8px 0;overflow:hidden"><div style="position:absolute;inset:0 auto 0 0;width:${pctF}%;background:#F3C7D7"></div><div style="position:absolute;inset:0 auto 0 0;width:${pct}%;background:#D6337E"></div></div>
+        <div style="display:flex;justify-content:space-between;font-size:12px" class="mut"><span>CPV <b style="color:#D6337E">${p.cpv!=null?p.cpv.toFixed(2)+" ₸":"—"}</b></span><span>интеграций ${p.done}/${p.planned}</span></div>
+        ${forecast < p.plan ? `<div style="background:#FFF6E3;border-radius:10px;padding:9px 12px;font-size:12px;margin-top:10px;line-height:1.5"><b>Прогноз: ${forecast} из ${p.plan}.</b> Чтобы успеть, поставьте ещё ${p.plan-forecast} до конца месяца (осталось ${daysLeft} дн.) — <a href="#" onclick="UI.tab='microCalendar';render();return false">свободные дни в планере ›</a></div>` : `<div style="background:#E2F6EC;border-radius:10px;padding:9px 12px;font-size:12px;margin-top:10px;color:#1E8C5C"><b>Прогноз: план закрывается</b> — запланировано ${forecast} из ${p.plan}</div>`}` : `<div class="mut" style="margin-top:6px;font-size:12.5px">Личного плана нет · вышло ${p.done} из ${p.planned}</div>`}
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;text-align:center;margin-top:12px;padding-top:12px;border-top:1px solid #F3DDE7">
+          <div><b style="font-size:17px">${p.todayOut}</b><div class="mut" style="font-size:11px">вышло сегодня</div></div>
+          <div><b style="font-size:17px">${S.wait.length}</b><div class="mut" style="font-size:11px">видео за неделю</div></div>
+          <div><b style="font-size:17px">${place?place+"-е":"—"}</b><div class="mut" style="font-size:11px">место в команде</div></div></div>
+      </div>
+      <div class="panel" style="margin:0"><div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:15px">Кого вернуть</b>${retAll.length>3?`<a href="#" id="desk-ret-all" style="font-size:12px;font-weight:700">все ${retAll.length} ›</a>`:""}</div>
+        <div class="mut" style="font-size:12px;margin:2px 0 6px">хороший CPV, давно не работали</div>
+        ${ret.length ? ret.map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid #F8E9EF"><div style="min-width:0"><b>${escapeHtml(deskNick(r.d))}</b><div class="mut" style="font-size:11.5px">CPV ${r.cpv.toFixed(2)} ₸ · ${r.n} инт. · последняя ${ddmmStr(r.last)}</div></div><button class="btn btn-sm" onclick="deskRepeat(${r.d.id})">Повторить</button></div>`).join("") : `<div class="mut" style="font-size:12.5px">Пока некого</div>`}
+      </div>
+      <div class="panel" style="margin:0"><div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:15px">Мои оплаты</b><span class="mut" style="font-size:12px">${monthName}</span></div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px">${[["не подано",p.pay.unpaid,"#FFF1D6","#9A6400"],["к оплате",p.pay.toPay,"#FCE4EF","#C2306F"],["оплачено",p.pay.paid,"#E2F6EC","#1E8C5C"]].map(([t,n,bg,c])=>`<div style="background:${bg};border-radius:10px;padding:8px 10px"><b style="font-size:18px;color:${c}">${n}</b><div style="font-size:11px;font-weight:700;color:${c}">${t}</div></div>`).join("")}</div>
+      </div>
+      <div class="panel" style="margin:0"><div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:15px">Требует внимания</b><b style="color:#D6337E">${gaps.reduce((s,g)=>s+g[1].length,0)||""}</b></div>
+        <div class="mut" style="font-size:12px;margin:2px 0 6px">незаполненное во всех ваших интеграциях</div>
+        ${gaps.length ? gaps.map((g,i)=>`<a href="#" data-gap="${i}" style="display:flex;justify-content:space-between;padding:7px 0;border-top:1px solid #F8E9EF;color:#2B2228;font-size:12.5px"><span>${g[0]}</span><b style="color:#D6337E">${g[1].length} ›</b></a>`).join("") : `<div class="mut" style="font-size:12.5px">Всё заполнено</div>`}
+      </div>
     </div>
   </div>`;
 }
 function wireDesk(){
   const gaps = deskGaps();
-  document.querySelectorAll("[data-gap]").forEach(b=> b.onclick = ()=>{ const g = gaps[+b.dataset.gap]; if(g) modalDeskList(g[0], g[1]); });
+  document.querySelectorAll("[data-gap]").forEach(b=> b.onclick = (e)=>{ e.preventDefault(); const g = gaps[+b.dataset.gap]; if(g) modalDeskList(g[0], g[1]); });
+  const ra = document.getElementById("desk-ret-all"); if(ra) ra.onclick = (e)=>{ e.preventDefault(); const all = deskReturnList(); openModal(`<h3>Кого вернуть · ${all.length}</h3><div style="max-height:62vh;overflow:auto">${all.map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #F8E9EF"><div><b>${escapeHtml(deskNick(r.d))}</b> <span class="mut" style="font-size:12px">CPV ${r.cpv.toFixed(2)} ₸ · ${r.n} инт. · последняя ${ddmmStr(r.last)} · ${escapeHtml(r.d.responsible||"")}</span></div><button class="btn btn-sm" onclick="closeModal();deskRepeat(${r.d.id})">Повторить</button></div>`).join("")}</div><div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Закрыть</button></div>`); };
+  const done = async (id, ch, msg)=>{ try{ await Api.updateMicroDeal(id, ch); const d = (DataManager.state.microInfluencerDeals||[]).find(x=>x.id===id); if(d) Object.assign(d, ch); renderDeskTab(); undoBar(msg, async ()=>{ const back = {}; Object.keys(ch).forEach(k=> back[k] = (k==="paymentStatus") ? "не оплачено" : k==="avrReceived" ? false : k==="videoStatus" ? "не опубликовано" : (d && k in d ? "" : "")); await Api.updateMicroDeal(id, back); if(d) Object.assign(d, back); renderDeskTab(); }); }catch(e){ toast(e.message,true); } };
+  document.querySelectorAll(".desk-pay").forEach(b=> b.onclick = ()=> done(+b.dataset.id, {paymentStatus:"к оплате"}, "Подано на оплату"));
+  document.querySelectorAll(".desk-avr").forEach(b=> b.onclick = ()=> done(+b.dataset.id, {avrReceived:true}, "АВР и ЭСФ получены"));
+  document.querySelectorAll(".desk-link").forEach(inp=> inp.onkeydown = (e)=>{ if(e.key!=="Enter") return; const v = inp.value.trim(); if(!/^https?:\/\//.test(v)){ toast("Вставьте ссылку целиком", true); return; }
+    const ch = /tiktok/i.test(v) ? {tiktokVideoLink:v, videoStatus:"опубликовано"} : {reelsLink:v, videoStatus:"опубликовано"}; const id = +inp.dataset.id; const d = (DataManager.state.microInfluencerDeals||[]).find(x=>x.id===id); if(d && !d.publishDate) ch.publishDate = todayStr() < String(d.plannedDate||"") ? todayStr() : (d.plannedDate||todayStr()); done(id, ch, "Ссылка сохранена"); });
+  document.querySelectorAll(".desk-tz").forEach(sel=> sel.onchange = ()=>{ const [g,it] = sel.value.split("\u0001"); if(!it) return; done(+sel.dataset.id, {tz:it, tzGroup:g}, "ТЗ выбрано: " + it); });
 }
 
 /* =========================================================================
@@ -9124,6 +9273,7 @@ function wireDeskTab(){
   if(UI.tab==="crmPayments"){ wireCrmPayments(); return; }
   if(UI.tab==="crmProducts"){ wireCrmProducts(); return; }
   if(UI.tab==="desk"){ wireDesk(); return; }
+  if(UI.tab==="tzBase"){ wireMicroTz(); return; }
   if(UI.tab==="dashboard" && UI.role==="marketer"){
     wireSimpleStats();
     { const oa = document.getElementById("vt-open-adv"); if(oa) oa.onclick = ()=>{ UI.vtAdv = true; renderDeskTab(); }; }
@@ -10391,6 +10541,7 @@ function startPolling(){
       await DataManager.refresh();
       setConnStatus(true);
       if(UI.tab==="crmBloggers" || UI.tab==="crmPayments" || UI.tab==="crmProducts") return; // свои данные, не сбиваем поиск
+      { const ae = document.activeElement; if(ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName) && ae.closest("#main")) return; }
       if(UI.role) render();
     }catch(e){
       setConnStatus(false);
