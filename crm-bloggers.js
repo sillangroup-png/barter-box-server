@@ -454,7 +454,7 @@ function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
   });
 
   // ---------- Товары: один справочник (crm.items, collection='products'); меняют Нина и Сая ----------
-  const prodView = r => { const d = r.data || {}; return { id: r.id, name: d.name || '', article: d.article || d.barcode || '', category: d.category || '', cost: num(d.cost),
+  const prodView = r => { const d = r.data || {}; return { id: r.id, name: d.name || '', article: d.article || d.barcode || (String(r.id).startsWith('sku:') ? String(r.id).slice(4) : ''), category: d.category || '', cost: num(d.cost),
     tz: d.tz || (Array.isArray(d.tz_list) ? d.tz_list.join('\n') : (d.tz_list || '')), notes: d.notes || '', updatedAt: d.updated_at || null }; };
   app.get('/api/crm/products', requireAuth, async (req, res) => {
     if (!canStaff(req) || !need(res)) return;
@@ -469,12 +469,14 @@ function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
       await pool.query("insert into crm.items(collection,id,data) values ('products',$1,$2)", [id, d]); res.json({ ok: true, id }); }
     catch (e) { res.status(500).json({ error: e.message }); }
   });
+  // Правка или создание по коду (id «sku:КОД»). Товары, пришедшие из старой CRM, до переезда не трогаем — CRM перезапишет.
   app.put('/api/crm/products/:id', requireAuth, async (req, res) => {
     if (!need(res)) return; if (!canExportReq(req)) return res.status(403).json({ error: 'Товары меняют Нина и Сая' });
-    if (!(await requireCutover(res))) return; // до переезда старая CRM перезаписала бы правку
-    try { const r = await pool.query("select data from crm.items where collection='products' and id=$1", [req.params.id]); if (!r.rows[0]) return res.status(404).json({ error: 'Нет такого товара' });
-      const d = prodBody(req.body, r.rows[0].data); d.updated_by = req.session.name;
-      await pool.query("update crm.items set data=$2, updated_at=now() where collection='products' and id=$1", [req.params.id, d]); res.json({ ok: true }); }
+    try { const r = await pool.query("select data from crm.items where collection='products' and id=$1", [req.params.id]);
+      const fromCrm = r.rows[0] && !r.rows[0].data.created_by && !String(req.params.id).startsWith('sku:');
+      if (fromCrm && !(await requireCutover(res))) return;
+      const d = prodBody(req.body, r.rows[0] ? r.rows[0].data : { id: req.params.id, created_at: new Date().toISOString(), created_by: req.session.name }); d.updated_by = req.session.name;
+      await pool.query("insert into crm.items(collection,id,data) values ('products',$1,$2) on conflict (collection,id) do update set data=excluded.data, deleted=false, updated_at=now()", [req.params.id, d]); res.json({ ok: true }); }
     catch (e) { res.status(500).json({ error: e.message }); }
   });
   app.delete('/api/crm/products/:id', requireAuth, async (req, res) => {
