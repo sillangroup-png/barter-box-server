@@ -1599,7 +1599,8 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
     tiktokVideoLink: b.tiktokVideoLink || "", factReachTT: b.factReachTT || 0,
     contentFormat: b.contentFormat || "", factReachStories: b.factReachStories || 0, storiesClicks: b.storiesClicks || 0,
     storiesLink: normalizeLinkUrl(b.storiesLink || ""),
-    coopType: b.coopType || "",
+    coopType: b.coopType || "", tz: b.tz || "", tzGroup: b.tzGroup || "",
+    storiesCount: +b.storiesCount || 0, productDelivery: b.productDelivery || "", kaspiPrice: +b.kaspiPrice || 0, payTerms: b.payTerms || "",
     agreedDate: b.agreedDate || "", plannedDate: b.plannedDate || "", publishDate: b.publishDate || "", notes: b.notes || "",
   };
   deal.flowBriefAutoSend=b.flowBriefAutoSend===true;if(deal.flowBriefAutoSend)deal.flowBriefAutoSendPhone=String(deal.phone||'').replace(/\D/g,'').replace(/^8(?=\d{10}$)/,'7');
