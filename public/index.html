@@ -509,7 +509,8 @@ const Api = {
   patchLatestMeasurement: (pubId, changes)=> apiFetch("/api/publications/"+pubId+"/measurements/latest", {method:"PATCH", headers:jsonHeaders, body:JSON.stringify(changes)}),
   importPublications: (rows)=> apiFetch("/api/publications/import", {method:"POST", headers:jsonHeaders, body:JSON.stringify({rows})}),
 
-  login: (role, login, password)=> apiFetch("/api/auth/login", {method:"POST", headers:jsonHeaders, body:JSON.stringify({role, login, password})}),
+  login: (role, login, password, actor)=> apiFetch("/api/auth/login", {method:"POST", headers:jsonHeaders, body:JSON.stringify({role, login, password, actor})}),
+  me: ()=> apiFetch("/api/auth/me"),
   driverLogin: (phone)=> apiFetch("/api/auth/driver-login", {method:"POST", headers:jsonHeaders, body:JSON.stringify({phone})}),
   logout: ()=> apiFetch("/api/auth/logout", {method:"POST"}),
 
@@ -1019,7 +1020,11 @@ function wireInlineEdit(container, onSave){
     };
   });
 }
+// Выгрузки (CSV/Excel) — только у Нины и Саи (флаг приходит с сервера из подписанной сессии).
+// Пустые шаблоны для импорта качать может любой.
+function exportAllowed(filename){ return !!UI.canExport || /template/i.test(String(filename||"")); }
 function downloadFile(filename, content, mime){
+  if(!exportAllowed(filename)){ toast("Выгрузка доступна только Нине и Сае", true); return; }
   const blob = new Blob([content], {type: mime||"text/plain;charset=utf-8"});
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -3448,6 +3453,7 @@ function loadSession(){
       const s = JSON.parse(raw);
       UI.role = s.role || null; UI.driverCode = s.driverCode || null; UI.authToken = s.authToken || null;
       UI.readOnly = !!s.readOnly;
+      UI.canExport = !!s.canExport;
     }
   }catch(e){}
 }
@@ -3456,7 +3462,7 @@ const ACTOR_KEY = "barterBoxApp_actor";
 function loadActor(){ try{ UI.actorName = localStorage.getItem(ACTOR_KEY) || ""; }catch(e){ UI.actorName = UI.actorName || ""; } }
 function saveActor(name){ UI.actorName = String(name||"").trim().slice(0,60); try{ localStorage.setItem(ACTOR_KEY, UI.actorName); }catch(e){} }
 function saveSession(){
-  try{ localStorage.setItem(SESSION_KEY, JSON.stringify({role:UI.role, driverCode:UI.driverCode, authToken:UI.authToken, readOnly:UI.readOnly})); }catch(e){}
+  try{ localStorage.setItem(SESSION_KEY, JSON.stringify({role:UI.role, driverCode:UI.driverCode, authToken:UI.authToken, readOnly:UI.readOnly, canExport:!!UI.canExport})); }catch(e){}
 }
 function logout(){
   // сообщаем серверу, что токен больше не нужен (сессия реально живёт на сервере,
@@ -3502,6 +3508,7 @@ function renderLogin(){
     document.querySelectorAll(".role-btn").forEach(b=>b.classList.remove("selected"));
     document.getElementById(id).classList.add("selected");
   }
+const STAFF_GROUPS = [["Менеджеры",["Камила","Зарина","Марина","Сабрина","Надира","Мадина","Оксана","Анастасия","Ажар"]],["Тимлид",["Анеля"]],["Руководство",["Сауле","Мария"]],["Крупные",["Ольга"]],["Свой логин",["Нина","Сая"]]];
   function renderStaffLoginForm(role){
     selectRoleBtn(role==="manager" ? "pick-manager" : "pick-marketer");
     const body = document.getElementById("login-body");
@@ -3515,9 +3522,9 @@ function renderLogin(){
         <input type="password" id="staff-password-input" autocomplete="current-password">
       </div>
       <div class="field" style="text-align:left">
-        <label>Ваше имя <span style="font-weight:400;color:var(--ink-mute)">(для истории изменений)</span></label>
-        <input type="text" id="staff-actor-input" list="staff-actor-list" placeholder="например: Сая" value="${escapeHtml(UI.actorName||"")}">
-        <datalist id="staff-actor-list">${Object.keys(MICRO_PLAN_BY_MANAGER).filter(n=>!/^Менеджер/.test(n)).map(n=>`<option value="${escapeHtml(n)}">`).join("")}</datalist>
+        <label>Ваше имя</label>
+        <select id="staff-actor-input"><option value="">— выберите —</option>${STAFF_GROUPS.map(([g,names])=>`<optgroup label="${g}">${names.map(n=>`<option value="${escapeHtml(n)}"${n===UI.actorName?" selected":""}>${escapeHtml(n)}${g==="Свой логин"?" — по своему логину":""}</option>`).join("")}</optgroup>`).join("")}</select>
+        <div class="login-hint" style="text-align:left;margin-top:4px">Нина и Сая входят по своему логину и паролю — имя выберется само.</div>
       </div>
       <button class="btn btn-primary" id="staff-login-btn" style="width:100%;justify-content:center">Войти</button>
     `;
@@ -3526,12 +3533,12 @@ function renderLogin(){
       const password = document.getElementById("staff-password-input").value;
       if(!login || !password){ toast("Введите логин и пароль", true); return; }
       const actor = document.getElementById("staff-actor-input").value.trim();
-      if(!actor){ toast("Впишите ваше имя — оно нужно для истории изменений", true); return; }
-      saveActor(actor);
       const btn = document.getElementById("staff-login-btn");
       try{
-        const data = await withBusy(btn, ()=> Api.login(role, login, password));
-        UI.role = role; UI.authToken = data.token; UI.readOnly = !!data.readOnly; saveSession(); UI.tab = "dashboard";
+        const data = await withBusy(btn, ()=> Api.login(role, login, password, actor));
+        if(!data.name && !actor){ toast("Выберите ваше имя", true); return; }
+        saveActor(data.name || actor);
+        UI.role = role; UI.authToken = data.token; UI.readOnly = !!data.readOnly; UI.canExport = !!data.canExport; saveSession(); UI.tab = "dashboard";
         await DataManager.load(); // токена не было до этого момента — предыдущая попытка загрузки данных 401'ится
         render();
         await maybeOpenFlowCrmProfile();
@@ -3624,7 +3631,7 @@ function renderDeskShell(){
       <span class="conn-dot" id="conn-dot" title="Связь с сервером"></span>
       <div class="role-pill">${roleLabel()}</div>
       ${(()=>{ if(!(UI.role==="manager" || UI.role==="marketer") || !UI.actorName) return ""; const n = myRemindersSummary(); return `<button class="btn btn-ghost btn-sm" id="reminders-btn" title="Мои напоминания: просрочено, сегодня, скоро, нет номера WhatsApp">🔔${n.urgent ? ` <b style="background:var(--bad,#d33);color:#fff;border-radius:9px;padding:0 6px;font-size:11px">${n.urgent}</b>` : (n.total ? ` <span style="color:var(--ink-mute)">${n.total}</span>` : "")}</button>`; })()}
-      <button class="btn btn-ghost btn-sm" id="actor-btn" title="Ваше имя для истории изменений — нажмите, чтобы сменить">👤 ${escapeHtml(UI.actorName || "кто вы?")}</button>
+      <button class="btn btn-ghost btn-sm" id="actor-btn" title="Вы вошли под этим именем">👤 ${escapeHtml(UI.actorName || "кто вы?")}</button>
       ${UI.role==="manager" || UI.role==="marketer" ? `<button class="btn btn-ghost btn-sm" id="audit-btn" title="Кто, что и когда менял; удалённое и затёртое можно вернуть">🕘 Журнал</button>` : ""}
       <button class="btn btn-ghost" id="logout-btn">Выйти</button>
     </div>
@@ -3642,7 +3649,7 @@ function renderDeskShell(){
   setConnStatus(isOnline);
   document.getElementById("logout-btn").onclick = logout;
   const actorBtn = document.getElementById("actor-btn");
-  if(actorBtn) actorBtn.onclick = modalActorName;
+  if(actorBtn) actorBtn.onclick = ()=> (UI.actorName ? toast("Имя закреплено за входом. Чтобы сменить — «Выйти» и войти под своим именем") : modalActorName());
   const remBtn = document.getElementById("reminders-btn");
   if(remBtn) remBtn.onclick = ()=> modalMyReminders();
   const auditBtn = document.getElementById("audit-btn");
@@ -4158,6 +4165,7 @@ function tplVitrina(){
   </div>`;
 }
 function vtExport(){
+  if(!exportAllowed("")){ toast("Выгрузка доступна только Нине и Сае", true); return; }
   const t = document.querySelector("#vt-panel .vt-table"); if(!t) return;
   const rows = [...t.querySelectorAll("tr")].map(tr=> [...tr.children].map(c=>{ const txt = c.innerText.replace(/^[+−]\s*/, "").replace(/\s+/g, " ").trim().replace(/"/g, '""'); const span = Number(c.getAttribute("colspan")||1); return ['"'+txt+'"'].concat(Array(span-1).fill('""')).join(";"); }).join(";"));
   const blob = new Blob([String.fromCharCode(0xFEFF) + rows.join("\r\n")], {type:"text/csv;charset=utf-8"}), a = document.createElement("a");
@@ -13707,6 +13715,9 @@ async function maybeOpenFlowCrmProfile(){const id=new URL(location.href).searchP
    ========================================================================= */
 document.addEventListener("DOMContentLoaded", async ()=>{
   loadSession();
+  if(UI.authToken && UI.role && UI.role!=="driver"){
+    try{ const me = await Api.me(); UI.canExport = !!me.canExport; if(me.name) saveActor(me.name); saveSession(); }catch(e){}
+  }
   try{
     await DataManager.load();
     setConnStatus(true);
