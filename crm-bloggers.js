@@ -10,9 +10,9 @@
    сам дублирует изменения в базу Константина (crm_blogers.*) и в резервную копию (public.*). */
 const { Pool } = require('pg');
 
-const USER_NAMES = { kamila: 'Камила', madina: 'Мадина', zarina: 'Зарина', zarina1234: 'Зарина', marina: 'Марина', saya: 'Сая',
+const USER_NAMES = { kamila: 'Камила', madina: 'Мадина', zarina: 'Зарина', zarina1234: 'Нина', marina: 'Марина', saya: 'Сая',
   altynay: 'Алтынай', anastasiia: 'Анастасия', sabrina: 'Сабрина', nadira: 'Надира', aneljan1: 'Анеля', elmira1: 'Эльмира',
-  ajar: 'Ажар', oxana: 'Оксана', sabina: 'Сабина', admin: 'Нина', marketing: 'Маркетинг', grok_bot: 'бот' };
+  ajar: 'Ажар', oxana: 'Оксана', sabina: 'Сабина', admin: 'Нина', marketing: 'Нина', grok_bot: 'бот' };
 const managerName = m => !m ? null : (m.startsWith('bb:') ? m.slice(3) : (USER_NAMES[m] || m));
 
 // Статусы блогера (понятные слова, см. прототип «Статусы и даты»)
@@ -288,7 +288,7 @@ function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
     const r = await client.query("select id from crm.items where collection='users' and data->>'username'=$1", [username]);
     return r.rows[0] ? r.rows[0].id : null;
   }
-  function managerKey(name) { const u = Object.keys(USER_NAMES).find(k => USER_NAMES[k] === name && k !== 'zarina1234'); return u || (name ? 'bb:' + name : null); }
+  function managerKey(name) { const u = name === 'Нина' ? 'admin' : Object.keys(USER_NAMES).find(k => USER_NAMES[k] === name); return u || (name ? 'bb:' + name : null); }
   const searchOf = b => [b.name, b.instagram_url, b.tiktok_url, b.last_comment, b.blogger_whatsapp].filter(Boolean).join(' ').toLowerCase();
 
   // ---------- Правка ----------

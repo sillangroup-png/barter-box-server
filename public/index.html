@@ -8438,15 +8438,15 @@ async function crmLoad(){
 function crmRepaint(){ if(UI.tab==="crmBloggers" || UI.tab==="crmPayments") renderDeskTab(); }
 
 const CRM_COLS = [
-  ["status","Статус"],["comment","Комментарий"],["manager","Менеджер"],["links","Ссылки"],
+  ["status","Статус"],["comment","Комментарий"],["manager","Менеджер"],["links","Ссылки"],["category","Категория"],
   ["followers","Подп. Инст"],["reach","Охват Инст"],["followersTT","Подп. ТТ"],["reachTT","Охват ТТ"],
   ["priceReels","Рилс"],["cpvReels","CPV рилс"],["priceTiktok","ТТ"],["cpvTiktok","CPV ТТ"],["priceBoth","Рилс+ТТ"],["cpvBoth","CPV Р+ТТ"],
   ["storiesReach","Охват сторис"],["priceStories","Сторис ₸"],["cpvStories","CPV сторис"],["created","Добавлен"],["updated","Обновлён"]];
 const CRM_SORTABLE = new Set(["followers","reach","followersTT","reachTT","priceReels","cpvReels","priceTiktok","cpvTiktok","priceBoth","cpvBoth","storiesReach","priceStories","cpvStories","created"]);
 function crmColsOn(){ try{ const v = JSON.parse(localStorage.getItem("bb_crm_cols")||"null"); if(Array.isArray(v)) return new Set(v); }catch(e){} return new Set(CRM_COLS.map(c=>c[0]).filter(k=>k!=="updated")); }
-CRM.cols = crmColsOn(); CRM.sel = new Set(); CRM.showFilters = false; CRM.batches = null;
-Object.assign(CRM.f, {sort:"default", col:"", dir:"desc", platform:"", cpv_min:"", cpv_max:"", reach_min:"", followers_min:"", followers_max:"", category:"", exclude_category:"", reels_min:"", reels_max:"", tt_min:"", tt_max:"", no_price:false, no_manager:false, in_work:false, exclude_in_work:false, exclude_transferred:false, batch_id:""});
-const CRM_FILTER_KEYS = ["platform","cpv_min","cpv_max","reach_min","followers_min","followers_max","category","exclude_category","reels_min","reels_max","tt_min","tt_max","no_price","no_manager","in_work","exclude_in_work","exclude_transferred","batch_id"];
+CRM.cols = crmColsOn(); CRM.sel = new Set(); CRM.showFilters = true; CRM.batches = null;
+Object.assign(CRM.f, {sort:"default", col:"", dir:"desc", platform:"", cpv_min:"", cpv_max:"", reach_min:"", followers_min:"", followers_max:"", category:"", exclude_category:"", reels_min:"", reels_max:"", tt_min:"", tt_max:"", no_price:false, no_manager:false, in_work:false, exclude_in_work:false, exclude_transferred:false, exclude_declined:false, batch_id:""});
+const CRM_FILTER_KEYS = ["platform","cpv_min","cpv_max","reach_min","followers_min","followers_max","category","exclude_category","reels_min","reels_max","tt_min","tt_max","no_price","no_manager","in_work","exclude_in_work","exclude_transferred","exclude_declined","batch_id"];
 crmParams = function(){ const f=CRM.f; const p={page:f.page, limit:50, sort:f.sort}; if(f.col){ p.col=f.col; p.dir=f.dir; } if(f.q) p.q=f.q; if(f.status) p.status=f.status; if(f.who==="mine") p.mine="1"; else if(f.who && f.who!=="all") p.manager=f.who; if(f.worked) p.worked=f.worked;
   for(const k of CRM_FILTER_KEYS){ const v=f[k]; if(v===true) p[k]="1"; else if(v) p[k]=v; } return p; };
 function crmIsLead(){ return !!UI.canExport; }
@@ -8459,6 +8459,7 @@ function crmCell(k, b){
     case "comment": return `<span title="${escapeHtml(b.lastComment||"")}">${escapeHtml((b.lastComment||"").slice(0,60)) || `<span style="color:var(--ink-mute)">—</span>`}</span>`;
     case "manager": return b.manager ? `<span class="badge badge-closed">${escapeHtml(b.manager)}</span>` : "—";
     case "links": return [b.instagram?`<a href="${escapeHtml(b.instagram)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Instagram">IG</a>`:"", b.tiktok?`<a href="${escapeHtml(b.tiktok)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="TikTok">TT</a>`:""].filter(Boolean).join(" · ") || "—";
+    case "category": return b.category ? escapeHtml({blogger:"Блогер",visazhist:"Визажист",expert:"Эксперт"}[b.category]||b.category) : `<span style="color:var(--ink-mute)">—</span>`;
     case "followers": return crmNum(b.followers); case "reach": return crmNum(b.reach);
     case "followersTT": return crmNum(b.followersTT); case "reachTT": return crmNum(b.reachTT);
     case "priceReels": return crmMoney(b.price.reels); case "cpvReels": return crmCpv(b.cpv.reels);
@@ -8536,7 +8537,7 @@ function tplCrmBloggers(){
       ${lbl("TikTok от (₸)", inp("tt_min","напр. 30000"))}${lbl("TikTok до (₸)", inp("tt_max","напр. 200000"))}
     </div>
     <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
-      ${chk("no_price","Без цены")}${chk("no_manager","Без менеджера")}${chk("in_work","Только в работе")}${chk("exclude_in_work","Исключить в работе")}${chk("exclude_transferred","Исключить «Передано в работу»")}
+      ${chk("no_price","Без цены")}${chk("no_manager","Без менеджера")}${chk("in_work","Только в работе")}${chk("exclude_in_work","Исключить в работе")}${chk("exclude_transferred","Исключить «Передано в работу»")}${chk("exclude_declined","Исключить отказы")}
       <button class="btn btn-ghost btn-sm" id="crm-freset">Сбросить</button>
     </div>
   </div>` : ""}
@@ -8557,7 +8558,7 @@ function tplCrmBloggers(){
         <td><input type="checkbox" class="crm-sel" data-id="${escapeHtml(b.id)}" ${sel.has(b.id)?"checked":""}></td>
         <td class="sticky-col" style="background:#fff"><b>${escapeHtml(b.name || "—")}</b><div style="font-size:11.5px;color:var(--ink-mute)">${b.nick ? "@"+escapeHtml(b.nick) : ""}${b.exclusive ? " · эксклюзив" : ""}</div></td>
         ${cols.map(([k])=>`<td${k==="comment"?' class="wrap" style="max-width:220px"':""}>${crmCell(k,b)}</td>`).join("")}
-        <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm crm-deal" data-id="${escapeHtml(b.id)}" title="Завести интеграцию">В Barter Box</button>${crmIsLead() && edit ? ` <button class="btn btn-ghost btn-sm crm-del" data-id="${escapeHtml(b.id)}" title="Удалить" style="color:var(--bad)">✕</button>` : ""}</td>
+        <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm crm-deal" data-id="${escapeHtml(b.id)}" title="Завести интеграцию">+ Интеграция</button>${crmIsLead() && edit ? ` <button class="btn btn-ghost btn-sm crm-del" data-id="${escapeHtml(b.id)}" title="Удалить" style="color:var(--bad)">✕</button>` : ""}</td>
       </tr>`).join("") : `<tr><td colspan="${cols.length+3}" class="empty">${CRM.loading ? "Загружаю…" : (f.who==="mine" ? "У вас пока нет блогеров с такими условиями — попробуйте «Все менеджеры»" : "Ничего не нашлось")}</td></tr>`}</tbody>
     </table>
   </div>
