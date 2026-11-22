@@ -539,8 +539,9 @@ function nextMeasurementId(){
    Данные вводятся вручную в текстовые поля и могут быть "грязными" (не дата, не число) —
    всё проходит через safeDate/safeInt, и каждая строка апсертится ОТДЕЛЬНО: если что-то
    в одной строке всё же невалидно, в базу не попадёт только она, а не всё сразу. */
+if (!process.env.SUPABASE_PLACEMENTS_URL) console.warn("[WARN] SUPABASE_PLACEMENTS_URL не задан — синк с Supabase и вклад в продажи не работают");
 const pgPool = new Pool({
-  connectionString: "postgresql://crm_nina.zwaynpogmedeqcyzriwi:TMxdRmisrSq6vs2tgmA82GDq@aws-0-eu-central-1.pooler.supabase.com:5432/postgres",
+  connectionString: process.env.SUPABASE_PLACEMENTS_URL, // строка подключения — только в переменных Render, не в коде
   ssl: { rejectUnauthorized: false },
   max: 3, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000,
 });
@@ -2084,6 +2085,10 @@ async function placementsTick(label){
 }
 placementsTick("старт");
 setInterval(()=> placementsTick("интервал"), 3*60*1000);
+
+// Зеркало всех данных Barter Box в базу (схема bb) — см. bb-db-mirror.js
+const { startBbDbMirror } = require("./bb-db-mirror.js");
+startBbDbMirror(()=>state, almatyDateStr);
 
 const PORT = process.env.PORT || 3001;
 applyMicroProblemSeed(); // разовая разметка проблемных блогеров (см. выше), до старта сервера
