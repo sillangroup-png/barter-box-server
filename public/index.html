@@ -3695,7 +3695,7 @@ function renderDeskShell(){
       <div class="top-spacer"></div>
       <span class="conn-dot" id="conn-dot" title="Связь с сервером"></span>
       <div class="role-pill">${roleLabel()}</div>
-      ${(()=>{ if(!(UI.role==="manager" || UI.role==="marketer") || !UI.actorName) return ""; const n = myRemindersSummary(); return `<button class="btn btn-ghost btn-sm" id="reminders-btn" title="Мои напоминания: просрочено, сегодня, скоро, нет номера WhatsApp">🔔${n.urgent ? ` <b style="background:var(--bad,#d33);color:#fff;border-radius:9px;padding:0 6px;font-size:11px">${n.urgent}</b>` : (n.total ? ` <span style="color:var(--ink-mute)">${n.total}</span>` : "")}</button>`; })()}
+      ${(()=>{ if(true) return ""; /* колокольчик убран 23.11.2026: всё нужное — на Рабочем столе и в карточке */ if(!(UI.role==="manager" || UI.role==="marketer") || !UI.actorName) return ""; const n = myRemindersSummary(); return `<button class="btn btn-ghost btn-sm" id="reminders-btn" title="Мои напоминания: просрочено, сегодня, скоро, нет номера WhatsApp">🔔${n.urgent ? ` <b style="background:var(--bad,#d33);color:#fff;border-radius:9px;padding:0 6px;font-size:11px">${n.urgent}</b>` : (n.total ? ` <span style="color:var(--ink-mute)">${n.total}</span>` : "")}</button>`; })()}
       <button class="btn btn-ghost btn-sm" id="actor-btn" title="Вы вошли под этим именем">👤 ${escapeHtml(UI.actorName || "кто вы?")}</button>
       ${UI.role==="manager" || UI.role==="marketer" ? `<button class="btn btn-ghost btn-sm" id="audit-btn" title="Кто, что и когда менял; удалённое и затёртое можно вернуть">🕘 Журнал</button>` : ""}
       <button class="btn btn-ghost" id="logout-btn">Выйти</button>
@@ -9099,8 +9099,23 @@ function tplAttention(){
   </div>`;
 }
 // ===== Карточка интеграции (прототип X3, 23.11.2026) — открывается с Рабочего стола и из таблиц, не переключая вкладку =====
-function deskKey(d){ return deskNick(d).replace(/^@/,"").toLowerCase().trim(); }
-function dealsOfBlogger(d){ const k = deskKey(d); return k && k!=="—" ? (DataManager.state.microInfluencerDeals||[]).filter(x=> deskKey(x)===k) : [d]; }
+// Один блогер = общий телефон ИЛИ общий ник (Instagram / ник в имени). Склеиваем все интеграции в группы (23.11.2026).
+let _bIdx = null, _bAt = 0;
+function bloggerIndex(){
+  const a = DataManager.state.microInfluencerDeals || [];
+  if(_bIdx && _bIdx.src === a && _bIdx.len === a.length && Date.now() - _bAt < 3000) return _bIdx;
+  const par = new Map(), find = x=>{ while(par.get(x)!==x){ par.set(x, par.get(par.get(x))); x = par.get(x); } return x; }, uni = (x,y)=>{ x = find(x); y = find(y); if(x!==y) par.set(x, y); };
+  const node = k=>{ if(!par.has(k)) par.set(k, k); return k; };
+  for(const d of a){ const me = node("d"+d.id); const ph = waNumber(d.phone); if(ph) uni(me, node("p"+ph)); const n = rawNick(d).replace(/^@/,"").toLowerCase(); if(n && n!=="—" && /^[\w.]+$/.test(n)) uni(me, node("n"+n)); }
+  const groups = new Map(), key = new Map();
+  for(const d of a){ const r = find("d"+d.id); key.set(d.id, r); if(!groups.has(r)) groups.set(r, []); groups.get(r).push(d); }
+  const nick = new Map();
+  for(const [r, ds] of groups){ const ig = ds.find(x=> String(x.instagramAccount||"").trim()); const nk = ds.map(x=> rawNick(x)).find(x=> /^@[\w.]+$/.test(x)); nick.set(r, ig ? rawNick(ig) : (nk || rawNick(ds[0]))); }
+  _bIdx = {src:a, len:a.length, groups, key, nick}; _bAt = Date.now(); return _bIdx;
+}
+function deskNick(d){ const ix = bloggerIndex(), k = ix.key.get(d.id); return k ? ix.nick.get(k) : rawNick(d); }
+function deskKey(d){ const k = bloggerIndex().key.get(d.id); return k || rawNick(d).replace(/^@/,"").toLowerCase(); }
+function dealsOfBlogger(d){ const ix = bloggerIndex(), k = ix.key.get(d.id); return k ? ix.groups.get(k) : [d]; }
 function bloggerIsIp(d){ return dealsOfBlogger(d).some(x=> microIsIp(x)); }
 function openMicroById(id){ const d = (DataManager.state.microInfluencerDeals||[]).find(x=>x.id===id); if(!d) return; closeModal(); modalMicroCard(d); }
 function microCardRefresh(id){ const fresh = (DataManager.state.microInfluencerDeals||[]).find(x=> x.id===id); closeModal(); if(fresh) modalMicroCard(fresh); }
@@ -9127,6 +9142,8 @@ function modalMicroCard(d){
         <button class="btn" onclick="closeModal()">Закрыть</button></div>
     </div>
     ${others.length ? `<div class="pv-note" style="margin-top:10px"><b>Ещё с этим блогером сейчас:</b> ${others.map(x=>`<a href="#" data-mc-open="${x.id}" style="font-weight:700">${escapeHtml(microFormatOf(x))}${x.product?" · "+escapeHtml(x.product):""} · ${x.plannedDate?"план "+ddmmStr(x.plannedDate):"без даты"} · ${escapeHtml(x.paymentStatus||"не оплачено")}</a>`).join(" &nbsp;·&nbsp; ")} <span class="mut">— отдельные интеграции, у каждой своя дата и оплата</span></div>` : ""}
+    <div style="margin-top:10px">${deskDateProposalsHtml(d.id)}</div>
+    ${!d.agreedDate && !d.datesChecked && !pub && /^\d{4}-\d{2}-\d{2}/.test(d.plannedDate||"") ? `<div style="margin-top:10px;background:#FFF6E3;border:1px solid #F6E2B8;border-radius:12px;padding:10px 14px;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap"><span><b>Проверьте дату ${ddmmStr(d.plannedDate)}</b> — это день выхода или день, когда блогер присылает видео?</span><span style="display:flex;gap:6px"><button class="btn btn-sm mc-dc" data-k="pub">Это выход (видео ${ddmmStr(addDaysYMD(d.plannedDate,-2))})</button><button class="btn btn-sm mc-dc" data-k="vid">Это видео (выход ${ddmmStr(addDaysYMD(d.plannedDate,2))})</button></span></div>` : ""}
     ${microDealProgressHtml(d)}
     <div style="display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;margin-top:12px;align-items:start">
       <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
@@ -9168,6 +9185,8 @@ function modalMicroCard(d){
       const ch = {[f]: v}; if(v && f!=="storiesLink"){ ch.videoStatus = "опубликовано"; if(!d.publishDate) ch.publishDate = todayStr(); } save(ch, "Ссылка сохранена"); };
     inp.onkeydown = e=>{ if(e.key==="Enter") go(); }; inp.onblur = go; });
   bindVideoStageButtons(()=> microCardRefresh(d.id));
+  wireDateProposals(()=>{ render(); microCardRefresh(d.id); });
+  document.querySelectorAll(".mc-dc").forEach(b=> b.onclick = ()=> save(Object.assign({datesChecked:true}, b.dataset.k==="pub" ? {agreedDate: addDaysYMD(d.plannedDate,-2)} : {agreedDate: d.plannedDate, plannedDate: addDaysYMD(d.plannedDate,2)}), "Даты сохранены"));
   wireMicroPay(d.id);
   const rm = document.getElementById("mc-remind"); if(rm) rm.onclick = async ()=>{ try{ await withBusy(rm, ()=> apiFetch('/api/coord/deal/'+d.id+'/send-now',{method:'POST'})); toast("Напоминание отправлено"); loadChat(); }catch(e){ const l = wa("Здравствуйте! Напоминаю про видео для MIXIT — когда сможете прислать?"); if(l) window.open(l, "_blank", "noopener"); } };
   const loadChat = async ()=>{ const box = document.getElementById("mc-chat"), mode = document.getElementById("mc-chat-mode"); if(!box) return;
@@ -9329,7 +9348,7 @@ function deskReturnList(){
   const today = todayStr(), by = new Map();
   for(const d of (DataManager.state.microInfluencerDeals||[])){
     if(!microDealPublished(d)) continue;
-    const k = deskNick(d).replace(/^@/,"").toLowerCase().trim(); if(!k || k==="—") continue;
+    const k = deskKey(d); if(!k) continue;
     const r = by.get(k) || {deals:[], last:""}; r.deals.push(d); const dt = String(d.publishDate||d.plannedDate||""); if(dt > r.last){ r.last = dt; r.lastDeal = d; } by.set(k, r);
   }
   const out = [];
@@ -9376,7 +9395,7 @@ function deskSections(){
   }
   // Оплаты и документы — одной строкой на блогера: все вышедшие без оплаты вместе; АВР и ЭСФ — только когда вышли все его видео (ИП — если хоть одна интеграция через ИП).
   const old = addDaysYMD(today, -75), byB = new Map();
-  for(const d of mine){ const k = deskKey(d); if(!k || k==="—") continue; if(!byB.has(k)) byB.set(k, []); byB.get(k).push(d); }
+  for(const d of mine){ const k = deskKey(d); if(!k) continue; if(!byB.has(k)) byB.set(k, []); byB.get(k).push(d); }
   for(const [k, ds] of byB){
     const unpaid = ds.filter(d=> pub(d) && (Number(d.cost)||0) > 0 && d.paymentStatus === "не оплачено");
     if(unpaid.length){ const sum = unpaid.reduce((s,d)=> s+(Number(d.cost)||0), 0); S.pay.push({d: unpaid[0], deals: unpaid, sum, tag: unpaid.length>1 ? `вышло ${unpaid.length} видео — оплата не подана` : "вышло — оплата не подана", cls:"s-b", act:"pay"}); }
@@ -9390,7 +9409,7 @@ function deskSections(){
   return S;
 }
 UI.deskSec = UI.deskSec || "";
-function deskNick(d){ const n = String(d.instagramAccount||"").split(/[?#]/)[0].replace(/\/+$/,"").split("/").pop().replace(/^@/,"").toLowerCase(); if(n) return "@"+n; const b = String(d.blogerName||"").trim(); return b ? (/^@?[\w.]+$/.test(b) ? "@"+b.replace(/^@/,"").toLowerCase() : b) : "—"; }
+function rawNick(d){ const n = String(d.instagramAccount||"").split(/[?#]/)[0].replace(/\/+$/,"").split("/").pop().replace(/^@/,"").toLowerCase(); if(n) return "@"+n; const b = String(d.blogerName||"").trim(); return b ? (/^@?[\w.]+$/.test(b) ? "@"+b.replace(/^@/,"").toLowerCase() : b) : "—"; }
 function deskAction(x){
   const d = x.d, wa = x.wa && waLink(d.phone, x.wa);
   if(x.act==="wa") return wa ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(wa)}">Напомнить в WhatsApp</a>` : `<button class="btn btn-sm" onclick="openMicroById(${d.id})">Нет телефона — открыть</button>`;
@@ -9401,7 +9420,27 @@ function deskAction(x){
   if(x.act==="link") return `<input class="pv-inp desk-link" data-id="${d.id}" placeholder="Вставьте ссылку на Reels / TikTok" style="width:250px">`;
   return "";
 }
+// Блогер предложил другую дату — менеджер принимает или оставляет как было (23.11.2026: было в «колокольчике», теперь здесь и в карточке).
+function deskDateProposals(dealId){
+  const c = DataManager.state.coord; if(!c || !Array.isArray(c.events)) return [];
+  const deals = new Map((DataManager.state.microInfluencerDeals||[]).map(d=>[d.id, d]));
+  return c.events.filter(e=> !e.read && e.proposedDate && (dealId ? e.dealId===dealId : (crmIsLeadName() || actorMatchesResponsible(UI.actorName||"", e.to))) && (!e.dealId || deals.has(e.dealId)))
+    .map(e=> ({e, d: deals.get(e.dealId)})).filter(x=> x.d && !microDealPublished(x.d));
+}
+function deskDateProposalsHtml(dealId){
+  const list = deskDateProposals(dealId); if(!list.length) return "";
+  return `<div style="background:#FFF6E3;border:1px solid #F6E2B8;border-radius:12px;padding:10px 14px"><b>Блогер предлагает другую дату${list.length>1?" · "+list.length:""}</b> <span class="mut" style="font-size:12px">— подтвердите: это новая дата выхода</span>
+    ${list.slice(0,8).map(({e,d})=>`<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;padding:7px 0;border-top:1px solid #F6E2B8;margin-top:6px">
+      <span>${dealId ? "" : `<a href="#" onclick="openMicroById(${d.id});return false" style="font-weight:800;color:#2B2228">${escapeHtml(deskNick(d))}</a> · `}${escapeHtml(d.product||"")} · было <b>${ddmmStr(d.plannedDate)}</b> → предлагает <b>${ddmmStr(e.proposedDate)}</b>${e.text?` <span class="mut" style="font-size:12px">«${escapeHtml(String(e.text).slice(0,90))}»</span>`:""}${crmIsLeadName()&&d.responsible?` · ${escapeHtml(d.responsible)}`:""}</span>
+      <span style="display:flex;gap:6px"><button class="btn btn-sm btn-primary dp-accept" data-id="${e.id}">Принять ${ddmmStr(e.proposedDate)}</button><button class="btn btn-sm dp-keep" data-id="${e.id}">Оставить ${ddmmStr(d.plannedDate)}</button></span></div>`).join("")}
+    ${list.length>8?`<div class="mut" style="font-size:12px;margin-top:4px">и ещё ${list.length-8}</div>`:""}</div>`;
+}
+function wireDateProposals(after){
+  document.querySelectorAll(".dp-accept").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch("/api/coord/events/"+b.dataset.id+"/accept-date", {method:"POST"})); toast("Новая дата сохранена"); await DataManager.refresh(); after(); }catch(e){ toast(e.message, true); } });
+  document.querySelectorAll(".dp-keep").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch("/api/coord/events/"+b.dataset.id+"/read", {method:"POST"})); toast("Дата оставлена"); await DataManager.refresh(); after(); }catch(e){ toast(e.message, true); } });
+}
 function tplDesk(){
+  _bIdx = null;
   const name = UI.actorName || "—";
   const items = attentionItems();
   const urgent = items.filter(x=> x.sev>=2).concat(items.filter(x=>x.sev<2)).slice(0,3);
@@ -9426,6 +9465,8 @@ function tplDesk(){
   </div>
   <div style="display:grid;grid-template-columns:minmax(0,1fr) 316px;gap:16px;align-items:start">
     <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+      ${tplDateCheckBanner().replace("margin:0 0 12px","margin:0")}
+      ${deskDateProposalsHtml()}
       ${urgent.length ? `<div><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px"><b style="font-size:15px">Срочно сегодня</b><span class="mut" style="font-size:12px">не больше трёх — самое горящее</span></div>
         <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">${urgent.map(x=>`<div style="background:#fff;border:1px solid #F3C7D7;border-radius:12px;padding:12px 14px">
           <div style="font-size:11px;font-weight:800;color:${col(x.sev)};text-transform:uppercase;letter-spacing:.02em">${escapeHtml(x.what)}</div>
@@ -9469,6 +9510,7 @@ function tplDesk(){
   </div>`;
 }
 function wireDesk(){
+  wireDateProposals(()=> renderDeskTab());
   const gaps = deskGaps();
   document.querySelectorAll("[data-gap]").forEach(b=> b.onclick = (e)=>{ e.preventDefault(); const g = gaps[+b.dataset.gap]; if(g) modalDeskList(g[0], g[1]); });
   const ra = document.getElementById("desk-ret-all"); if(ra) ra.onclick = (e)=>{ e.preventDefault(); const all = deskReturnList(); openModal(`<h3>Кого вернуть · ${all.length}</h3><div style="max-height:62vh;overflow:auto">${all.map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #F8E9EF"><div><b>${escapeHtml(deskNick(r.d))}</b> <span class="mut" style="font-size:12px">CPV ${r.cpv.toFixed(2)} ₸ · ${r.n} инт. · последняя ${ddmmStr(r.last)} · ${escapeHtml(r.d.responsible||"")}</span></div><button class="btn btn-sm" onclick="closeModal();deskRepeat(${r.d.id})">Повторить</button></div>`).join("")}</div><div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Закрыть</button></div>`); };
