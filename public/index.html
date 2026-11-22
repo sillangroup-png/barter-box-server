@@ -3604,7 +3604,7 @@ const MARKETER_TABS = [
 function tabsForRole(){
   const base = UI.role==="marketer" ? MARKETER_TABS : MANAGER_TABS;
   if(UI.actorName==="Ольга") return base; // у Ольги интерфейс без изменений
-  return [base[0], {id:"crmBloggers", label:"Блогеры"}, ...base.slice(1), ...(crmIsNina() ? [{id:"crmPayments", label:"Оплаты"}] : [])];
+  return [base[0], {id:"crmBloggers", label:"Блогеры"}, {id:"crmProducts", label:"Товары"}, ...base.slice(1), ...(crmIsNina() ? [{id:"crmPayments", label:"Оплаты"}] : [])];
 }
 function roleLabel(){
   const base = UI.role==="marketer" ? "📊 Маркетолог" : "👤 Менеджер / логист";
@@ -3689,6 +3689,7 @@ function renderDeskTab(){
   else if(UI.tab==="report") main.innerHTML = tplReport();
   else if(UI.tab==="crmBloggers") main.innerHTML = tplCrmBloggers();
   else if(UI.tab==="crmPayments") main.innerHTML = tplCrmPayments();
+  else if(UI.tab==="crmProducts") main.innerHTML = tplCrmProducts();
   wireDeskTab();
   if(scrollPositions.length){
     main.querySelectorAll(".table-wrap").forEach((el,i)=>{ if(scrollPositions[i]) el.scrollLeft = scrollPositions[i]; });
@@ -4339,6 +4340,7 @@ function tplMarketerDashboard(){
   const f = UI.dashPeriod;
   const ms = marketingSummary(f.from, f.to);
   return `
+    ${tplAttention()}
     ${tplSimpleStats()}
     ${UI.vtAdv ? tplVitrina() : `<div class="panel" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div><b>Расширенная витрина</b> <span style="color:var(--ink-mute);font-size:12px">план-факт, год к году, месяцы колонками, дерево строк, Excel — для детального разбора</span></div><button class="btn btn-ghost btn-sm" id="vt-open-adv">Открыть расширенную витрину</button></div>`}
     <div class="panel-title">Бартерные рассылки</div>
@@ -6051,7 +6053,7 @@ function tplMicroInfluencers(){
         <span style="color:var(--ink-mute);font-size:12px">строки ${pageOffset+1}–${pageOffset+pageDeals.length} из ${deals.length}</span>
       </div>`;
 
-  return `
+  return `${tplDateCheckBanner()}
     ${tplMicroInfluencerBrandDashboard(s.romiRows)}
     ${tplMicroBloggerGroups()}
     ${tplMicroInfluencerCompare(s.romiRows)}
@@ -6256,7 +6258,7 @@ function tplMicroInfluencers(){
               <td>${inlineEditSpan(escapeHtml(d.productStatus||"—"), d.id, 'productStatus', d.productStatus||'', 'select', MICRO_PRODUCT_STATUSES)}</td>
               <td>${inlineEditSpan(escapeHtml(d.videoStatus||"—"), d.id, 'videoStatus', d.videoStatus||'', 'select', MICRO_VIDEO_STATUSES)}${d.videoStatus!=="опубликовано" && microDealPublished(d) ? `<br><span style="font-size:10.5px;color:var(--ok)" title="Сторис с охватом считается вышедшей, даже без ссылки">✓ сторис вышла</span>` : ""}</td>
               <td>${inlineEditSpan(escapeHtml(microVideoLang(d)||"—"), d.id, 'videoLang', microVideoLang(d), 'select', [""].concat(MICRO_VIDEO_LANGS))}</td>
-              <td>${inlineEditSpan(escapeHtml(d.plannedDate||"—"), d.id, 'plannedDate', d.plannedDate||'', 'date')}</td>
+              <td>${inlineEditSpan(escapeHtml(d.plannedDate||"—"), d.id, 'plannedDate', d.plannedDate||'', 'date')}${d.agreedDate ? `<div style="font-size:10.5px;color:var(--ink-mute)">видео ${ddmmStr(d.agreedDate)}</div>` : ""}</td>
               <td>${inlineEditSpan(escapeHtml(d.publishDate||"—"), d.id, 'publishDate', d.publishDate||'', 'date')}</td>
               <td>${microLinkStoriesCell(d)}</td>
               <td class="sticky-right">
@@ -8248,7 +8250,8 @@ function modalMicroDeal(existing, prefill){
     </div>
     <div class="form-row">
       ${d.id && DataManager.state.automationFlow ? `<div class="field"><a class="btn btn-ghost btn-sm" href="/flow/?lifecycle=${encodeURIComponent(d.id)}" target="_blank" rel="noopener">Доставка и сроки +2 / +4 ↗</a></div>` : ""}
-      <div class="field"><label>Плановая дата публикации</label><input id="mm-planned-date" type="date" value="${d.plannedDate||''}"></div>
+      <div class="field"><label>Договорились — блогер присылает видео</label><input id="mm-agreed-date" type="date" value="${d.agreedDate||''}"></div>
+      <div class="field"><label>Плановая дата публикации — выйдет</label><input id="mm-planned-date" type="date" value="${d.plannedDate||''}"><div style="font-size:11px;color:var(--ink-mute);margin-top:3px">ставится сама: +2 дня от договорённости</div></div>
       <div class="field"><label>Дата выкладки (факт)</label><input id="mm-publish-date" type="date" value="${d.publishDate||''}"></div>
     </div>
     <div class="login-hint">Плановая дата — чтобы интеграция сразу попала в нужный месяц фильтра/графика, даже если видео ещё не вышло. Как только появится факт-дата выкладки — используется она.</div>
@@ -8369,6 +8372,7 @@ function modalMicroDeal(existing, prefill){
       factReachStories: parseInt(document.getElementById("mm-stories-reach").value,10)||0,
       storiesClicks: parseInt(document.getElementById("mm-stories-clicks").value,10)||0,
       storiesLink: document.getElementById("mm-stories-link").value.trim(),
+      agreedDate: (document.getElementById("mm-agreed-date")||{}).value || "",
       plannedDate: document.getElementById("mm-planned-date").value,
       publishDate: document.getElementById("mm-publish-date").value,
       notes: document.getElementById("mm-notes").value.trim(),
@@ -8378,6 +8382,9 @@ function modalMicroDeal(existing, prefill){
       ...(document.getElementById("mm-avr-received") ? {avrReceived: document.getElementById("mm-avr-received").checked} : {}),
     };
   };
+  { const ag = document.getElementById("mm-agreed-date"), pl = document.getElementById("mm-planned-date");
+    if(ag && pl) ag.addEventListener("change", ()=>{ const prevAuto = ag.dataset.prev ? addDaysYMD(ag.dataset.prev, 2) : ""; if(ag.value && (!pl.value || pl.value===prevAuto)) pl.value = addDaysYMD(ag.value, 2); ag.dataset.prev = ag.value; });
+    if(ag) ag.dataset.prev = ag.value; }
   const formAtOpen = readMicroForm();
   { const ms = document.querySelectorAll(".modal-back .modal"), m = ms[ms.length-1]; if(m) m.classList.add("modal-wide"); }
   if(isEdit) bindVideoStageButtons(()=>{ closeModal(); const fresh = (DataManager.state.microInfluencerDeals||[]).find(x=> x.id === existing.id); if(fresh) modalMicroDeal(fresh); render(); });
@@ -8417,6 +8424,7 @@ const CrmApi = {
 };
 const CRM = { meta:null, list:null, loading:false, err:null, f:{q:"", status:"notdeclined", who:"mine", worked:"", sort:"updated", page:1}, pay:{status:"pending", data:null, loading:false, err:null} };
 const CRM_STAFF = ["Камила","Зарина","Марина","Сабрина","Надира","Мадина","Оксана","Анастасия","Ажар","Анеля","Сая","Нина","Сауле","Мария","Ольга","Алтынай","Сабина","Эльмира"];
+function TALK_OR(prev){ return prev; }
 function crmIsNina(){ return UI.actorName==="Нина" && !!UI.canExport; }
 function crmCutover(){ return !!(CRM.meta && CRM.meta.cutover); }
 function crmBadge(st){
@@ -8435,7 +8443,7 @@ async function crmLoad(){
   }catch(e){ CRM.err = e.message; }
   CRM.loading = false; crmRepaint();
 }
-function crmRepaint(){ if(UI.tab==="crmBloggers" || UI.tab==="crmPayments") renderDeskTab(); }
+function crmRepaint(){ if(UI.tab==="crmBloggers" || UI.tab==="crmPayments" || UI.tab==="crmProducts") renderDeskTab(); }
 
 const CRM_COLS = [
   ["status","Статус"],["comment","Комментарий"],["manager","Менеджер"],["links","Ссылки"],["category","Категория"],
@@ -8713,11 +8721,13 @@ async function modalCrmBlogger(id){
   const done = (nb)=>{ if(CRM.list){ const i = CRM.list.items.findIndex(x=>x.id===nb.id); if(i>=0) CRM.list.items[i] = nb; } crmRepaint(); };
   document.getElementById("cb-close").onclick = closeModal;
   document.querySelectorAll(".crm-st").forEach(btn=> btn.onclick = async ()=>{
-    try{ const nb = await withBusy(btn, ()=> CrmApi.save(b.id, {status: btn.dataset.st})); toast("Статус: " + nb.st.label); closeModal(); done(nb); modalCrmBlogger(b.id); }catch(e){ toast(e.message, true); }
+    const prev = String(b.status||"").startsWith("declined") ? {status:"declined", declineReason: b.st.code} : {status: b.status};
+    try{ const nb = await withBusy(btn, ()=> CrmApi.save(b.id, {status: btn.dataset.st})); closeModal(); done(nb); undoBar("Статус: " + nb.st.label, async ()=>{ const r = await CrmApi.save(b.id, TALK_OR(prev)); done(r); }); }catch(e){ toast(e.message, true); }
   });
   const dsel = document.getElementById("cb-decline");
   if(dsel) dsel.onchange = async ()=>{ if(!dsel.value) return;
-    try{ const nb = await CrmApi.save(b.id, {status:"declined", declineReason: dsel.value}); toast(nb.st.label); closeModal(); done(nb); }catch(e){ toast(e.message, true); } };
+    const prev = String(b.status||"").startsWith("declined") ? {status:"declined", declineReason: b.st.code} : {status: b.status};
+    try{ const nb = await CrmApi.save(b.id, {status:"declined", declineReason: dsel.value}); closeModal(); done(nb); undoBar(nb.st.label, async ()=>{ const r = await CrmApi.save(b.id, TALK_OR(prev)); done(r); }); }catch(e){ toast(e.message, true); } };
   const save = document.getElementById("cb-save");
   if(save) save.onclick = async ()=>{
     const v = id=> document.getElementById(id).value;
@@ -8823,11 +8833,150 @@ function wireCrmPayments(){
 }
 
 /* =========================================================================
+   8c. ДАТЫ, «ТРЕБУЕТ ВНИМАНИЯ», ПОИСК Ctrl+K, ОТМЕНА, ТОВАРЫ (22.11.2026)
+   ========================================================================= */
+// Две даты: «договорились» = день, когда блогер присылает видео; «выйдет» = +2 дня.
+function microAgreed(d){ return String(d.agreedDate||"").slice(0,10); }
+function microVideoDue(d){ return microAgreed(d) || (d.plannedDate ? addDaysYMD(String(d.plannedDate).slice(0,10), -2) : ""); }
+// Проверка дат: в старых интеграциях есть только одна дата — непонятно, это выход или день видео.
+function dateCheckList(){
+  const today = todayStr();
+  return (DataManager.state.microInfluencerDeals||[]).filter(d=> !d.agreedDate && !d.datesChecked && !microDealPublished(d) && !d.publishDate
+    && /^\d{4}-\d{2}-\d{2}/.test(d.plannedDate||"") && d.plannedDate >= today && (crmIsLeadName() || !UI.actorName || d.responsible===UI.actorName));
+}
+function crmIsLeadName(){ return ["Нина","Сая","Анеля","Сауле","Мария"].includes(UI.actorName); }
+function tplDateCheckBanner(){
+  const list = dateCheckList(); if(!list.length) return "";
+  return `<div class="login-hint" style="margin:0 0 12px;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;text-align:left;background:#FFF6E3;border-color:#F6E2B8">
+    <span><b>Проверьте даты · ${list.length}</b> — в этих интеграциях указана одна дата. Это день выхода или день, когда блогер присылает видео? Теперь их две: видео — в день договорённости, выход — через 2 дня.</span>
+    <button class="btn btn-primary btn-sm" onclick="modalDateCheck()">Проверить</button></div>`;
+}
+function modalDateCheck(){
+  const list = dateCheckList().sort((a,b)=> String(a.plannedDate).localeCompare(String(b.plannedDate)));
+  openModal(`<h3>Проверьте даты · ${list.length}</h3>
+    <div class="login-hint" style="text-align:left">Для каждой интеграции выберите, что означает дата. Если вписывали «с запасом +2» — это дата выхода.</div>
+    <div style="max-height:60vh;overflow:auto;margin-top:8px">${list.map(d=>`<div class="dc-row" data-id="${d.id}" style="display:flex;gap:10px;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px;flex-wrap:wrap">
+      <span><b>${escapeHtml(d.blogerName||"—")}</b> · ${escapeHtml(d.product||"")} · <b>${ddmmStr(d.plannedDate)}</b> · ${escapeHtml(d.responsible||"")}</span>
+      <span style="display:flex;gap:6px"><button class="btn btn-ghost btn-sm dc-pub">Это выход (видео ${ddmmStr(addDaysYMD(d.plannedDate,-2))})</button><button class="btn btn-ghost btn-sm dc-vid">Это видео (выход ${ddmmStr(addDaysYMD(d.plannedDate,2))})</button></span></div>`).join("")}</div>
+    <div class="modal-actions"><button class="btn btn-primary" id="dc-close">Готово</button></div>`);
+  const back = document.querySelector("#modal-back .modal"); if(back) back.classList.add("modal-wide");
+  document.getElementById("dc-close").onclick = ()=>{ closeModal(); render(); };
+  document.querySelectorAll(".dc-row").forEach(row=>{
+    const d = list.find(x=> String(x.id)===row.dataset.id);
+    const save = async (ch)=>{ try{ await Api.updateMicroDeal(d.id, Object.assign({datesChecked:true}, ch)); Object.assign(d, ch, {datesChecked:true}); row.style.opacity=".4"; row.querySelectorAll("button").forEach(b=>b.disabled=true); }catch(e){ toast(e.message,true); } };
+    row.querySelector(".dc-pub").onclick = ()=> save({agreedDate: addDaysYMD(d.plannedDate,-2)});
+    row.querySelector(".dc-vid").onclick = ()=> save({agreedDate: d.plannedDate, plannedDate: addDaysYMD(d.plannedDate,2)});
+  });
+}
+
+// «Требует внимания» на Рабочем столе: что горит и что делать дальше.
+function waLink(phone, text){ const p = String(phone||"").replace(/\D/g,"").replace(/^8(?=\d{10}$)/,"7"); return p ? `https://wa.me/${p}?text=${encodeURIComponent(text||"")}` : ""; }
+function attentionItems(){
+  const today = todayStr(), mine = d=> crmIsLeadName() ? true : (!UI.actorName || d.responsible===UI.actorName);
+  const out = [];
+  for(const d of (DataManager.state.microInfluencerDeals||[])){
+    if(!mine(d) || /отмен/i.test(String(d.problemStatus||""))) continue;
+    const pub = microDealPublished(d) || !!d.publishDate, vd = microVideoDue(d), pd = String(d.plannedDate||"").slice(0,10);
+    if(!pub && vd && vd < today && pd >= today && !/получ|соглас|принят/i.test(String(d.vstatus||d.videoStage||""))) out.push({d, sev:2, what:`Видео просрочено (ждали ${ddmmStr(vd)})`, next:"Написать блогеру и уточнить срок", wa:"Здравствуйте! Напоминаю про видео для MIXIT — когда сможете прислать?"});
+    else if(!pub && vd === today) out.push({d, sev:1, what:"Сегодня блогер присылает видео", next:"Напомнить утром и проверить по ТЗ", wa:"Доброе утро! Сегодня ждём видео для MIXIT 🙌"});
+    if(!pub && pd === today) out.push({d, sev:1, what:"Сегодня выход", next:"Проверить публикацию и вставить ссылку"});
+    else if(!pub && pd && pd < today) out.push({d, sev:3, what:`Выход был ${ddmmStr(pd)} — нет ссылки`, next:"Вставить ссылку или перенести дату", wa:"Здравствуйте! Подскажите, когда выйдет публикация MIXIT?"});
+    if(pub && (Number(d.cost)||0) > 0 && d.paymentStatus === "не оплачено") out.push({d, sev:1, what:"Вышло — оплата не подана", next:"Подать на оплату Нине"});
+  }
+  return out.sort((a,b)=> b.sev-a.sev || String(a.d.plannedDate).localeCompare(String(b.d.plannedDate)));
+}
+function tplAttention(){
+  if(!UI.actorName || UI.actorName==="Ольга") return "";
+  const items = attentionItems();
+  const col = s=> s>=3 ? "var(--bad)" : s===2 ? "var(--warn)" : "var(--action)";
+  return `<div class="panel" style="margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="panel-title" style="margin:0">Требует внимания${items.length?` · ${items.length}`:""}</div>
+      <span style="font-size:12px;color:var(--ink-mute)">${crmIsLeadName() ? "все менеджеры" : "ваши интеграции"} · <kbd style="border:1px solid var(--line-2);border-radius:5px;padding:0 5px;font-size:11px">Ctrl+K</kbd> — быстрый поиск</span></div>
+    ${items.length ? `<div style="margin-top:8px">${items.slice(0,40).map((x,i)=>`<div style="display:grid;grid-template-columns:8px minmax(0,1.3fr) minmax(0,1.2fr) auto;gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--line);font-size:13px">
+      <span style="width:8px;height:8px;border-radius:9px;background:${col(x.sev)}"></span>
+      <span><b>${escapeHtml(x.d.blogerName||"—")}</b> · ${escapeHtml(x.what)}${crmIsLeadName()&&x.d.responsible?` <span style="color:var(--ink-mute)">· ${escapeHtml(x.d.responsible)}</span>`:""}</span>
+      <span style="color:var(--ink-soft)">Что дальше: ${escapeHtml(x.next)}</span>
+      <span style="display:flex;gap:6px;justify-content:flex-end">${x.wa && waLink(x.d.phone, x.wa) ? `<a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="${escapeHtml(waLink(x.d.phone, x.wa))}">WhatsApp</a>` : ""}<button class="btn btn-ghost btn-sm" onclick="openMicroById(${x.d.id})">Открыть</button></span>
+    </div>`).join("")}${items.length>40?`<div style="font-size:12px;color:var(--ink-mute);padding-top:6px">и ещё ${items.length-40}</div>`:""}</div>` : `<div style="font-size:13px;color:var(--ink-mute);margin-top:6px">Всё спокойно — ничего не горит 👌</div>`}
+  </div>`;
+}
+function openMicroById(id){ const d = (DataManager.state.microInfluencerDeals||[]).find(x=>x.id===id); if(!d) return; UI.tab = "microInfluencers"; render(); modalMicroDeal(d); }
+
+// Ctrl+K — быстрый поиск по блогерам и интеграциям.
+document.addEventListener("keydown", e=>{
+  if((e.ctrlKey||e.metaKey) && (e.key==="k"||e.key==="K"||e.key==="л"||e.key==="Л") && UI.role && UI.role!=="driver"){ e.preventDefault(); modalQuickSearch(); }
+});
+function modalQuickSearch(){
+  if(modalOpen()) return;
+  openModal(`<input id="qs-in" placeholder="Ник блогера, имя, товар…" style="width:100%;border:1px solid var(--line-2);border-radius:10px;padding:11px 13px;font-size:15px" autocomplete="off"><div id="qs-res" style="margin-top:10px;max-height:60vh;overflow:auto;font-size:13px"><div style="color:var(--ink-mute)">Начните печатать — ищу в интеграциях и в базе блогеров</div></div>`);
+  const inp = document.getElementById("qs-in"), box = document.getElementById("qs-res"); inp.focus();
+  let timer = null, seq = 0;
+  inp.oninput = ()=>{ clearTimeout(timer); timer = setTimeout(async ()=>{
+    const q = inp.value.trim().toLowerCase().replace("@",""); const my = ++seq;
+    if(q.length < 2){ box.innerHTML = `<div style="color:var(--ink-mute)">Минимум 2 буквы</div>`; return; }
+    const deals = (DataManager.state.microInfluencerDeals||[]).filter(d=> [d.blogerName,d.instagramAccount,d.product,d.responsible].join(" ").toLowerCase().includes(q)).slice(-8).reverse();
+    let bl = []; try{ bl = (await CrmApi.list({q, limit:10, status:""})).items; }catch(e){}
+    if(my !== seq) return;
+    box.innerHTML = (deals.length ? `<div style="font-size:11px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;margin:4px 0">Интеграции</div>${deals.map(d=>`<div class="qs-item" data-k="d:${d.id}" style="padding:7px 8px;border-radius:8px;cursor:pointer"><b>${escapeHtml(d.blogerName||"—")}</b> · ${escapeHtml(d.product||"")} · ${ddmmStr(d.plannedDate)} · ${escapeHtml(d.responsible||"")}</div>`).join("")}` : "")
+      + (bl.length ? `<div style="font-size:11px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;margin:8px 0 4px">Блогеры</div>${bl.map(b=>`<div class="qs-item" data-k="b:${escapeHtml(b.id)}" style="padding:7px 8px;border-radius:8px;cursor:pointer"><b>@${escapeHtml(b.nick||b.name||"")}</b> · ${crmBadge(b.st)} · ${escapeHtml(b.manager||"")}</div>`).join("")}` : "")
+      || `<div style="color:var(--ink-mute)">Ничего не нашлось</div>`;
+    box.querySelectorAll(".qs-item").forEach(el=>{ el.onmouseenter = ()=> el.style.background = "var(--action-soft)"; el.onmouseleave = ()=> el.style.background = "";
+      el.onclick = ()=>{ const [t,id] = el.dataset.k.split(/:(.+)/); closeModal(); if(t==="d") openMicroById(Number(id)); else { UI.tab="crmBloggers"; render(); modalCrmBlogger(id); } }; });
+  }, 250); };
+  inp.onkeydown = e=>{ if(e.key==="Escape") closeModal(); if(e.key==="Enter"){ const f = box.querySelector(".qs-item"); if(f) f.click(); } };
+}
+
+// Отмена последнего действия (8 секунд) — плашка снизу, без всплывающих окон.
+function undoBar(text, undoFn){
+  const old = document.getElementById("undo-bar"); if(old) old.remove();
+  const el = document.createElement("div"); el.id = "undo-bar";
+  el.style.cssText = "position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#2b2230;color:#fff;border-radius:12px;padding:10px 14px;display:flex;gap:14px;align-items:center;font-size:13.5px;z-index:9999;box-shadow:0 8px 30px rgba(0,0,0,.25)";
+  el.innerHTML = `<span>${escapeHtml(text)}</span><button style="background:none;border:0;color:#ff9cc6;font-weight:700;cursor:pointer;font-size:13.5px">Отменить</button>`;
+  document.body.appendChild(el);
+  const t = setTimeout(()=> el.remove(), 8000);
+  el.querySelector("button").onclick = async ()=>{ clearTimeout(t); el.remove(); try{ await undoFn(); toast("Отменено"); }catch(e){ toast(e.message,true); } };
+}
+
+/* ---------- Товары: один справочник (меняют Нина и Сая) ---------- */
+const PROD = { list:null, loading:false, err:null, q:"" };
+async function prodLoad(){ PROD.loading = true; crmRepaint(); try{ PROD.list = await apiFetch("/api/crm/products"); PROD.err=null; }catch(e){ PROD.err = e.message; } PROD.loading=false; crmRepaint(); }
+function tplCrmProducts(){
+  if(!PROD.list && !PROD.loading && !PROD.err) setTimeout(prodLoad, 0);
+  const edit = crmIsLead();
+  const q = PROD.q.toLowerCase();
+  const items = (PROD.list||[]).filter(p=> !q || [p.name,p.article,p.category].join(" ").toLowerCase().includes(q));
+  return `<div class="toolbar" style="justify-content:space-between"><div><h2 style="margin:0">Товары</h2><div style="color:var(--ink-mute);font-size:12.5px">один справочник: штрихкод, себестоимость, базовое ТЗ${edit?"":" · менять могут Нина и Сая"}</div></div>
+    ${edit ? `<button class="btn btn-primary btn-sm" onclick="modalProduct()">+ Товар</button>` : ""}</div>
+    <div class="toolbar"><input type="search" class="fill" id="prod-q" placeholder="Название, штрихкод, категория" value="${escapeHtml(PROD.q)}" style="max-width:360px"></div>
+    ${PROD.err ? `<div class="empty" style="color:var(--bad)">${escapeHtml(PROD.err)}</div>` : ""}
+    <div class="table-wrap"><table><thead><tr><th>Товар</th><th>Штрихкод / артикул</th><th>Категория</th><th>Себестоимость</th><th>Базовое ТЗ</th><th>Заметки</th>${edit?"<th></th>":""}</tr></thead>
+    <tbody>${items.length ? items.map(p=>`<tr><td><b>${escapeHtml(p.name||"—")}</b></td><td>${escapeHtml(p.article||"—")}</td><td>${escapeHtml(p.category||"—")}</td><td>${p.cost?fmtNum(p.cost)+" ₸":"—"}</td>
+      <td class="wrap" style="max-width:280px">${escapeHtml(p.tz||"—")}</td><td class="wrap" style="max-width:220px">${escapeHtml(p.notes||"")}</td>${edit?`<td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="modalProduct('${escapeHtml(p.id)}')">Изменить</button></td>`:""}</tr>`).join("")
+      : `<tr><td colspan="7" class="empty">${PROD.loading?"Загружаю…":"Пусто"}</td></tr>`}</tbody></table></div>`;
+}
+function wireCrmProducts(){ const q = document.getElementById("prod-q"); if(q) q.oninput = ()=>{ PROD.q = q.value; const pos = q.selectionStart; crmRepaint(); const n = document.getElementById("prod-q"); if(n){ n.focus(); n.setSelectionRange(pos,pos); } }; }
+function modalProduct(id){
+  const p = (PROD.list||[]).find(x=>x.id===id) || {};
+  openModal(`<h3>${p.id?"Товар":"Новый товар"}</h3><div class="form-row">
+    <div class="field"><label>Название</label><input id="pr-name" value="${escapeHtml(p.name||"")}"></div>
+    <div class="field"><label>Штрихкод / артикул</label><input id="pr-article" value="${escapeHtml(p.article||"")}"></div>
+    <div class="field"><label>Категория</label><input id="pr-cat" value="${escapeHtml(p.category||"")}"></div>
+    <div class="field"><label>Себестоимость, ₸</label><input id="pr-cost" type="number" value="${p.cost||""}"></div>
+    <div class="field" style="grid-column:1/-1"><label>Базовое ТЗ</label><textarea id="pr-tz" rows="4">${escapeHtml(p.tz||"")}</textarea></div>
+    <div class="field" style="grid-column:1/-1"><label>Заметки</label><textarea id="pr-notes" rows="2">${escapeHtml(p.notes||"")}</textarea></div></div>
+    <div class="modal-actions">${p.id?`<button class="btn btn-ghost" id="pr-del" style="color:var(--bad);margin-right:auto">Убрать</button>`:""}<button class="btn btn-ghost" onclick="closeModal()">Отмена</button><button class="btn btn-primary" id="pr-save">Сохранить</button></div>`);
+  const v = i=> document.getElementById(i).value.trim();
+  document.getElementById("pr-save").onclick = async e=>{ try{ await withBusy(e.target, ()=> apiFetch("/api/crm/products"+(p.id?"/"+encodeURIComponent(p.id):""), {method:p.id?"PUT":"POST", headers:jsonHeaders, body:JSON.stringify({name:v("pr-name"), article:v("pr-article"), category:v("pr-cat"), cost:v("pr-cost"), tz:v("pr-tz"), notes:v("pr-notes")})})); closeModal(); toast("Сохранено"); prodLoad(); }catch(err){ toast(err.message,true); } };
+  const del = document.getElementById("pr-del"); if(del) del.onclick = async ()=>{ try{ await apiFetch("/api/crm/products/"+encodeURIComponent(p.id), {method:"DELETE"}); closeModal(); prodLoad(); undoBar("Товар убран", async ()=>{ await apiFetch("/api/crm/products/"+encodeURIComponent(p.id)+"/restore", {method:"POST"}); prodLoad(); }); }catch(err){ toast(err.message,true); } };
+}
+
+/* =========================================================================
    9. ОБРАБОТЧИКИ ВКЛАДОК
    ========================================================================= */
 function wireDeskTab(){
   if(UI.tab==="crmBloggers"){ wireCrmBloggers(); return; }
   if(UI.tab==="crmPayments"){ wireCrmPayments(); return; }
+  if(UI.tab==="crmProducts"){ wireCrmProducts(); return; }
   if(UI.tab==="dashboard" && UI.role==="marketer"){
     wireSimpleStats();
     { const oa = document.getElementById("vt-open-adv"); if(oa) oa.onclick = ()=>{ UI.vtAdv = true; renderDeskTab(); }; }
@@ -10094,7 +10243,7 @@ function startPolling(){
     try{
       await DataManager.refresh();
       setConnStatus(true);
-      if(UI.tab==="crmBloggers" || UI.tab==="crmPayments") return; // свои данные, не сбиваем поиск
+      if(UI.tab==="crmBloggers" || UI.tab==="crmPayments" || UI.tab==="crmProducts") return; // свои данные, не сбиваем поиск
       if(UI.role) render();
     }catch(e){
       setConnStatus(false);
