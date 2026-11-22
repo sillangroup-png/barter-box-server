@@ -1575,7 +1575,8 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
   let crmLinkedProfile = null;
   if(b.crmBloggerId){
     crmLinkedProfile=state.automationFlow?.bloggerLinks?.find(x=>x.crmBloggerId===String(b.crmBloggerId));
-    if(!crmLinkedProfile||microIgLogin(b.instagramAccount)!==crmLinkedProfile.handle)return res.status(409).json({error:'Связь с CRM не подтверждена'});
+    // Связь через автоматизацию (FLOW) — сверяем Instagram; блогер из вкладки «Блогеры» — просто запоминаем его ID.
+    if(crmLinkedProfile && microIgLogin(b.instagramAccount)!==crmLinkedProfile.handle)return res.status(409).json({error:'Связь с CRM не подтверждена'});
   }
   let flowSelection = null;
   if(b.flowGoodsInput){
@@ -1599,10 +1600,11 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
     contentFormat: b.contentFormat || "", factReachStories: b.factReachStories || 0, storiesClicks: b.storiesClicks || 0,
     storiesLink: normalizeLinkUrl(b.storiesLink || ""),
     coopType: b.coopType || "",
-    plannedDate: b.plannedDate || "", publishDate: b.publishDate || "", notes: b.notes || "",
+    agreedDate: b.agreedDate || "", plannedDate: b.plannedDate || "", publishDate: b.publishDate || "", notes: b.notes || "",
   };
   deal.flowBriefAutoSend=b.flowBriefAutoSend===true;if(deal.flowBriefAutoSend)deal.flowBriefAutoSendPhone=String(deal.phone||'').replace(/\D/g,'').replace(/^8(?=\d{10}$)/,'7');
   if(crmLinkedProfile)deal.crmBloggerId=crmLinkedProfile.crmBloggerId;
+  else if(b.crmBloggerId)deal.crmBloggerId=String(b.crmBloggerId).slice(0,80);
   if(flowSelection) Object.assign(deal,{flowGoods:flowSelection.items,flowGoodsCostMinor:flowSelection.costMinor,productCost:flowSelection.costMinor/100});
   state.microInfluencerDeals.push(deal);
   persist();

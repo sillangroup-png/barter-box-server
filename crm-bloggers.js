@@ -306,7 +306,7 @@ function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
         if (s === 'declined') {
           if (!DECLINE[body.declineReason]) throw Object.assign(new Error('Выберите причину отказа'), { code: 400 });
           b.status = 'declined'; b.decline_reason = body.declineReason; b.in_work = false;
-        } else if (TALK[s]) { b.status = s; b.decline_reason = null; if (s === 'contacted' && !b.contacted_at) b.contacted_at = new Date().toISOString(); }
+        } else if (TALK[s] || LEGACY[s]) { b.status = s; b.decline_reason = null; if (s === 'contacted' && !b.contacted_at) b.contacted_at = new Date().toISOString(); }
         else throw Object.assign(new Error('Неизвестный статус'), { code: 400 });
         statusChanged = true;
       }
@@ -451,6 +451,39 @@ function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
       }
       res.status(400).json({ error: 'Неизвестное действие' });
     } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ---------- Товары: один справочник (crm.items, collection='products'); меняют Нина и Сая ----------
+  const prodView = r => { const d = r.data || {}; return { id: r.id, name: d.name || '', article: d.article || d.barcode || '', category: d.category || '', cost: num(d.cost),
+    tz: d.tz || (Array.isArray(d.tz_list) ? d.tz_list.join('\n') : (d.tz_list || '')), notes: d.notes || '', updatedAt: d.updated_at || null }; };
+  app.get('/api/crm/products', requireAuth, async (req, res) => {
+    if (!canStaff(req) || !need(res)) return;
+    try { const r = await pool.query("select id, data from crm.items where collection='products' and not deleted order by data->>'name'"); res.json(r.rows.map(prodView)); }
+    catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  const prodBody = (b, old) => Object.assign({}, old || {}, { name: str(b.name, 200), article: str(b.article, 120), category: str(b.category, 80), cost: num(b.cost), tz: str(b.tz, 5000), notes: str(b.notes, 2000), updated_at: new Date().toISOString() });
+  app.post('/api/crm/products', requireAuth, async (req, res) => {
+    if (!need(res)) return; if (!canExportReq(req)) return res.status(403).json({ error: 'Товары меняют Нина и Сая' });
+    if (!str((req.body || {}).name)) return res.status(400).json({ error: 'Укажите название' });
+    try { const id = require('crypto').randomUUID(); const d = prodBody(req.body, { id, created_at: new Date().toISOString(), created_by: req.session.name });
+      await pool.query("insert into crm.items(collection,id,data) values ('products',$1,$2)", [id, d]); res.json({ ok: true, id }); }
+    catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  app.put('/api/crm/products/:id', requireAuth, async (req, res) => {
+    if (!need(res)) return; if (!canExportReq(req)) return res.status(403).json({ error: 'Товары меняют Нина и Сая' });
+    if (!(await requireCutover(res))) return; // до переезда старая CRM перезаписала бы правку
+    try { const r = await pool.query("select data from crm.items where collection='products' and id=$1", [req.params.id]); if (!r.rows[0]) return res.status(404).json({ error: 'Нет такого товара' });
+      const d = prodBody(req.body, r.rows[0].data); d.updated_by = req.session.name;
+      await pool.query("update crm.items set data=$2, updated_at=now() where collection='products' and id=$1", [req.params.id, d]); res.json({ ok: true }); }
+    catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  app.delete('/api/crm/products/:id', requireAuth, async (req, res) => {
+    if (!need(res)) return; if (!canExportReq(req)) return res.status(403).json({ error: 'Товары меняют Нина и Сая' });
+    try { await pool.query("update crm.items set deleted=true, updated_at=now() where collection='products' and id=$1", [req.params.id]); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  app.post('/api/crm/products/:id/restore', requireAuth, async (req, res) => {
+    if (!need(res)) return; if (!canExportReq(req)) return res.status(403).json({ error: 'Товары меняют Нина и Сая' });
+    try { await pool.query("update crm.items set deleted=false, updated_at=now() where collection='products' and id=$1", [req.params.id]); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   // ---------- Оплаты ----------
