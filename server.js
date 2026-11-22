@@ -76,6 +76,23 @@ const MARKETER_USERS = [
   {name:"Зара", login: process.env.ZARA_LOGIN || "zara", password: process.env.ZARA_PASSWORD || null},
   {name:"Ажар", login: process.env.AJAR_LOGIN || "ajar", password: process.env.AJAR_PASSWORD || null},
 ];
+// ---------- Сотрудники и личные учётки (22.11.2026) ----------
+// Все входят по общему логину роли и выбирают СВОЁ ИМЯ из списка — имя теперь фиксируется в
+// сессии на сервере (раньше жило только в браузере). Нина и Сая — отдельные учётки со своим
+// паролем (переменные Render NINA_LOGIN/NINA_PASSWORD, SAYA_LOGIN/SAYA_PASSWORD): их имена через
+// общий логин выбрать нельзя. Выгрузки (CSV/Excel) — только у Нины и Саи.
+const STAFF_NAMES = ["Камила","Зарина","Марина","Сабрина","Надира","Мадина","Оксана","Анастасия","Ажар","Анеля","Сауле","Мария","Ольга","Зара","Анна"];
+const PERSONAL_USERS = [
+  {name:"Нина", login: process.env.NINA_LOGIN || null, password: process.env.NINA_PASSWORD || null},
+  {name:"Сая",  login: process.env.SAYA_LOGIN || null, password: process.env.SAYA_PASSWORD || null},
+];
+const EXPORT_NAMES = new Set(["Нина","Сая"]);
+function normName(n){ return String(n||"").trim().replace(/\s+/g," ").slice(0,40); }
+// Простая защита от подбора пароля: 5 неверных попыток с одного IP — пауза 15 минут.
+const loginFails = new Map();
+function loginBlocked(ip){ const r = loginFails.get(ip); return r && r.n >= 5 && Date.now() - r.t < 15*60*1000; }
+function loginFailed(ip){ const r = loginFails.get(ip) || {n:0, t:0}; if(Date.now() - r.t > 15*60*1000) r.n = 0; r.n++; r.t = Date.now(); loginFails.set(ip, r); }
+
 // ---------- сессии (самодостаточный подписанный токен, БЕЗ хранения на сервере) ----------
 // История вопроса: сначала токены жили в обычной `new Map()` в памяти процесса — любой перезапуск
 // (передеплой; на Render ещё и автоусыпление сервиса при простое с холодным стартом) стирал их все
@@ -955,30 +972,55 @@ app.get("/api/health", (req,res)=> res.json({ok:true, orders: state.orders.lengt
 // ---------- авторизация (менеджер/логист, маркетолог) ----------
 app.post("/api/auth/login", (req,res)=>{
   const {role, login, password} = req.body || {};
+  const actor = normName(req.body && req.body.actor);
   const cfg = AUTH[role];
   if(!cfg) return res.status(400).json({error:"Неизвестная роль"});
+  const ip = String(req.headers["x-forwarded-for"] || req.ip || "").split(",")[0].trim();
+  if(loginBlocked(ip)) return res.status(429).json({error:"Слишком много неверных попыток — подождите 15 минут"});
+  // Личные учётки Нины и Саи — проверяем первыми, для любой из двух ролей.
+  const personal = PERSONAL_USERS.find(u=> u.login && u.password && u.login===login && u.password===password);
+  if(personal){
+    loginFails.delete(ip);
+    const token = signSession({role, name: personal.name, canExport: true});
+    return res.json({ok:true, token, name: personal.name, canExport: true});
+  }
+  const personalNames = new Set(PERSONAL_USERS.filter(u=>u.login && u.password).map(u=>u.name));
+  if(personalNames.has(actor)) return res.status(403).json({error: actor + " входит по своему логину и паролю, не через общий"});
   // Логин маркетолога "только просмотр" (см. MARKETER_VIEWERS) — отдельные учётки, которые
   // проверяем ДО основного логина/пароля роли, чтобы не требовать заодно настройки основного.
   if(role === "marketer"){
     const viewer = MARKETER_VIEWERS.find(v=> v.login && v.password && v.login===login && v.password===password);
     if(viewer){
+      loginFails.delete(ip);
       const token = signSession({role, readOnly:true, name: viewer.name});
-      return res.json({ok:true, token, readOnly:true});
+      return res.json({ok:true, token, readOnly:true, name: viewer.name, canExport: false});
     }
     const user = MARKETER_USERS.find(v=> v.login && v.password && v.login===login && v.password===password);
     if(user){
+      loginFails.delete(ip);
       const token = signSession({role, name: user.name});
-      return res.json({ok:true, token});
+      return res.json({ok:true, token, name: user.name, canExport: EXPORT_NAMES.has(user.name)});
     }
   }
   if(!cfg.login || !cfg.password){
     return res.status(503).json({error:"Логин для этой роли ещё не настроен на сервере (нужны переменные окружения)"});
   }
   if(login !== cfg.login || password !== cfg.password){
+    loginFailed(ip);
     return res.status(401).json({error:"Неверный логин или пароль"});
   }
-  const token = signSession({role});
-  res.json({ok:true, token});
+  loginFails.delete(ip);
+  // Нина/Сая без настроенной личной учётки пока входят по-старому (чтобы никого не запереть),
+  // но выгрузка им даётся только через личную учётку.
+  const name = actor || null;
+  const token = signSession({role, name});
+  res.json({ok:true, token, name, canExport: false});
+});
+
+// Кто я: имя и права из подписанной сессии (браузер берёт их отсюда, а не из своей памяти).
+app.get("/api/auth/me", requireAuth, (req,res)=>{
+  const s = req.session || {};
+  res.json({role: s.role, name: s.name || null, readOnly: !!s.readOnly, canExport: !!s.canExport, staff: STAFF_NAMES});
 });
 
 // ---------- авторизация водителя (по номеру телефона, на который его добавили) ----------
