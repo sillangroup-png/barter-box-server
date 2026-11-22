@@ -3747,13 +3747,13 @@ function renderDeskTab(){
   else if(UI.tab==="topBloggers") main.innerHTML = tplTopBloggers();
   else if(UI.tab==="influencerDeals") main.innerHTML = tplInfluencerDeals();
   else if(UI.tab==="microInfluencers") main.innerHTML = tplMicroInfluencers();
-  else if(UI.tab==="microCalendar") main.innerHTML = tplMicroCalendar();
+  else if(UI.tab==="microCalendar") main.innerHTML = UI.plannerOld ? `<a href="#" onclick="UI.plannerOld=false;render();return false" style="font-weight:700">← новый планер</a>` + tplMicroCalendar() : tplPlanner();
   else if(UI.tab==="report") main.innerHTML = tplReport();
   else if(UI.tab==="crmBloggers") main.innerHTML = tplCrmBloggers();
   else if(UI.tab==="crmPayments") main.innerHTML = tplCrmPayments();
   else if(UI.tab==="crmProducts") main.innerHTML = tplCrmProducts();
   else if(UI.tab==="desk") main.innerHTML = tplDesk();
-  else if(UI.tab==="tzBase"){ UI.microTzCatalogOpen = true; main.innerHTML = `<div style="margin-bottom:14px"><h1 style="margin:0;font-size:22px;font-weight:800">База ТЗ</h1><div class="mut" style="margin-top:3px">варианты ТЗ по товарам — в карточке интеграции ТЗ выбирается отсюда; товары и ШК — во вкладке «Товары»</div></div>` + tplMicroTzCatalog(); }
+  else if(UI.tab==="tzBase") main.innerHTML = tplTzBase();
   wireDeskTab();
   if(scrollPositions.length){
     main.querySelectorAll(".table-wrap").forEach((el,i)=>{ if(scrollPositions[i]) el.scrollLeft = scrollPositions[i]; });
@@ -6061,6 +6061,10 @@ function tplMicroInfluencers(){
   // Статус видео: «опубликовано» = вышла (в т.ч. сторис с охватом без ссылки), см. microDealPublished.
   if(mf.video==="published") deals = deals.filter(microDealPublished);
   else if(mf.video==="notpublished") deals = deals.filter(d=>!microDealPublished(d));
+  // «Быстро:» по прототипу — одна кнопка вместо нескольких фильтров.
+  const quickDefs = microQuickDefs();
+  const quickCounts = Object.fromEntries(quickDefs.map(q=> [q.k, deals.filter(q.f).length]));
+  if(mf.quick){ const q = quickDefs.find(x=> x.k===mf.quick); if(q) deals = deals.filter(q.f); }
   // Проблемные: по блогеру (если у блогера есть проблема в любой интеграции — показываем все его строки).
   const problemIdx = microProblemIndex();
   if(mf.problem){
@@ -6186,6 +6190,7 @@ function tplMicroInfluencers(){
         Колонка «Проблема» — отметить проблемного блогера (причина, статус); подсвечивается весь блогер.
       </div>
       ${tplAttributionRecalcBar()}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px"><span class="pv-lbl" style="margin-right:4px">Быстро:</span>${quickDefs.map(q=>`<button class="pv-chip micro-quick ${mf.quick===q.k?"on":""}" data-k="${q.k}">${q.t} <span class="n">${quickCounts[q.k]}</span></button>`).join("")}${mf.quick?`<button class="btn btn-sm micro-quick" data-k="">Сбросить</button>`:""}</div>
       <div class="toolbar" style="margin-bottom:12px">
         <input type="search" class="fill" id="micro-search" placeholder="Поиск по блогеру / товару / логину IG или TikTok" value="${escapeHtml(mf.search)}">
         <input type="date" id="micro-date-from" value="${mf.dateFrom||''}" style="max-width:150px" title="Дата с">
@@ -9439,6 +9444,184 @@ function wireDateProposals(after){
   document.querySelectorAll(".dp-accept").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch("/api/coord/events/"+b.dataset.id+"/accept-date", {method:"POST"})); toast("Новая дата сохранена"); await DataManager.refresh(); after(); }catch(e){ toast(e.message, true); } });
   document.querySelectorAll(".dp-keep").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch("/api/coord/events/"+b.dataset.id+"/read", {method:"POST"})); toast("Дата оставлена"); await DataManager.refresh(); after(); }catch(e){ toast(e.message, true); } });
 }
+// ===== База ТЗ по прототипу X14 (23.11.2026): запросы → на рассмотрении → утверждено → отправлено; ниже — справочник ТЗ с использованием и CPV =====
+const TZB = { data:null, loading:false, err:null, f:"base", prod:"", who:"" };
+async function tzbLoad(){ TZB.loading = true; try{ TZB.data = await apiFetch("/api/automation/brief-requests"); TZB.err = null; }catch(e){ TZB.err = e.message; TZB.data = {requests:[], sent:[]}; } TZB.loading = false; if(UI.tab==="tzBase") render(); }
+function tzbDeal(iid){ const s = String(iid||""); if(/^L/.test(s)) return null; return (DataManager.state.microInfluencerDeals||[]).find(d=> String(d.id)===s); }
+function tzbStats(){
+  const m = new Map();
+  for(const d of (DataManager.state.microInfluencerDeals||[])){ const t = String(d.tz||"").trim(); if(!t) continue; const k = t; const r = m.get(k) || {n:0, cost:0, reach:0}; r.n++; if(microDealPublished(d)){ const re = microDealFactReach(d), c = microDealTotalCost(d); if(re && c){ r.cost += c; r.reach += re; } } m.set(k, r); }
+  return m;
+}
+function tplTzBase(){
+  if(!TZB.data && !TZB.loading) setTimeout(tzbLoad, 0);
+  const deals = DataManager.state.microInfluencerDeals || [], today = todayStr(), mine = d=> d && d.responsible===UI.actorName;
+  const reqs = (TZB.data && TZB.data.requests) || [], sent = (TZB.data && TZB.data.sent) || [];
+  const reqIds = new Set(reqs.map(r=> String(r.integrationId)));
+  // Запросы: заявки в Blogery Audit (новая/в работе) + интеграции без ТЗ, которые ещё не вышли
+  const open = reqs.filter(r=> r.status!=="approved").map(r=> ({kind:"req", r, d: tzbDeal(r.integrationId)})).filter(x=> x.d && !String(x.d.tz||"").trim());
+  const noTz = deals.filter(d=> !String(d.tz||"").trim() && !microDealPublished(d) && String(d.plannedDate||"") >= today && !reqIds.has(String(d.id)) && !/отмен/i.test(String(d.problemStatus||""))).map(d=> ({kind:"none", d}));
+  let queue = open.concat(noTz).sort((a,b)=> String(a.d.plannedDate).localeCompare(String(b.d.plannedDate)));
+  const qAll = queue.length, qMine = queue.filter(x=> mine(x.d)).length, qNew = queue.filter(x=> x.kind==="none" || x.r.status==="pending").length, qWork = queue.filter(x=> x.kind==="req" && x.r.status!=="pending").length;
+  if(TZB.who==="mine") queue = queue.filter(x=> mine(x.d)); else if(TZB.who==="new") queue = queue.filter(x=> x.kind==="none" || x.r.status==="pending"); else if(TZB.who==="work") queue = queue.filter(x=> x.kind==="req" && x.r.status!=="pending");
+  // Утверждено — ждёт отправки блогеру
+  const sentSet = new Set(sent.filter(j=> j.status==="sent").map(j=> String(j.integrationId)+":"+j.versionId));
+  const review = deals.filter(d=> (d.flowBriefHistory||[]).some(v=> v.status==="approved" && !sentSet.has(String(d.id)+":"+v.versionId))).map(d=> ({d, v: (d.flowBriefHistory||[]).filter(v=> v.status==="approved").slice(-1)[0]}));
+  const sentToday = sent.filter(j=> String(j.sentAt||j.createdAt||"").slice(0,10)===today).map(j=> ({j, d: tzbDeal(j.integrationId)})).filter(x=> x.d);
+  const st = tzbStats(), cat = microTzCatalog();
+  const lib = []; for(const g of cat) for(const it of (g.items||[])){ const s = st.get(it) || {n:0, cost:0, reach:0}; lib.push({group:g.group, item:it, all:!!g.all, n:s.n, cpv: s.reach ? s.cost/s.reach : null}); }
+  for(const [t, s] of st) if(!lib.some(x=> x.item===t) && /персонал|свой формат|свом стил|своём стил/i.test(t)) lib.push({group:"Персональные", item:t, pers:true, n:s.n, cpv: s.reach ? s.cost/s.reach : null});
+  const prods = [...new Set(cat.filter(g=> !g.all).map(g=> g.group))];
+  let rows = lib.filter(x=> TZB.f==="all" ? true : TZB.f==="pers" ? x.pers : !x.pers); if(TZB.prod) rows = rows.filter(x=> x.group===TZB.prod);
+  rows.sort((a,b)=> b.n - a.n);
+  const stCls = {pending:["Новая","s-m"], received:["В Blogery Audit","s-blue"], approved:["Утверждено","s-ok"]};
+  const chip = (k, t, n)=> `<button class="pv-chip ${TZB.who===k?"on":""} tzb-who" data-k="${k}">${t}${n!=null?` <span class="n">${n}</span>`:""}</button>`;
+  const row = (cols, act)=> `<div style="display:grid;grid-template-columns:220px 120px 120px minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 16px;border-top:1px solid #F8E9EF;font-size:12.5px">${cols}<div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">${act}</div></div>`;
+  const nick = d=> `<a href="#" onclick="openMicroById(${d.id});return false" style="font-weight:800;color:#2B2228">${escapeHtml(deskNick(d))}</a> <span class="mut">· ${escapeHtml(String(d.product||"товар?").slice(0,24))}</span>`;
+  return `
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+    <div><h1 style="margin:0;font-size:22px;font-weight:800">База ТЗ</h1><div class="mut" style="margin-top:3px">хранится в Blogery Audit — Barter Box читает и пишет туда же, одна запись без копий</div></div>
+    <input class="pv-inp" id="tzb-q" placeholder="Ник, товар, ТЗ…" style="width:240px" value="${escapeHtml(TZB.q||"")}">
+  </div>
+  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:8px 0 14px;font-size:12px"><span class="pv-st s-m">Новая</span>→<span class="pv-st s-blue">Разбор / в работе</span>→<span class="pv-st s-w">На рассмотрении</span>→<span class="pv-st s-ok">Утверждено</span>→<span class="pv-st s-a">Отправлено</span><span class="mut">одинаковые статусы в Barter Box и Blogery Audit</span></div>
+  ${TZB.err && DataManager.state.automationFlow ? `<div class="pv-note" style="margin-bottom:12px;color:#C42B45">Очередь Blogery Audit недоступна: ${escapeHtml(TZB.err)} — показываю интеграции без ТЗ</div>` : ""}
+  <div class="panel" style="padding:0;margin-bottom:14px;overflow:hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 16px"><div><b style="font-size:15px">Запросы · ${qAll}</b><div class="mut" style="font-size:12px;margin-top:2px">запрос создаётся сам, когда заводят интеграцию; персональное — кнопкой в карточке. Базовое можно выбрать сразу здесь</div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${chip("", "Все", qAll)}${chip("mine","Мои",qMine)}${chip("new","Новые",qNew)}${chip("work","В Blogery Audit",qWork)}</div></div>
+    ${queue.length ? queue.slice(0,60).map(x=>{ const d = x.d, s = x.kind==="req" ? (stCls[x.r.status]||[x.r.status,"s-m"]) : ["ТЗ не выбрано","s-a"];
+      return row(`<div>${nick(d)}</div><span>${escapeHtml(d.responsible||"—")}</span><span><span class="pv-st ${x.kind==="req"?"s-a":"s-m"}">${x.kind==="req"?"Персональное":"Из интеграции"}</span></span><span class="mut">${x.kind==="req" ? escapeHtml(x.r.notes ? x.r.notes.slice(0,80) : "запрос от "+(x.r.requestedBy||"—")) : (d.plannedDate ? "выход "+ddmmStr(d.plannedDate)+" — ТЗ ещё не выбрано" : "ТЗ ещё не выбрано")} ${x.kind==="req" && x.r.lastError ? `<span style="color:#C42B45">· ${escapeHtml(x.r.lastError)}</span>` : ""}</span>`,
+        `<span class="pv-st ${s[1]}">${escapeHtml(s[0])}</span>${microTzCell(d).replace('class="micro-tz-select"','class="pv-inp tzb-take" data-deal="'+d.id+'"').replace("<option value=\"\">— ТЗ —</option>","<option value=\"\">Взять базовое…</option>")}${x.kind==="none" && DataManager.state.automationFlow ? `<button class="btn btn-sm tzb-req" data-id="${d.id}">Персональное</button>` : ""}`); }).join("") + (queue.length>60 ? `<div class="mut" style="padding:10px 16px;font-size:12px">и ещё ${queue.length-60}</div>` : "")
+      : `<div class="mut" style="padding:12px 16px">Запросов нет — у всех будущих интеграций ТЗ выбрано 👌</div>`}
+  </div>
+  <div class="panel" style="padding:0;margin-bottom:14px;overflow:hidden">
+    <div style="padding:14px 16px"><b style="font-size:15px">На рассмотрении · ${review.length}</b> <span class="mut" style="font-size:12px">утверждено в Blogery Audit — проверьте и отправьте блогеру; после отправки уходит в WhatsApp само</span></div>
+    ${review.length ? review.map(({d,v})=> row(`<div>${nick(d)}</div><span>${escapeHtml(d.responsible||"—")}</span><span><span class="pv-st s-a">Персональное</span></span><span class="mut">«${escapeHtml(v.title||"ТЗ")}»${v.approvedBy?` · утвердил(а) ${escapeHtml(v.approvedBy)}`:""}</span>`,
+        `${v.files && v.files.pdf ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(v.files.pdf)}">Открыть</a>` : ""}<button class="btn btn-sm btn-primary tzb-send" data-id="${d.id}" data-v="${escapeHtml(v.versionId)}">Отправить блогеру</button>`)).join("")
+      : `<div class="mut" style="padding:0 16px 14px">Пусто</div>`}
+  </div>
+  <div class="panel" style="padding:0;margin-bottom:14px;overflow:hidden">
+    <div style="padding:14px 16px"><b style="font-size:15px">Отправлено сегодня · ${sentToday.length}</b> <span class="mut" style="font-size:12px">какая версия ушла и когда · вручную — только если WhatsApp нет или не дошло</span></div>
+    ${sentToday.length ? sentToday.map(({j,d})=>{ const v = (d.flowBriefHistory||[]).find(x=> x.versionId===j.versionId) || {}; return row(`<div>${nick(d)}</div><span>${escapeHtml(d.responsible||"—")}</span><span><span class="pv-st s-a">Персональное</span></span><span class="mut">«${escapeHtml(v.title||"ТЗ")}» ${j.approvedBy?"· "+escapeHtml(j.approvedBy):""} ${j.sentAt?"→ ушло "+new Date(j.sentAt).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"}):""}</span>`,
+        j.status==="sent" ? `<span class="pv-st s-ok">Отправлено</span>` : `<span class="pv-st s-w">${escapeHtml(j.status||"в очереди")}</span>${d.phone?`<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(waLink(d.phone,""))}">Отправить вручную</a>`:""}`); }).join("")
+      : `<div class="mut" style="padding:0 16px 14px">Сегодня ещё не отправляли</div>`}
+  </div>
+  <div class="panel" style="padding:0;overflow:hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 16px">
+      <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="pv-chip tzb-f ${TZB.f==="base"?"on":""}" data-f="base">Базовые <span class="n">${lib.filter(x=>!x.pers).length}</span></button><button class="pv-chip tzb-f ${TZB.f==="pers"?"on":""}" data-f="pers">Персональные <span class="n">${lib.filter(x=>x.pers).length}</span></button><button class="pv-chip tzb-f ${TZB.f==="all"?"on":""}" data-f="all">Все <span class="n">${lib.length}</span></button></div>
+      <select class="pv-inp" id="tzb-prod"><option value="">Все товары</option>${prods.map(p=>`<option ${TZB.prod===p?"selected":""}>${escapeHtml(p)}</option>`).join("")}</select></div>
+    <table><thead><tr><th>ТЗ</th><th>Товар</th><th>Тип</th><th style="text-align:right">Использовано</th><th style="text-align:right">Средний CPV</th><th></th></tr></thead>
+    <tbody>${rows.length ? rows.filter(x=> !TZB.q || (x.item+" "+x.group).toLowerCase().includes(TZB.q.toLowerCase())).map(x=>`<tr><td><b>«${escapeHtml(x.item)}»</b></td><td>${escapeHtml(x.all?"любой товар":x.group)}</td><td><span class="pv-st ${x.pers?"s-a":"s-blue"}">${x.pers?"Персональное":"Базовое"}</span></td><td style="text-align:right">${x.n||"—"}</td><td style="text-align:right">${x.cpv!=null?`<b style="color:${x.cpv<=1?"#1E9E6A":x.cpv<=2?"#9A6400":"#C42B45"}">${x.cpv.toFixed(2).replace(".",",")} ₸</b>`:"—"}</td>
+      <td style="text-align:right">${x.pers?"":`<button class="btn btn-sm tzb-give" data-g="${escapeHtml(x.group)}" data-i="${escapeHtml(x.item)}">Отправить блогеру…</button>`}</td></tr>`).join("") : `<tr><td colspan="6" class="empty">Нет ТЗ</td></tr>`}</tbody></table>
+    <div class="mut" style="padding:10px 16px;font-size:12px">Справочник ТЗ по товарам с итогом: сколько раз выбирали и какой средний CPV вышел (по вышедшим интеграциям). «Отправить блогеру…» — выбираете интеграцию, ТЗ записывается в неё.</div>
+  </div>
+  ${crmIsLeadName() ? `<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;color:#C2306F">Редактировать справочник ТЗ (тимлиды)</summary><div style="margin-top:10px">${(UI.microTzCatalogOpen = true, tplMicroTzCatalog())}</div></details>` : ""}`;
+}
+function wireTzBase(){
+  if(crmIsLeadName()) wireMicroTz();
+  const q = document.getElementById("tzb-q"); if(q) q.oninput = ()=>{ TZB.q = q.value; const pos = q.selectionStart; render(); const n = document.getElementById("tzb-q"); if(n){ n.focus(); n.setSelectionRange(pos,pos); } };
+  document.querySelectorAll(".tzb-who").forEach(b=> b.onclick = ()=>{ TZB.who = b.dataset.k; render(); });
+  document.querySelectorAll(".tzb-f").forEach(b=> b.onclick = ()=>{ TZB.f = b.dataset.f; render(); });
+  const pr = document.getElementById("tzb-prod"); if(pr) pr.onchange = ()=>{ TZB.prod = pr.value; render(); };
+  const setTz = async (id, g, it)=>{ const d = (DataManager.state.microInfluencerDeals||[]).find(x=>x.id===id); const back = {tz: d.tz||"", tzGroup: d.tzGroup||""};
+    try{ await Api.updateMicroDeal(id, {tz:it, tzGroup:g}); Object.assign(d, {tz:it, tzGroup:g}); render(); undoBar("ТЗ «"+it+"» → "+deskNick(d), async ()=>{ await Api.updateMicroDeal(id, back); Object.assign(d, back); render(); }); }catch(e){ toast(e.message, true); } };
+  document.querySelectorAll(".tzb-take").forEach(s=> s.onchange = ()=>{ const [g,it] = s.value.split("\u0001"); if(it) setTz(+s.dataset.deal, g, it); });
+  document.querySelectorAll(".tzb-req").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch('/api/automation/brief-request/'+b.dataset.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:""})})); toast("Запрос персонального ТЗ создан"); tzbLoad(); }catch(e){ toast(e.message,true); } });
+  document.querySelectorAll(".tzb-send").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch('/api/automation/brief-send/'+b.dataset.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({versionId:b.dataset.v})})); toast("ТЗ ушло в очередь WhatsApp"); tzbLoad(); }catch(e){ toast(e.message,true); } });
+  document.querySelectorAll(".tzb-give").forEach(b=> b.onclick = ()=>{ const g = b.dataset.g, it = b.dataset.i, today = todayStr();
+    const cands = (DataManager.state.microInfluencerDeals||[]).filter(d=> !microDealPublished(d) && String(d.plannedDate||"") >= addDaysYMD(today,-3) && (crmIsLeadName() || d.responsible===UI.actorName)).sort((a,b)=> (String(a.tz||"")?1:0)-(String(b.tz||"")?1:0) || String(a.plannedDate).localeCompare(String(b.plannedDate)));
+    openModal(`<h3>«${escapeHtml(it)}» → какой интеграции?</h3><div class="mut" style="font-size:12px;margin-bottom:8px">сначала — без ТЗ, по дате выхода</div><div style="max-height:60vh;overflow:auto">${cands.slice(0,80).map(d=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #F8E9EF"><span><b>${escapeHtml(deskNick(d))}</b> <span class="mut" style="font-size:12px">${escapeHtml(d.product||"")} · выход ${ddmmStr(d.plannedDate)} · ${escapeHtml(d.responsible||"")}${d.tz?" · сейчас «"+escapeHtml(d.tz)+"»":""}</span></span><button class="btn btn-sm btn-primary tzb-pick" data-id="${d.id}">Выбрать</button></div>`).join("") || '<div class="mut">Нет подходящих интеграций</div>'}</div><div class="modal-actions"><button class="btn" onclick="closeModal()">Закрыть</button></div>`);
+    document.querySelectorAll(".tzb-pick").forEach(p=> p.onclick = ()=>{ closeModal(); setTz(+p.dataset.id, g, it); }); });
+}
+function microQuickDefs(){
+  const t = todayStr(), pub = d=> microDealPublished(d) || !!d.publishDate, open = d=> !/отмен/i.test(String(d.problemStatus||""));
+  return [
+    {k:"notz", t:"Нет ТЗ", f:d=> open(d) && !pub(d) && !String(d.tz||"").trim()},
+    {k:"wait", t:"Ждём видео", f:d=> open(d) && !pub(d) && (videoStageOf(d)==="wait"||videoStageOf(d)==="revise"||videoStageOf(d)==="reshoot")},
+    {k:"review", t:"Видео на проверке", f:d=> open(d) && !pub(d) && (videoStageOf(d)==="received"||videoStageOf(d)==="lead")},
+    {k:"unpaid", t:"Оплата не подана", f:d=> pub(d) && (Number(d.cost)||0)>0 && d.paymentStatus==="не оплачено"},
+    {k:"nolink", t:"Вышло без ссылки", f:d=> open(d) && ((pub(d) && !d.reelsLink && !d.tiktokVideoLink && !(Number(d.factReachStories)>0)) || (!pub(d) && d.plannedDate && String(d.plannedDate) < t))},
+    {k:"silent", t:"Молчат", f:d=> open(d) && !pub(d) && /P01|нет связи|молч/i.test(String(d.problemReason||"")+" "+String(d.problemStatus||""))},
+  ];
+}
+// ===== Планер блогеров по прототипу X17 (23.11.2026): месяц по дням, «по выходу» / «по договорённости», список дня по менеджерам =====
+const PLN = { month: "", mode: "out", who: "all", mgr: "", prod: "", day: "", dayF: "all", open: {} };
+function plnOnlyOut(){ return ["Сауле","Мария"].includes(UI.actorName); }
+function plnDealDay(d, mode){ return mode==="agreed" ? microVideoDue(d) : String(d.publishDate || d.plannedDate || "").slice(0,10); }
+function plnStatus(d){ const t = todayStr(), pub = microDealPublished(d) || !!d.publishDate; if(pub) return "ok"; if((PLN._prop && PLN._prop.has(d.id)) || d.vmoved) return "move"; if(d.plannedDate && String(d.plannedDate) < t) return "late"; return "wait"; }
+function tplPlanner(){
+  const t = todayStr(); if(!PLN.month) PLN.month = t.slice(0,7);
+  PLN._prop = new Map(((DataManager.state.coord||{}).events||[]).filter(e=> !e.read && e.proposedDate && e.dealId).map(e=> [e.dealId, e.proposedDate])); if(plnOnlyOut()) PLN.mode = "out";
+  const all = (DataManager.state.microInfluencerDeals||[]).filter(d=> !/отмен/i.test(String(d.problemStatus||"")));
+  const mgrs = [...new Set(all.map(d=> d.responsible).filter(Boolean))].sort((a,b)=> a.localeCompare(b,"ru"));
+  const prods = [...new Set(all.map(d=> d.product).filter(Boolean))].sort((a,b)=> a.localeCompare(b,"ru")).slice(0,200);
+  let ds = all.filter(d=> plnDealDay(d, PLN.mode).startsWith(PLN.month));
+  if(PLN.who==="mine") ds = ds.filter(d=> d.responsible===UI.actorName);
+  if(PLN.mgr) ds = ds.filter(d=> d.responsible===PLN.mgr);
+  if(PLN.prod) ds = ds.filter(d=> d.product===PLN.prod);
+  const byDay = new Map(); for(const d of ds){ const k = plnDealDay(d, PLN.mode); if(!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(d); }
+  const cnt = s=> ds.filter(d=> plnStatus(d)===s).length, mineN = ds.filter(d=> d.responsible===UI.actorName).length;
+  const [y, m] = PLN.month.split("-").map(Number), first = new Date(y, m-1, 1), days = new Date(y, m, 0).getDate(), lead = (first.getDay()+6)%7;
+  const monthTitle = first.toLocaleDateString("ru-RU",{month:"long", year:"numeric"});
+  const cells = []; for(let i=0;i<lead;i++) cells.push(null); for(let dd=1; dd<=days; dd++) cells.push(`${PLN.month}-${String(dd).padStart(2,"0")}`);
+  const kpi = (v, l, col)=> `<div style="background:#fff;border:1px solid #F1E1E8;border-radius:12px;padding:10px 14px"><b style="font-size:18px;${col?"color:"+col:""}">${fmtNum(v)}</b><div class="mut" style="font-size:11.5px">${l}</div></div>`;
+  const chip = (cls, k, t, on)=> `<button class="pv-chip ${cls} ${on?"on":""}" data-k="${k}">${t}</button>`;
+  const dayCell = k=>{ if(!k) return `<div></div>`; const list = byDay.get(k) || [], ok = list.filter(d=> plnStatus(d)==="ok").length, late = list.filter(d=> plnStatus(d)==="late").length, my = list.filter(d=> d.responsible===UI.actorName).length;
+    const sel = PLN.day===k, isT = k===t, empty = !list.length && k>=t;
+    return `<button class="pln-day" data-d="${k}" style="text-align:left;min-height:84px;border-radius:10px;padding:7px 9px;cursor:pointer;font:inherit;border:1px solid ${sel?"#D6337E":"#F1E1E8"};background:${sel?"#FFF4F9":empty?"#F2FBF6":"#fff"};${sel?"box-shadow:0 0 0 2px #F9D3E3":""}">
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:12.5px;${isT?"color:#D6337E":""}">${+k.slice(8)}${isT?" · сегодня":""}</b>${my?`<span style="font-size:10.5px;font-weight:700;color:#C2306F;background:#FCE4EF;border-radius:999px;padding:0 6px">мои ${my}</span>`:""}</div>
+      ${list.length ? `<div style="font-weight:800;font-size:15px;margin-top:4px">${list.length} <span class="mut" style="font-weight:500;font-size:11px">блогеров</span></div><div style="display:flex;gap:6px;font-size:11px;margin-top:2px">${ok?`<span style="color:#1E9E6A;font-weight:700">✓ ${ok}</span>`:""}${late?`<span style="color:#C42B45;font-weight:700">! ${late}</span>`:""}${list.length-ok-late>0?`<span class="mut">${list.length-ok-late} ждём</span>`:""}</div>` : (empty?`<div class="mut" style="font-size:11px;margin-top:6px">свободно</div>`:"")}
+    </button>`; };
+  const dayList = PLN.day ? (byDay.get(PLN.day) || []) : [];
+  const fl = dayList.filter(d=> PLN.dayF==="all" ? true : plnStatus(d)===PLN.dayF);
+  const groups = new Map(); for(const d of fl){ const k = d.responsible||"Без ответственного"; if(!groups.has(k)) groups.set(k, []); groups.get(k).push(d); }
+  const gOrder = [...groups.keys()].sort((a,b)=> (a===UI.actorName?-1:b===UI.actorName?1:0) || a.localeCompare(b,"ru"));
+  const due = PLN.day ? all.filter(d=> microVideoDue(d)===PLN.day && (PLN.who!=="mine" || d.responsible===UI.actorName)) : [];
+  const dueWait = due.filter(d=> !microDealPublished(d) && !["received","approved","lead"].includes(videoStageOf(d)));
+  const stTxt = d=>{ const s = plnStatus(d); if(s==="ok") return d.reelsLink||d.tiktokVideoLink ? "ссылка поставлена" : "вышло"; if(s==="move") { const p = PLN._prop.get(d.id); return p ? "блогер просит на "+ddmmStr(p) : "перенесено"; } if(s==="late") return "дата прошла — нет ссылки"; const vs = videoStageOf(d); return vs==="received"||vs==="lead" ? "видео на проверке" : vs==="approved" ? "видео одобрено" : /доставлен/i.test(String(d.productStatus||"")) ? "товар вручён" : "ждём видео"; };
+  const ico = {ok:"<span style='color:#1E9E6A'>✓</span>", late:"<span style='color:#C42B45'>!</span>", move:"<span style='color:#9A6400'>↷</span>", wait:"<span class='mut'>·</span>"};
+  const prodOfDay = (()=>{ const m2 = new Map(); for(const d of dayList) if(d.product) m2.set(d.product, (m2.get(d.product)||0)+1); return [...m2].sort((a,b)=> b[1]-a[1]); })();
+  return `
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+    <div><h1 style="margin:0;font-size:22px;font-weight:800">Планер блогеров</h1><div class="mut" style="margin-top:3px">по дням — сколько блогеров выходит. «По договорённости» — на какой день блогер обещал видео.${plnOnlyOut()?" У вас — только по выходу.":""}</div></div>
+    <a href="#" class="mut" style="font-size:12px" onclick="UI.plannerOld=true;render();return false">старый календарь</a>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+    <button class="btn btn-sm pln-nav" data-s="-1">‹</button><b style="min-width:130px;text-align:center;text-transform:capitalize">${monthTitle}</b><button class="btn btn-sm pln-nav" data-s="1">›</button>
+    ${plnOnlyOut() ? "" : `<span style="width:10px"></span>${chip("pln-mode","out","По выходу",PLN.mode==="out")}${chip("pln-mode","agreed","По договорённости",PLN.mode==="agreed")}`}
+    <span style="width:10px"></span>${chip("pln-who","mine","Мои",PLN.who==="mine")}${chip("pln-who","all","Все",PLN.who==="all")}
+    <select class="pv-inp" id="pln-mgr"><option value="">Все менеджеры</option>${mgrs.map(n=>`<option ${PLN.mgr===n?"selected":""}>${escapeHtml(n)}</option>`).join("")}</select>
+    <select class="pv-inp" id="pln-prod" style="max-width:220px"><option value="">Все товары</option>${prods.map(n=>`<option ${PLN.prod===n?"selected":""}>${escapeHtml(n)}</option>`).join("")}</select>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px">${kpi(ds.length, "в планере на "+first.toLocaleDateString("ru-RU",{month:"long"}))}${kpi(cnt("ok"),"вышло","#1E9E6A")}${kpi(cnt("wait")+cnt("move"),"ждём выхода")}${kpi(cnt("late"),"не вышло в срок","#C42B45")}${kpi(mineN,"мои в этом месяце","#D6337E")}</div>
+  <div class="mut" style="font-size:11.5px;margin-bottom:8px">✓ вышло · ! дата прошла, не вышло · ↷ перенос · «мои» — ваши блогеры в этот день · зелёные — свободные дни, туда можно ставить новых</div>
+  <div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px">${["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map(w=>`<div class="pv-lbl" style="padding:0 4px">${w}</div>`).join("")}${cells.map(dayCell).join("")}</div>
+  ${PLN.day ? `<div class="panel" style="margin-top:14px">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap"><b style="font-size:16px;text-transform:capitalize">${new Date(PLN.day+"T12:00:00").toLocaleDateString("ru-RU",{weekday:"long", day:"numeric", month:"long"})} · ${dayList.length} блогеров</b>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${[["all","Все",dayList.length],["wait","Ждём",dayList.filter(d=>plnStatus(d)==="wait").length],["ok","✓ Вышло",dayList.filter(d=>plnStatus(d)==="ok").length],["late","! Не вышло",dayList.filter(d=>plnStatus(d)==="late").length],["move","↷ Перенос",dayList.filter(d=>plnStatus(d)==="move").length]].map(([k,tt,n])=>`<button class="pv-chip pln-df ${PLN.dayF===k?"on":""}" data-k="${k}">${tt} <span class="n">${n}</span></button>`).join("")}</div></div>
+    ${plnOnlyOut() ? "" : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+      <div class="pv-note"><b>Договорились на ${ddmmStr(PLN.day)} · ${due.length}</b> — в этот день блогеры присылают видео · ждём ${dueWait.length}${dueWait.length && !UI.readOnly ? ` <button class="btn btn-sm pln-remind" data-ids="${dueWait.filter(d=> waNumber(d.phone)).map(d=>d.id).join(",")}" style="margin-left:6px">Напомнить ${dueWait.filter(d=> waNumber(d.phone)).length}</button>` : ""}</div>
+      <div class="pv-note"><b>Выйдут ${ddmmStr(PLN.day)} · ${dayList.filter(d=> plnStatus(d)!=="ok").length}</b> — в день выхода бот пишет «сегодня публикация» (для номеров в рабочем WhatsApp)</div></div>`}
+    <div style="margin-top:12px">${gOrder.map(g=>{ const list = groups.get(g), op = PLN.open[g] ?? (g===UI.actorName || gOrder.length===1);
+      const pc = (()=>{ const m3 = new Map(); for(const d of list) if(d.product) m3.set(d.product,(m3.get(d.product)||0)+1); return [...m3].sort((a,b)=>b[1]-a[1]).slice(0,3).map(([p,n])=> escapeHtml(p)+(n>1?" "+n:"")).join(" · "); })();
+      return `<div style="border:1px solid #F1E1E8;border-radius:12px;margin-bottom:8px;overflow:hidden"><button class="pln-grp" data-g="${escapeHtml(g)}" style="width:100%;display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px 14px;background:#FFF9FB;border:0;cursor:pointer;font:inherit;text-align:left"><span>${op?"▾":"▸"} <b>${escapeHtml(g)} · ${list.length}</b>${g===UI.actorName?` <span class="pv-st s-a" style="height:18px">мои</span>`:""} <span class="mut" style="font-size:12px">${pc}</span></span><span style="font-size:12px">${list.filter(d=>plnStatus(d)==="ok").length?`<span style="color:#1E9E6A;font-weight:700">✓ ${list.filter(d=>plnStatus(d)==="ok").length}</span> `:""}${list.filter(d=>plnStatus(d)==="late").length?`<span style="color:#C42B45;font-weight:700">! ${list.filter(d=>plnStatus(d)==="late").length}</span>`:""}</span></button>
+        ${op ? list.map(d=>`<div style="display:grid;grid-template-columns:20px 200px minmax(0,1fr) 110px 200px auto;gap:10px;align-items:center;padding:8px 14px;border-top:1px solid #F8E9EF;font-size:12.5px">${ico[plnStatus(d)]}<b style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(deskNick(d))}</b><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(d.product||"—")}</span><span class="mut">${escapeHtml((microCoopTypeOf(d)||"").replace("Платная интеграция","Платная")||"—")}</span><span class="mut">${escapeHtml(stTxt(d))}</span><button class="btn btn-sm" onclick="openMicroById(${d.id})">Открыть</button></div>`).join("") : ""}</div>`; }).join("") || `<div class="mut">В этот день никого — можно ставить новых.</div>`}</div>
+    ${prodOfDay.length ? `<div style="margin-top:10px"><b style="font-size:13px">Товары на ${ddmmStr(PLN.day)}</b> <span class="mut" style="font-size:12px">сколько нужно на этот день — для доставки и склада</span><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${prodOfDay.map(([p,n])=>`<span class="pv-st s-m">${escapeHtml(p)} · ${n}</span>`).join("")}</div></div>` : ""}
+    <div class="mut" style="font-size:11.5px;margin-top:10px">Перенести дату — в карточке блогера («Изменить» → «Выйдет»). Блогер сам предложил другую дату — подтверждение на Рабочем столе.</div>
+  </div>` : `<div class="mut" style="margin-top:12px;font-size:12.5px">Нажмите на день — откроется список блогеров по менеджерам.</div>`}`;
+}
+function wirePlanner(){
+  const rr = ()=> render();
+  document.querySelectorAll(".pln-nav").forEach(b=> b.onclick = ()=>{ const [y,m] = PLN.month.split("-").map(Number); const d = new Date(y, m-1+Number(b.dataset.s), 1); PLN.month = d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"); PLN.day = ""; rr(); });
+  document.querySelectorAll(".pln-mode").forEach(b=> b.onclick = ()=>{ PLN.mode = b.dataset.k; rr(); });
+  document.querySelectorAll(".pln-who").forEach(b=> b.onclick = ()=>{ PLN.who = b.dataset.k; rr(); });
+  document.querySelectorAll(".pln-df").forEach(b=> b.onclick = ()=>{ PLN.dayF = b.dataset.k; rr(); });
+  document.querySelectorAll(".pln-day").forEach(b=> b.onclick = ()=>{ PLN.day = PLN.day===b.dataset.d ? "" : b.dataset.d; PLN.dayF = "all"; rr(); });
+  document.querySelectorAll(".pln-grp").forEach(b=> b.onclick = ()=>{ const g = b.dataset.g; const cur = PLN.open[g] ?? (g===UI.actorName); PLN.open[g] = !cur; rr(); });
+  const mg = document.getElementById("pln-mgr"); if(mg) mg.onchange = ()=>{ PLN.mgr = mg.value; rr(); };
+  const pr = document.getElementById("pln-prod"); if(pr) pr.onchange = ()=>{ PLN.prod = pr.value; rr(); };
+  document.querySelectorAll(".pln-remind").forEach(b=> b.onclick = async ()=>{ const ids = b.dataset.ids.split(",").filter(Boolean).map(Number); if(!ids.length){ toast("Ни у кого нет номера WhatsApp", true); return; } if(!confirm("Отправить напоминание в WhatsApp "+ids.length+" блогерам?")) return;
+    try{ const r = await withBusy(b, ()=> apiFetch("/api/coord/send-now-many", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids})})); toast(`Отправлено: ${r.sent} · пропущено: ${r.skipped}`); }catch(e){ toast(e.message, true); } });
+}
 function tplDesk(){
   _bIdx = null;
   const name = UI.actorName || "—";
@@ -9528,11 +9711,12 @@ function wireDesk(){
    9. ОБРАБОТЧИКИ ВКЛАДОК
    ========================================================================= */
 function wireDeskTab(){
+  if(UI.tab==="microCalendar" && !UI.plannerOld){ wirePlanner(); return; }
   if(UI.tab==="crmBloggers"){ wireCrmBloggers(); return; }
   if(UI.tab==="crmPayments"){ wireCrmPayments(); return; }
   if(UI.tab==="crmProducts"){ wireCrmProducts(); return; }
   if(UI.tab==="desk"){ wireDesk(); return; }
-  if(UI.tab==="tzBase"){ wireMicroTz(); return; }
+  if(UI.tab==="tzBase"){ wireTzBase(); return; }
   if(UI.tab==="dashboard" && UI.role==="marketer"){
     wireSimpleStats();
     { const oa = document.getElementById("vt-open-adv"); if(oa) oa.onclick = ()=>{ UI.vtAdv = true; renderDeskTab(); }; }
@@ -10102,6 +10286,7 @@ function wireDeskTab(){
     document.getElementById("micro-date-to").onchange = e=>{ UI.microFilter.dateTo = e.target.value; renderDeskTab(); };
     document.getElementById("micro-responsible-filter").onchange = e=>{ UI.microFilter.responsible = e.target.value; renderDeskTab(); };
     document.getElementById("micro-sort").onchange = e=>{ UI.microFilter.sort = e.target.value; renderDeskTab(); };
+    document.querySelectorAll(".micro-quick").forEach(b=> b.onclick = ()=>{ UI.microFilter.quick = UI.microFilter.quick===b.dataset.k ? "" : b.dataset.k; renderDeskTab(); });
     const problemFilterEl = document.getElementById("micro-problem-filter");
     if(problemFilterEl) problemFilterEl.onchange = e=>{ UI.microFilter.problem = e.target.value; renderDeskTab(); };
     const formatFilterEl = document.getElementById("micro-format-filter");
