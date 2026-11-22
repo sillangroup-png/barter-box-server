@@ -164,6 +164,7 @@ function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
     if (q.exclude_in_work === '1') where.push("not (status = 'in_work' or data->>'in_work' = 'true')");
     if (q.exclude_transferred === '1') where.push("status <> 'transferred'");
     if (q.exclude_declined === '1') where.push("status not like 'declined%'");
+    if (q.exclude_considering === '1') where.push("status <> 'considering'");
     if (q.category) where.push(`data->>'category' = ${arg(String(q.category))}`);
     if (q.exclude_category) where.push(`coalesce(data->>'category','') <> all(${arg(String(q.exclude_category).split(','))})`);
     if (q.batch_id) where.push(`data->>'batch_id' = ${arg(String(q.batch_id))}`);
@@ -311,6 +312,7 @@ function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
         statusChanged = true;
       }
       if (body.manager !== undefined) { manager = body.manager ? managerKey(String(body.manager)) : null; b.assigned_manager_id = manager && !manager.startsWith('bb:') ? await crmUserId(client, manager) : null; b.manager_name_bb = body.manager || null; }
+      if (body.exclusive !== undefined) { if (!canExportReq(req)) throw Object.assign(new Error('Звёздочку ставят Нина и Сая'), { code: 400 }); b.is_exclusive = !!body.exclusive; }
       const fields = { lastComment: 'last_comment', notes: 'notes', whatsapp: 'blogger_whatsapp', category: 'category', name: 'name', instagram: 'instagram_url', tiktok: 'tiktok_url' };
       for (const [k, f] of Object.entries(fields)) if (body[k] !== undefined) b[f] = str(body[k], 2000);
       const nums = { followers: 'instagram_followers', followersTT: 'tiktok_followers', reach: 'instagram_avg_reach', reachTT: 'tiktok_avg_reach', storiesReach: 'stories_avg_reach',
