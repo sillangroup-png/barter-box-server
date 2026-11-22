@@ -77,6 +77,9 @@ function createClient({getState,persist,fetchImpl=fetch,env=process.env}){
    let actor=req.session.name||'общий вход';try{actor=req.session.name||decodeURIComponent(req.headers['x-actor']||'')||actor}catch{}
    const af=getState().automationFlow;(af.events||(af.events=[])).push({id:crypto.randomUUID(),at:new Date().toISOString(),actor,action:'brief.removed',entityId:deal.id,versionId:vid,title:v.title});
    persist();res.json({ok:true,approved:deal.flowBriefHistory,approvedId:deal.flowBriefApprovedVersionId||''});}catch(e){res.status(400).json({error:e.message})}});
+  // Очередь ТЗ для вкладки «База ТЗ» (23.11.2026): запросы и отправки — без ссылок на файлы и телефонов.
+  app.get('/api/automation/brief-requests',requireAuth,staff,(req,res)=>{const st=getState();res.json({requests:store().filter(r=>r.status!=='cancelled').slice(-300).map(r=>({id:r.id,integrationId:r.integrationId,status:r.status,requestedBy:r.requestedBy,createdAt:r.createdAt||null,approvedAt:r.approvedAt||null,lastError:r.lastError||null,notes:(r.payload&&r.payload.notes)||''})),
+   sent:(st.briefDelivery||[]).slice(-200).map(j=>({integrationId:j.integrationId,versionId:j.versionId,status:j.status,approvedBy:j.approvedBy||'',createdAt:j.createdAt||null,sentAt:j.sentAt||null}))});});
   app.get('/api/automation/brief-request/:id',requireAuth,staff,(req,res)=>res.json({request:store().find(r=>r.integrationId===req.params.id)||null,approved:findDeal(req.params.id).deal?.flowBriefHistory||[]}));
   const timer=setInterval(()=>drain().catch(()=>{}),30000);timer.unref();
  }
