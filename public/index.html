@@ -8852,20 +8852,33 @@ function tplDateCheckBanner(){
     <button class="btn btn-primary btn-sm" onclick="modalDateCheck()">Проверить</button></div>`;
 }
 function modalDateCheck(){
-  const list = dateCheckList().sort((a,b)=> String(a.plannedDate).localeCompare(String(b.plannedDate)));
+  const list = dateCheckList().sort((a,b)=> String(a.responsible||"").localeCompare(String(b.responsible||""),"ru") || String(a.plannedDate).localeCompare(String(b.plannedDate)));
+  const groups = {}; list.forEach(d=>{ const k = d.responsible||"Без ответственного"; (groups[k] = groups[k] || []).push(d); });
   openModal(`<h3>Проверьте даты · ${list.length}</h3>
-    <div class="login-hint" style="text-align:left">Для каждой интеграции выберите, что означает дата. Если вписывали «с запасом +2» — это дата выхода.</div>
-    <div style="max-height:60vh;overflow:auto;margin-top:8px">${list.map(d=>`<div class="dc-row" data-id="${d.id}" style="display:flex;gap:10px;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px;flex-wrap:wrap">
-      <span><b>${escapeHtml(d.blogerName||"—")}</b> · ${escapeHtml(d.product||"")} · <b>${ddmmStr(d.plannedDate)}</b> · ${escapeHtml(d.responsible||"")}</span>
-      <span style="display:flex;gap:6px"><button class="btn btn-ghost btn-sm dc-pub">Это выход (видео ${ddmmStr(addDaysYMD(d.plannedDate,-2))})</button><button class="btn btn-ghost btn-sm dc-vid">Это видео (выход ${ddmmStr(addDaysYMD(d.plannedDate,2))})</button></span></div>`).join("")}</div>
+    <div class="login-hint" style="text-align:left">Что означает единственная дата в интеграции? Если менеджер вписывал «с запасом +2» — это дата выхода. Можно ответить сразу за все интеграции менеджера.</div>
+    <div style="max-height:62vh;overflow:auto;margin-top:8px">${Object.entries(groups).map(([who, arr])=>`<div class="dc-group" style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;background:var(--canvas);border-radius:8px;padding:7px 10px">
+        <b>${escapeHtml(who)} · ${arr.length}</b>
+        <span style="display:flex;gap:6px"><button class="btn btn-ghost btn-sm dcg-pub">Все — даты выхода</button><button class="btn btn-ghost btn-sm dcg-vid">Все — даты видео</button><button class="btn btn-ghost btn-sm dcg-open">Показать</button></span></div>
+      <div class="dcg-rows" style="display:none">${arr.map(d=>`<div class="dc-row" data-id="${d.id}" style="display:flex;gap:10px;align-items:center;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--line);font-size:13px;flex-wrap:wrap">
+        <span><b>${escapeHtml(d.blogerName||"—")}</b> · ${escapeHtml(d.product||"")} · <b>${ddmmStr(d.plannedDate)}</b></span>
+        <span style="display:flex;gap:6px"><button class="btn btn-ghost btn-sm dc-pub">Это выход (видео ${ddmmStr(addDaysYMD(d.plannedDate,-2))})</button><button class="btn btn-ghost btn-sm dc-vid">Это видео (выход ${ddmmStr(addDaysYMD(d.plannedDate,2))})</button></span></div>`).join("")}</div></div>`).join("")}</div>
     <div class="modal-actions"><button class="btn btn-primary" id="dc-close">Готово</button></div>`);
   const back = document.querySelector("#modal-back .modal"); if(back) back.classList.add("modal-wide");
   document.getElementById("dc-close").onclick = ()=>{ closeModal(); render(); };
+  const byId = new Map(list.map(d=>[String(d.id), d]));
+  const asPub = d=> ({agreedDate: addDaysYMD(d.plannedDate,-2)}), asVid = d=> ({agreedDate: d.plannedDate, plannedDate: addDaysYMD(d.plannedDate,2)});
+  const saveOne = async (row, ch)=>{ const d = byId.get(row.dataset.id); const c = ch(d); await Api.updateMicroDeal(d.id, Object.assign({datesChecked:true}, c)); Object.assign(d, c, {datesChecked:true}); row.style.opacity=".4"; row.querySelectorAll("button").forEach(b=>b.disabled=true); };
   document.querySelectorAll(".dc-row").forEach(row=>{
-    const d = list.find(x=> String(x.id)===row.dataset.id);
-    const save = async (ch)=>{ try{ await Api.updateMicroDeal(d.id, Object.assign({datesChecked:true}, ch)); Object.assign(d, ch, {datesChecked:true}); row.style.opacity=".4"; row.querySelectorAll("button").forEach(b=>b.disabled=true); }catch(e){ toast(e.message,true); } };
-    row.querySelector(".dc-pub").onclick = ()=> save({agreedDate: addDaysYMD(d.plannedDate,-2)});
-    row.querySelector(".dc-vid").onclick = ()=> save({agreedDate: d.plannedDate, plannedDate: addDaysYMD(d.plannedDate,2)});
+    row.querySelector(".dc-pub").onclick = ()=> saveOne(row, asPub).catch(e=>toast(e.message,true));
+    row.querySelector(".dc-vid").onclick = ()=> saveOne(row, asVid).catch(e=>toast(e.message,true));
+  });
+  document.querySelectorAll(".dc-group").forEach(g=>{
+    g.querySelector(".dcg-open").onclick = ()=>{ const r = g.querySelector(".dcg-rows"); r.style.display = r.style.display==="none" ? "" : "none"; };
+    const all = async (ch, btn)=>{ const rows = [...g.querySelectorAll(".dc-row")].filter(r=>r.style.opacity!==".4");
+      try{ await withBusy(btn, async ()=>{ for(const r of rows) await saveOne(r, ch); }); g.querySelectorAll(".dcg-pub,.dcg-vid").forEach(b=>b.disabled=true); toast("Готово: " + rows.length); }catch(e){ toast(e.message,true); } };
+    g.querySelector(".dcg-pub").onclick = e=> all(asPub, e.target);
+    g.querySelector(".dcg-vid").onclick = e=> all(asVid, e.target);
   });
 }
 
