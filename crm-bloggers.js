@@ -100,7 +100,7 @@ function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
       followers: num(b.instagram_followers), followersTT: num(b.tiktok_followers), reach: num(b.instagram_avg_reach), reachTT: num(b.tiktok_avg_reach),
       storiesReach: num(b.stories_avg_reach), er: b.er || null, category: b.category || null,
       price: { reels: num(b.price_reels), tiktok: num(b.price_tiktok), both: num(b.price_both), stories: num(b.price_stories) },
-      cpv: { reels: num(b.cpv_reels), tiktok: num(b.cpv_tiktok), both: num(b.cpv_both) },
+      cpv: { reels: num(b.cpv_reels), tiktok: num(b.cpv_tiktok), both: num(b.cpv_both), stories: num(b.cpv_stories) }, batchId: b.batch_id || null,
       status: b.status || 'new', declineReason: b.decline_reason || null, st: statusView(b.status, b.decline_reason, ds),
       manager: managerName(row.manager), lastComment: b.last_comment || null, notes: b.notes || null,
       whatsapp: b.blogger_whatsapp || null, managerWhatsapp: b.manager_whatsapp || null, managerInstagram: b.manager_instagram || null,
@@ -124,42 +124,138 @@ function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ---------- Список блогеров ----------
-  app.get('/api/crm/bloggers', requireAuth, async (req, res) => {
-    if (!canStaff(req) || !need(res)) return;
-    const q = req.query; const where = ['not deleted']; const args = [];
+  // ---------- Список блогеров: все фильтры старой CRM ----------
+  const N = f => `crm.num(data->>'${f}')`;
+  const BEST_CPV = `least(coalesce(${N('cpv_reels')},9999),coalesce(${N('cpv_tiktok')},9999),coalesce(${N('cpv_both')},9999))`;
+  function buildWhere(q, session) {
+    const where = ['not deleted']; const args = [];
     const arg = v => { args.push(v); return '$' + args.length; };
+    const n = v => { const x = num(v); return x === null ? null : x; };
     if (q.q) { const s = String(q.q).toLowerCase().replace('@', '').trim(); where.push(`(search like ${arg('%' + s + '%')} or nick like ${arg('%' + s + '%')})`); }
     if (q.status === 'talk') where.push("status in ('new','contacted','replied','considering')");
     else if (q.status === 'declined') where.push("status like 'declined%'");
     else if (q.status === 'notdeclined') where.push("status not like 'declined%'");
-    else if (q.status && TALK[q.status]) where.push(`status = ${arg(q.status)}`);
     else if (q.status && q.status.startsWith('decl:')) { const c = q.status.slice(5); const legacy = Object.keys(LEGACY_DECLINE).filter(k => LEGACY_DECLINE[k] === c);
       where.push(`(status like 'declined%' and (data->>'decline_reason' = ${arg(c)} or status = any(${arg(legacy.length ? legacy : ['__'])})))`); }
+    else if (q.status) where.push(`status = ${arg(String(q.status))}`);
     let mgrNames = null;
-    if (q.mine === '1') mgrNames = [req.session.name];
+    if (q.mine === '1') mgrNames = [session.name];
     else if (q.manager) mgrNames = [String(q.manager)];
     if (mgrNames) {
       const users = Object.keys(USER_NAMES).filter(u => mgrNames.includes(USER_NAMES[u]));
       if (mgrNames.includes('— без менеджера')) where.push('manager is null');
-      else where.push(`(manager = any(${arg([...users, ...mgrNames.map(n => 'bb:' + n)])}))`);
+      else where.push(`(manager = any(${arg([...users, ...mgrNames.map(x => 'bb:' + x)])}))`);
     }
+    if (q.no_manager === '1') where.push('manager is null');
+    if (q.platform === 'instagram') where.push("coalesce(data->>'instagram_url','') <> ''");
+    if (q.platform === 'tiktok') where.push("coalesce(data->>'tiktok_url','') <> ''");
+    if (q.platform === 'both') where.push("coalesce(data->>'instagram_url','') <> '' and coalesce(data->>'tiktok_url','') <> ''");
+    if (n(q.cpv_min) !== null) where.push(`${BEST_CPV} >= ${arg(n(q.cpv_min))}`);
+    if (n(q.cpv_max) !== null) where.push(`${BEST_CPV} <= ${arg(n(q.cpv_max))}`);
+    if (n(q.reach_min) !== null) { const a = arg(n(q.reach_min)); where.push(`(coalesce(${N('instagram_avg_reach')},0) >= ${a} or coalesce(${N('tiktok_avg_reach')},0) >= ${a})`); }
+    if (n(q.followers_min) !== null) where.push(`coalesce(${N('instagram_followers')},0) >= ${arg(n(q.followers_min))}`);
+    if (n(q.followers_max) !== null) where.push(`coalesce(${N('instagram_followers')},0) <= ${arg(n(q.followers_max))}`);
+    if (n(q.reels_min) !== null) where.push(`${N('price_reels')} >= ${arg(n(q.reels_min))}`);
+    if (n(q.reels_max) !== null) where.push(`${N('price_reels')} <= ${arg(n(q.reels_max))}`);
+    if (n(q.tt_min) !== null) where.push(`${N('price_tiktok')} >= ${arg(n(q.tt_min))}`);
+    if (n(q.tt_max) !== null) where.push(`${N('price_tiktok')} <= ${arg(n(q.tt_max))}`);
+    if (q.no_price === '1') where.push(`coalesce(${N('price_reels')},0)=0 and coalesce(${N('price_tiktok')},0)=0 and coalesce(${N('price_both')},0)=0`);
+    if (q.in_work === '1') where.push("(status in ('in_work','transferred') or data->>'in_work' = 'true')");
+    if (q.exclude_in_work === '1') where.push("not (status = 'in_work' or data->>'in_work' = 'true')");
+    if (q.exclude_transferred === '1') where.push("status <> 'transferred'");
+    if (q.exclude_declined === '1') where.push("status not like 'declined%'");
+    if (q.category) where.push(`data->>'category' = ${arg(String(q.category))}`);
+    if (q.exclude_category) where.push(`coalesce(data->>'category','') <> all(${arg(String(q.exclude_category).split(','))})`);
+    if (q.batch_id) where.push(`data->>'batch_id' = ${arg(String(q.batch_id))}`);
+    if (q.ids) where.push(`id = any(${arg(String(q.ids).split(',').slice(0, 20000))})`);
     if (q.worked && /^\d{4}-\d{2}$/.test(q.worked)) {
       const i = deals(); const nicks = []; const ids = [];
       for (const [k, list] of i.byNick) if (list.some(d => !d.cancelled && String(d.date).startsWith(q.worked))) nicks.push(k);
       for (const [k, list] of i.byCrm) if (list.some(d => !d.cancelled && String(d.date).startsWith(q.worked))) ids.push(k);
       where.push(`(nick = any(${arg(nicks.length ? nicks : ['__'])}) or id = any(${arg(ids.length ? ids : ['__'])}))`);
     }
-    const limit = Math.min(200, Math.max(10, parseInt(q.limit) || 50));
-    const page = Math.max(1, parseInt(q.page) || 1);
-    const order = q.sort === 'reach' ? "coalesce((data->>'instagram_avg_reach')::numeric,0) desc" : q.sort === 'name' ? 'nick asc' : "coalesce(data->>'updated_at', '') desc";
+    return { w: where.join(' and '), args };
+  }
+  const SORTS = {
+    default: "coalesce(data->>'price_updated_at', data->>'updated_at', '') desc",
+    updated: "coalesce(data->>'updated_at', '') desc",
+    created_desc: "coalesce(data->>'created_at', '') desc",
+    cpv_asc: `${BEST_CPV} asc`,
+    cpv_desc: `nullif(${BEST_CPV},9999) desc nulls last`,
+    reach: `coalesce(${N('instagram_avg_reach')},0) desc`,
+    followers: `coalesce(${N('instagram_followers')},0) desc`,
+    name: 'nick asc',
+  };
+  const COLSORT = { followers: N('instagram_followers'), reach: N('instagram_avg_reach'), followersTT: N('tiktok_followers'), reachTT: N('tiktok_avg_reach'),
+    priceReels: N('price_reels'), cpvReels: N('cpv_reels'), priceTiktok: N('price_tiktok'), cpvTiktok: N('cpv_tiktok'), priceBoth: N('price_both'), cpvBoth: N('cpv_both'),
+    storiesReach: N('stories_avg_reach'), priceStories: N('price_stories'), cpvStories: N('cpv_stories'), created: "data->>'created_at'" };
+  function orderOf(q) {
+    if (q.col && COLSORT[q.col]) return `${COLSORT[q.col]} ${q.dir === 'asc' ? 'asc' : 'desc'} nulls last`;
+    return SORTS[q.sort] || SORTS.default;
+  }
+
+  app.get('/api/crm/bloggers', requireAuth, async (req, res) => {
+    if (!canStaff(req) || !need(res)) return;
+    const q = req.query;
+    const { w, args } = buildWhere(q, req.session);
     try {
-      const w = where.join(' and ');
+      if (q.ids_only === '1') { const r = await pool.query(`select id from crm.bloggers where ${w} limit 20000`, args); return res.json({ ids: r.rows.map(x => x.id) }); }
+      const limit = Math.min(200, Math.max(10, parseInt(q.limit) || 50));
+      const page = Math.max(1, parseInt(q.page) || 1);
       const [rows, cnt] = await Promise.all([
-        pool.query(`select id, data, status, manager, nick from crm.bloggers where ${w} order by ${order} limit ${limit} offset ${(page - 1) * limit}`, args),
+        pool.query(`select id, data, status, manager, nick from crm.bloggers where ${w} order by ${orderOf(q)} limit ${limit} offset ${(page - 1) * limit}`, args),
         pool.query(`select count(*)::int n from crm.bloggers where ${w}`, args),
       ]);
       res.json({ items: rows.rows.map(view), total: cnt.rows[0].n, page, limit });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.get('/api/crm/batches', requireAuth, async (req, res) => {
+    if (!canStaff(req) || !need(res)) return;
+    try {
+      const r = await pool.query("select id, data from crm.items where collection='batches' and not deleted order by data->>'created_at' desc nulls last limit 300");
+      const c = await pool.query("select data->>'batch_id' b, count(*)::int n from crm.bloggers where not deleted and data->>'batch_id' is not null group by 1");
+      const cnt = Object.fromEntries(c.rows.map(x => [x.b, x.n]));
+      res.json(r.rows.map(x => ({ id: x.id, name: x.data.name || x.data.filename || null, createdAt: x.data.created_at || x.data.date || null, n: cnt[x.id] || x.data.count || 0 })));
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ---------- Шаблон (все), Excel (Нина/Сая), дубли ----------
+  const XLSX = (() => { try { return require('xlsx'); } catch (e) { return null; } })();
+  const TEMPLATE_HEAD = ['ID', 'Ник', 'Ссылка Instagram', 'Подп. Инст', 'Охват Инст', 'Ссылка TikTok', 'Подп. ТТ', 'Охват ТТ', 'Цена Рилс (₸)', 'Цена ТТ (₸)', 'Цена Рилс+ТТ (₸)', 'Цена Сторис (₸)', 'Охват Сторис', 'Статус', 'Последний комментарий', 'Менеджер', 'Категория', 'WhatsApp'];
+  function sendXlsx(res, filename, aoa, sheet) {
+    const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = aoa[0].map(h => ({ wch: Math.max(String(h).length + 4, 14) }));
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, sheet);
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+  }
+  app.get('/api/crm/template', requireAuth, (req, res) => {
+    if (!canStaff(req)) return res.status(403).json({ error: 'Нет доступа' });
+    if (!XLSX) return res.status(503).json({ error: 'Excel недоступен на сервере' });
+    sendXlsx(res, 'шаблон_блогеры.xlsx', [TEMPLATE_HEAD, ['', '@blogger_name', 'https://instagram.com/blogger_name', 62700, 28700, 'https://tiktok.com/@blogger_name', 15000, 23900, '', '', '', '', '', 'new', '', '', '', '']], 'Шаблон');
+  });
+  const canExportReq = req => !!(req.session && req.session.canExport);
+  app.get('/api/crm/export', requireAuth, async (req, res) => {
+    if (!need(res)) return;
+    if (!canExportReq(req)) return res.status(403).json({ error: 'Выгрузка только у Нины и Саи' });
+    if (!XLSX) return res.status(503).json({ error: 'Excel недоступен на сервере' });
+    try {
+      const { w, args } = buildWhere(req.query, req.session);
+      const r = await pool.query(`select id, data, status, manager, nick from crm.bloggers where ${w} order by ${orderOf(req.query)} limit 20000`, args);
+      const head = ['ID', 'Ник', 'Ссылка Instagram', 'Подп. Инст', 'Охват Инст', 'Ссылка TikTok', 'Подп. ТТ', 'Охват ТТ', 'Цена Рилс (₸)', 'CPV Рилс', 'Цена ТТ (₸)', 'CPV ТТ', 'Цена Рилс+ТТ (₸)', 'CPV Рилс+ТТ', 'Охват Сторис', 'Цена Сторис (₸)', 'CPV Сторис', 'Статус', 'Причина отказа', 'Менеджер', 'Категория', 'WhatsApp', 'Последний комментарий', 'Добавлен'];
+      const rows = r.rows.map(row => { const b = row.data, v = view(row); return [row.id, b.name || '', b.instagram_url || '', v.followers, v.reach, b.tiktok_url || '', v.followersTT, v.reachTT, v.price.reels, v.cpv.reels, v.price.tiktok, v.cpv.tiktok, v.price.both, v.cpv.both, v.storiesReach, v.price.stories, v.cpv.stories, v.st.label, b.decline_reason || '', v.manager || '', b.category || '', b.blogger_whatsapp || '', b.last_comment || '', (b.created_at || '').slice(0, 10)]; });
+      console.log(`CRM: выгрузка ${rows.length} блогеров — ${req.session.name}`);
+      sendXlsx(res, `блогеры_${new Date().toISOString().slice(0, 10)}.xlsx`, [head, ...rows], 'Блогеры');
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  app.get('/api/crm/duplicates', requireAuth, async (req, res) => {
+    if (!canStaff(req) || !need(res)) return;
+    try {
+      const r = await pool.query(`with d as (select nick from crm.bloggers where not deleted and nick is not null group by nick having count(*)>1 limit 500)
+        select b.id, b.data, b.status, b.manager, b.nick from crm.bloggers b join d using (nick) where not b.deleted order by b.nick, b.data->>'created_at'`);
+      const groups = {}; for (const row of r.rows) (groups[row.nick] = groups[row.nick] || []).push(view(row));
+      res.json(Object.entries(groups).map(([nick, items]) => ({ nick, items })));
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -258,6 +354,102 @@ function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
       await pool.query('insert into crm.status_log(blogger_id,status,actor) values ($1,$2,$3)', [id, 'new', req.session.name || null]);
       const row = await pool.query('select id, data, status, manager, nick from crm.bloggers where id=$1', [id]);
       res.json(view(row.rows[0]));
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ---------- Импорт из Excel/CSV (после переезда) ----------
+  const upload = require('multer')({ storage: require('multer').memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+  const ALIASES = {
+    id: ['id'], name: ['ник', 'name', 'имя', 'блогер', 'никнейм'],
+    instagram_url: ['ссылкаinstagram', 'ссылкаинстаграм', 'instagram_url', 'инстаграм', 'instagram'], tiktok_url: ['ссылкаtiktok', 'ссылкатикток', 'tiktok_url', 'тикток', 'tiktok'],
+    instagram_followers: ['подп.инст', 'подписчикиинстаграм', 'подписчикиинст', 'instagram_followers'], tiktok_followers: ['подп.тт', 'подписчикитикток', 'подписчикитт', 'tiktok_followers'],
+    instagram_avg_reach: ['охватинст', 'среднийохватинстаграм', 'instagram_avg_reach'], tiktok_avg_reach: ['охваттт', 'среднийохваттикток', 'tiktok_avg_reach'],
+    price_reels: ['ценарилс', 'стоимостьрилс', 'price_reels'], price_tiktok: ['ценатт', 'стоимостьтт', 'price_tiktok'], price_both: ['ценарилстт', 'стоимостьрилстт', 'price_both'],
+    price_stories: ['ценасторис', 'стоимостьсторис', 'price_stories'], stories_avg_reach: ['охватсторис', 'stories_avg_reach'],
+    status: ['статус', 'status'], last_comment: ['последнийкомментарий', 'комментарий', 'last_comment'], manager: ['менеджер', 'ответственный', 'manager'],
+    category: ['категория', 'category'], blogger_whatsapp: ['whatsapp', 'ватсап', 'телефон'],
+  };
+  const normKey = k => String(k).toLowerCase().replace(/[\s_\-\.+\(\)₸]+/g, '');
+  const STATUS_IN = { 'новый': 'new', 'написали': 'contacted', 'ответили': 'replied', 'нарассмотрении': 'considering', 'new': 'new', 'contacted': 'contacted', 'replied': 'replied', 'considering': 'considering', 'отказ': 'declined', 'declined': 'declined' };
+  app.post('/api/crm/import', requireAuth, upload.single('file'), async (req, res) => {
+    if (!canStaff(req) || !need(res) || !(await requireCutover(res))) return;
+    if (!XLSX) return res.status(503).json({ error: 'Excel недоступен на сервере' });
+    if (!req.file) return res.status(400).json({ error: 'Нет файла' });
+    let rows;
+    try { const wb = XLSX.read(req.file.buffer, { type: 'buffer' }); rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' }); }
+    catch (e) { return res.status(400).json({ error: 'Не получилось прочитать файл: ' + e.message }); }
+    if (!rows.length) return res.status(400).json({ error: 'В файле нет строк' });
+    const keys = Object.keys(rows[0]); const col = {};
+    for (const [f, al] of Object.entries(ALIASES)) { const k = keys.find(k => al.some(a => normKey(k) === normKey(a))) || keys.find(k => al.some(a => normKey(k).startsWith(normKey(a)))); if (k) col[f] = k; }
+    if (!col.instagram_url && !col.tiktok_url && !col.id && !col.name) return res.status(400).json({ error: 'Не нашла колонки со ссылками — скачайте «Шаблон»' });
+    const lead = canExportReq(req);
+    const batchId = require('crypto').randomUUID(); const now = new Date().toISOString();
+    let added = 0, updated = 0, skipped = 0; const errors = [];
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const [i, row] of rows.entries()) {
+        const g = f => col[f] ? String(row[col[f]] ?? '').trim() : '';
+        let ig = g('instagram_url'), tt = g('tiktok_url');
+        const nm = g('name');
+        if (!ig && !tt && nm && /^@?[a-z0-9._]{2,30}$/i.test(nm)) ig = 'https://www.instagram.com/' + nm.replace('@', '') + '/';
+        const nick = nickOf(ig) || nickOf(tt);
+        let ex = null;
+        if (g('id')) ex = (await client.query('select id, data, manager from crm.bloggers where id=$1', [g('id')])).rows[0];
+        if (!ex && nick) ex = (await client.query('select id, data, manager from crm.bloggers where nick=$1 and not deleted limit 1', [nick])).rows[0];
+        if (!ex && !nick) { skipped++; if (errors.length < 20) errors.push(`строка ${i + 2}: нет ссылки`); continue; }
+        const b = ex ? ex.data : { id: require('crypto').randomUUID(), status: 'new', created_at: now, batch_id: batchId, created_by: req.session.name || null, in_work: false };
+        if (nm) b.name = nm; else if (!b.name) b.name = '@' + nick;
+        if (ig) b.instagram_url = ig; if (tt) b.tiktok_url = tt;
+        for (const f of ['instagram_followers', 'tiktok_followers', 'instagram_avg_reach', 'tiktok_avg_reach', 'price_reels', 'price_tiktok', 'price_both', 'price_stories', 'stories_avg_reach']) {
+          const v = num(String(g(f)).replace(/[^\d.,]/g, '')); if (g(f) !== '' && v !== null) { if (f.startsWith('price') && b[f] !== v) b.price_updated_at = now; b[f] = v; }
+        }
+        for (const f of ['last_comment', 'category', 'blogger_whatsapp']) if (g(f)) b[f] = g(f);
+        const st = STATUS_IN[normKey(g('status'))]; if (st && st !== 'declined') { b.status = st; b.decline_reason = null; }
+        const cpv = (p, r) => p && r ? +(p / r).toFixed(2) : null;
+        b.cpv_reels = cpv(b.price_reels, b.instagram_avg_reach); b.cpv_tiktok = cpv(b.price_tiktok, b.tiktok_avg_reach);
+        b.cpv_both = cpv(b.price_both, (b.instagram_avg_reach || 0) + (b.tiktok_avg_reach || 0)); b.cpv_stories = cpv(b.price_stories, b.stories_avg_reach || b.instagram_avg_reach);
+        let manager = ex ? ex.manager : managerKey(req.session.name);
+        if (lead && g('manager')) { const mName = USER_NAMES[g('manager').toLowerCase()] || g('manager'); manager = managerKey(mName); b.manager_name_bb = mName; }
+        b.assigned_manager_id = manager && !manager.startsWith('bb:') ? await crmUserId(client, manager) : null;
+        b.updated_at = now; b.updated_by = req.session.name || null;
+        const nk = nickOf(b.instagram_url) || nickOf(b.tiktok_url) || nick;
+        if (ex) { await client.query('update crm.bloggers set data=$2, status=$3, manager=$4, nick=$5, search=$6, updated_at=now(), deleted=false where id=$1', [ex.id, b, b.status, manager, nk, searchOf(b)]); updated++; }
+        else { await client.query('insert into crm.bloggers(id,data,status,manager,nick,search) values ($1,$2,$3,$4,$5,$6)', [b.id, b, b.status, manager, nk, searchOf(b)]); added++; }
+      }
+      await client.query("insert into crm.items(collection,id,data) values ('batches',$1,$2)", [batchId, { id: batchId, name: req.file.originalname, created_at: now, count: added, by: req.session.name }]);
+      await client.query('COMMIT');
+      console.log(`CRM импорт ${req.file.originalname}: +${added}, обновлено ${updated}, пропущено ${skipped} — ${req.session.name}`);
+      res.json({ ok: true, added, updated, skipped, errors });
+    } catch (e) { await client.query('ROLLBACK').catch(() => {}); res.status(500).json({ error: e.message }); }
+    finally { client.release(); }
+  });
+
+  // ---------- Массовые действия и удаление (Нина и Сая) ----------
+  app.post('/api/crm/bulk', requireAuth, async (req, res) => {
+    if (!need(res)) return;
+    if (!canExportReq(req)) return res.status(403).json({ error: 'Массовые действия — у Нины и Саи' });
+    if (!(await requireCutover(res))) return;
+    const { ids, action } = req.body || {};
+    if (!Array.isArray(ids) || !ids.length || ids.length > 20000) return res.status(400).json({ error: 'Не выбраны блогеры' });
+    try {
+      if (action === 'delete') {
+        const r = await pool.query("update crm.bloggers set deleted=true, updated_at=now(), data = data || jsonb_build_object('deleted_by',$2::text,'deleted_at',now()::text) where id = any($1) and not deleted", [ids, req.session.name]);
+        return res.json({ ok: true, n: r.rowCount });
+      }
+      if (action === 'manager') {
+        const name = String(req.body.manager || ''); const mk = name ? managerKey(name) : null; const uid = mk && !mk.startsWith('bb:') ? await crmUserId(pool, mk) : null;
+        const r = await pool.query("update crm.bloggers set manager=$2, updated_at=now(), data = data || jsonb_build_object('assigned_manager_id',$3::text,'manager_name_bb',$4::text,'updated_at',now()::text) where id = any($1)", [ids, mk, uid, name || null]);
+        return res.json({ ok: true, n: r.rowCount });
+      }
+      if (action === 'status') {
+        const s = String(req.body.status || ''); const reason = s === 'declined' ? String(req.body.declineReason || '') : null;
+        if (!(TALK[s] || (s === 'declined' && DECLINE[reason]))) return res.status(400).json({ error: 'Выберите статус' });
+        const r = await pool.query("update crm.bloggers set status=$2, updated_at=now(), data = data || jsonb_build_object('status',$2::text,'decline_reason',$3::text,'updated_at',now()::text) where id = any($1)", [ids, s, reason]);
+        await pool.query('insert into crm.status_log(blogger_id,status,decline_reason,actor) select unnest($1::text[]), $2, $3, $4', [ids, s, reason, req.session.name]);
+        return res.json({ ok: true, n: r.rowCount });
+      }
+      res.status(400).json({ error: 'Неизвестное действие' });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

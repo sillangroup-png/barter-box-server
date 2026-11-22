@@ -8426,7 +8426,7 @@ function crmBadge(st){
 function crmMonths(){ const out=[]; const d=new Date(Date.now()+5*3600e3); d.setUTCDate(1); for(let i=0;i<8;i++){ const y=d.getUTCFullYear(), m=d.getUTCMonth(); out.push([`${y}-${String(m+1).padStart(2,"0")}`, d.toLocaleString("ru-RU",{month:"long", timeZone:"UTC"})+" "+y]); d.setUTCMonth(m-1); } return out; }
 function crmTimeAgo(iso){ if(!iso) return "—"; const m=Math.round((Date.now()-new Date(iso).getTime())/60000); if(m<1) return "только что"; if(m<60) return m+" мин назад"; const h=Math.round(m/60); if(h<48) return h+" ч назад"; return new Date(iso).toLocaleDateString("ru-RU"); }
 function crmDate(iso){ return iso ? new Date(iso).toLocaleDateString("ru-RU",{day:"2-digit",month:"2-digit",year:"2-digit"}) : "—"; }
-function crmParams(){ const f=CRM.f; const p={page:f.page, limit:50, sort:f.sort}; if(f.q) p.q=f.q; if(f.status) p.status=f.status; if(f.who==="mine") p.mine="1"; else if(f.who && f.who!=="all") p.manager=f.who; if(f.worked) p.worked=f.worked; return p; }
+var crmParams = function(){ const f=CRM.f; const p={page:f.page, limit:50, sort:f.sort}; if(f.q) p.q=f.q; if(f.status) p.status=f.status; if(f.who==="mine") p.mine="1"; else if(f.who && f.who!=="all") p.manager=f.who; if(f.worked) p.worked=f.worked; return p; }
 async function crmLoad(){
   CRM.loading = true; CRM.err = null; crmRepaint();
   try{
@@ -8437,32 +8437,80 @@ async function crmLoad(){
 }
 function crmRepaint(){ if(UI.tab==="crmBloggers" || UI.tab==="crmPayments") renderDeskTab(); }
 
+const CRM_COLS = [
+  ["status","Статус"],["comment","Комментарий"],["manager","Менеджер"],["links","Ссылки"],
+  ["followers","Подп. Инст"],["reach","Охват Инст"],["followersTT","Подп. ТТ"],["reachTT","Охват ТТ"],
+  ["priceReels","Рилс"],["cpvReels","CPV рилс"],["priceTiktok","ТТ"],["cpvTiktok","CPV ТТ"],["priceBoth","Рилс+ТТ"],["cpvBoth","CPV Р+ТТ"],
+  ["storiesReach","Охват сторис"],["priceStories","Сторис ₸"],["cpvStories","CPV сторис"],["created","Добавлен"],["updated","Обновлён"]];
+const CRM_SORTABLE = new Set(["followers","reach","followersTT","reachTT","priceReels","cpvReels","priceTiktok","cpvTiktok","priceBoth","cpvBoth","storiesReach","priceStories","cpvStories","created"]);
+function crmColsOn(){ try{ const v = JSON.parse(localStorage.getItem("bb_crm_cols")||"null"); if(Array.isArray(v)) return new Set(v); }catch(e){} return new Set(CRM_COLS.map(c=>c[0]).filter(k=>k!=="updated")); }
+CRM.cols = crmColsOn(); CRM.sel = new Set(); CRM.showFilters = false; CRM.batches = null;
+Object.assign(CRM.f, {sort:"default", col:"", dir:"desc", platform:"", cpv_min:"", cpv_max:"", reach_min:"", followers_min:"", followers_max:"", category:"", exclude_category:"", reels_min:"", reels_max:"", tt_min:"", tt_max:"", no_price:false, no_manager:false, in_work:false, exclude_in_work:false, exclude_transferred:false, batch_id:""});
+const CRM_FILTER_KEYS = ["platform","cpv_min","cpv_max","reach_min","followers_min","followers_max","category","exclude_category","reels_min","reels_max","tt_min","tt_max","no_price","no_manager","in_work","exclude_in_work","exclude_transferred","batch_id"];
+crmParams = function(){ const f=CRM.f; const p={page:f.page, limit:50, sort:f.sort}; if(f.col){ p.col=f.col; p.dir=f.dir; } if(f.q) p.q=f.q; if(f.status) p.status=f.status; if(f.who==="mine") p.mine="1"; else if(f.who && f.who!=="all") p.manager=f.who; if(f.worked) p.worked=f.worked;
+  for(const k of CRM_FILTER_KEYS){ const v=f[k]; if(v===true) p[k]="1"; else if(v) p[k]=v; } return p; };
+function crmIsLead(){ return !!UI.canExport; }
+function crmCpv(v){ if(v==null) return `<span style="color:var(--ink-mute)">—</span>`; const c = v<=10 ? ["#e6f6ef","#1f8a62"] : v<=30 ? ["#f1ebfb","#7b4fc4"] : ["#fdecef","#c73a58"]; return `<span style="background:${c[0]};color:${c[1]};border-radius:20px;padding:2px 8px;font-weight:700;font-size:11.5px">${v}₸</span>`; }
+function crmMoney(v){ return v ? fmtNum(v)+"₸" : `<span style="color:var(--ink-mute)">—</span>`; }
+function crmNum(v){ return v ? fmtNum(v) : `<span style="color:var(--ink-mute)">—</span>`; }
+function crmCell(k, b){
+  switch(k){
+    case "status": return crmBadge(b.st);
+    case "comment": return `<span title="${escapeHtml(b.lastComment||"")}">${escapeHtml((b.lastComment||"").slice(0,60)) || `<span style="color:var(--ink-mute)">—</span>`}</span>`;
+    case "manager": return b.manager ? `<span class="badge badge-closed">${escapeHtml(b.manager)}</span>` : "—";
+    case "links": return [b.instagram?`<a href="${escapeHtml(b.instagram)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Instagram">IG</a>`:"", b.tiktok?`<a href="${escapeHtml(b.tiktok)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="TikTok">TT</a>`:""].filter(Boolean).join(" · ") || "—";
+    case "followers": return crmNum(b.followers); case "reach": return crmNum(b.reach);
+    case "followersTT": return crmNum(b.followersTT); case "reachTT": return crmNum(b.reachTT);
+    case "priceReels": return crmMoney(b.price.reels); case "cpvReels": return crmCpv(b.cpv.reels);
+    case "priceTiktok": return crmMoney(b.price.tiktok); case "cpvTiktok": return crmCpv(b.cpv.tiktok);
+    case "priceBoth": return crmMoney(b.price.both); case "cpvBoth": return crmCpv(b.cpv.both);
+    case "storiesReach": return crmNum(b.storiesReach); case "priceStories": return crmMoney(b.price.stories); case "cpvStories": return crmCpv(b.cpv.stories);
+    case "created": return `<span style="color:var(--ink-mute)">${crmDate(b.createdAt)}</span>`;
+    case "updated": return `<span style="color:var(--ink-mute)">${crmTimeAgo(b.updatedAt)}</span>`;
+  }
+  return "";
+}
+function crmFiltersActive(){ return CRM_FILTER_KEYS.filter(k=>k!=="batch_id" && CRM.f[k]).length; }
 function tplCrmBloggers(){
   if(!CRM.list && !CRM.loading && !CRM.err) setTimeout(crmLoad, 0);
-  const m = CRM.meta, L = CRM.list, f = CRM.f;
+  if(!CRM.batches){ CRM.batches = []; apiFetch("/api/crm/batches").then(x=>{ CRM.batches = x; crmRepaint(); }).catch(()=>{}); }
+  const m = CRM.meta, L = CRM.list, f = CRM.f, edit = crmCutover();
   const declineOpts = m ? Object.entries(m.decline).map(([k,v])=>`<option value="decl:${k}" ${f.status==="decl:"+k?"selected":""}>Отказ: ${escapeHtml(v)}</option>`).join("") : "";
+  const legacyOpts = [["in_work","В работе (CRM)"],["transferred","Передан в работу (CRM)"],["payment_pending","К оплате (CRM)"],["paid","Оплачено (CRM)"]].map(([k,v])=>`<option value="${k}" ${f.status===k?"selected":""}>${v}</option>`).join("");
   const mgrs = m ? Object.keys(m.managers).sort((a,b)=>a.localeCompare(b,"ru")) : [];
-  const banner = !m ? "" : crmCutover()
-    ? ""
-    : `<div class="login-hint" style="margin:0 0 12px;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;text-align:left">
-        <span>Сейчас это копия старой CRM, обновляется каждые 5 минут${m.lastPush ? " · последнее обновление " + crmTimeAgo(m.lastPush.updated_at) : " · данных из CRM ещё не было"}. Менять статусы и комментарии здесь можно будет после переезда.</span>
-        ${crmIsNina() ? `<button class="btn btn-primary btn-sm" id="crm-cutover">Перевести CRM в Barter Box</button>` : ""}
-      </div>`;
+  const banner = !m || edit ? "" : `<div class="login-hint" style="margin:0 0 12px;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;text-align:left">
+        <span>Сейчас это копия старой CRM, обновляется каждые 5 минут${m.lastPush ? " · последнее обновление " + crmTimeAgo(m.lastPush.updated_at) : " · данных из CRM ещё не было"}. Менять статусы, импортировать и добавлять можно будет после переезда.</span>
+        ${crmIsNina() ? `<button class="btn btn-primary btn-sm" id="crm-cutover">Перевести CRM в Barter Box</button>` : ""}</div>`;
   const items = (L && L.items) || [];
   const from = L ? (L.page-1)*L.limit+1 : 0, to = L ? Math.min(L.total, L.page*L.limit) : 0;
+  const cols = CRM_COLS.filter(c=>CRM.cols.has(c[0]));
+  const inp = (k, ph)=> `<input class="crm-fi" data-k="${k}" value="${escapeHtml(f[k]||"")}" placeholder="${ph}" inputmode="decimal" style="width:120px;border:1px solid var(--line-2);border-radius:8px;padding:6px 8px;background:#fff;font-size:13px">`;
+  const chk = (k, t)=> `<label style="display:inline-flex;gap:5px;align-items:center;font-size:12.5px;white-space:nowrap"><input type="checkbox" class="crm-fc" data-k="${k}" ${f[k]?"checked":""}>${t}</label>`;
+  const lbl = (t, html)=> `<label style="display:flex;flex-direction:column;gap:4px;font-size:10.5px;font-weight:700;color:var(--ink-soft);text-transform:uppercase">${t}${html}</label>`;
+  const excl = String(f.exclude_category||"").split(",").filter(Boolean);
+  const sel = CRM.sel;
+  const selItems = items.filter(b=>sel.has(b.id));
   return `
-  <div class="toolbar" style="justify-content:space-between">
-    <div><h2 style="margin:0">Блогеры</h2><div style="color:var(--ink-mute);font-size:12.5px">${m ? fmtNum(m.total) + " в базе · " + fmtNum(m.total - m.declined) + " без отказов" : "загружаю…"}</div></div>
-    ${crmCutover() ? `<button class="btn btn-primary" id="crm-new">+ Блогер</button>` : ""}
+  <div class="toolbar" style="justify-content:space-between;align-items:flex-start">
+    <div><h2 style="margin:0">Блогеры</h2><div style="color:var(--ink-mute);font-size:12.5px">${L ? fmtNum(L.total) + " по фильтру · " : ""}${m ? fmtNum(m.total) + " в базе" : "загружаю…"}</div></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+      <button class="btn btn-ghost btn-sm" id="crm-cols">Колонки</button>
+      <button class="btn btn-ghost btn-sm" id="crm-template">Шаблон</button>
+      ${crmIsLead() ? `<button class="btn btn-ghost btn-sm" id="crm-excel">Excel</button>` : ""}
+      <button class="btn btn-ghost btn-sm" id="crm-dups">Дубли</button>
+      ${edit ? `<button class="btn btn-ghost btn-sm" id="crm-import">Импорт</button><input type="file" id="crm-import-file" accept=".xlsx,.xls,.csv" style="display:none">` : ""}
+      ${edit ? `<button class="btn btn-primary btn-sm" id="crm-new">+ Добавить</button>` : ""}
+    </div>
   </div>
   ${banner}
   <div class="toolbar">
-    <input type="search" class="fill" id="crm-q" placeholder="Поиск: ник, имя, ссылка, WhatsApp, комментарий" value="${escapeHtml(f.q)}" style="min-width:300px;flex:1;max-width:420px">
+    <input type="search" class="fill" id="crm-q" placeholder="Поиск: ник, имя, ссылка, WhatsApp, комментарий" value="${escapeHtml(f.q)}" style="min-width:240px;max-width:360px">
     <select id="crm-status">
       <option value="notdeclined" ${f.status==="notdeclined"?"selected":""}>Без отказов</option>
       <option value="" ${f.status===""?"selected":""}>Все статусы</option>
       <option value="talk" ${f.status==="talk"?"selected":""}>Переговоры — все</option>
       ${m ? Object.entries(m.talk).map(([k,v])=>`<option value="${k}" ${f.status===k?"selected":""}>${escapeHtml(v)}</option>`).join("") : ""}
+      ${legacyOpts}
       <option value="declined" ${f.status==="declined"?"selected":""}>Отказы — все</option>
       ${declineOpts}
     </select>
@@ -8471,47 +8519,123 @@ function tplCrmBloggers(){
       <option value="all" ${f.who==="all"?"selected":""}>Все менеджеры</option>
       ${mgrs.map(n=>`<option value="${escapeHtml(n)}" ${f.who===n?"selected":""}>${escapeHtml(n)} · ${fmtNum(m.managers[n])}</option>`).join("")}
     </select>
+    <select id="crm-sort">${[["default","Новые цены сверху"],["created_desc","Дата добавления ↓"],["cpv_asc","CPV: дешевле"],["cpv_desc","CPV: дороже"],["reach","По охвату"],["updated","Сначала обновлённые"],["name","По нику"]].map(([v,t])=>`<option value="${v}" ${!f.col && f.sort===v?"selected":""}>${t}</option>`).join("")}${f.col ? `<option selected>По колонке</option>` : ""}</select>
+    <select id="crm-batch"><option value="">Все партии</option>${(CRM.batches||[]).map(x=>`<option value="${escapeHtml(x.id)}" ${f.batch_id===x.id?"selected":""}>${escapeHtml((x.name||"партия")+" · "+crmDate(x.createdAt)+(x.n?" · "+x.n:""))}</option>`).join("")}</select>
     <select id="crm-worked"><option value="">Работали — любой месяц</option>${crmMonths().map(([v,t])=>`<option value="${v}" ${f.worked===v?"selected":""}>Работали в ${t}</option>`).join("")}</select>
-    <select id="crm-sort"><option value="updated" ${f.sort==="updated"?"selected":""}>Сначала обновлённые</option><option value="reach" ${f.sort==="reach"?"selected":""}>По охвату</option><option value="name" ${f.sort==="name"?"selected":""}>По нику</option></select>
+    <button class="btn btn-sm ${CRM.showFilters||crmFiltersActive()?"btn-primary":"btn-ghost"}" id="crm-ftoggle">${CRM.showFilters?"▲":"▼"} Фильтры${crmFiltersActive()?" · "+crmFiltersActive():""}</button>
   </div>
+  ${CRM.showFilters ? `<div class="card" style="background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;margin-bottom:12px;display:flex;flex-direction:column;gap:10px">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+      ${lbl("Платформа", `<select class="crm-fs" data-k="platform" style="width:130px;border:1px solid var(--line-2);border-radius:8px;padding:6px 8px;background:#fff;font-size:13px"><option value="">Любая</option><option value="instagram" ${f.platform==="instagram"?"selected":""}>Только Инст</option><option value="tiktok" ${f.platform==="tiktok"?"selected":""}>Только ТТ</option><option value="both" ${f.platform==="both"?"selected":""}>Инст + ТТ</option></select>`)}
+      ${lbl("CPV от (₸)", inp("cpv_min","напр. 5"))}${lbl("CPV до (₸)", inp("cpv_max","напр. 30"))}
+      ${lbl("Охват от", inp("reach_min","напр. 20000"))}
+      ${lbl("Подписчики от", inp("followers_min","напр. 10000"))}${lbl("Подписчики до", inp("followers_max","напр. 100000"))}
+      ${lbl("Категория", `<select class="crm-fs" data-k="category" style="width:130px;border:1px solid var(--line-2);border-radius:8px;padding:6px 8px;background:#fff;font-size:13px"><option value="">Все</option>${[["blogger","Блогер"],["visazhist","Визажист"],["expert","Эксперт"]].map(([v,t])=>`<option value="${v}" ${f.category===v?"selected":""}>${t}</option>`).join("")}</select>`)}
+      ${lbl("Исключить категории", `<span style="display:flex;flex-direction:column;gap:2px;text-transform:none;font-weight:400">${[["visazhist","Визажисты"],["expert","Эксперты"]].map(([v,t])=>`<label style="display:flex;gap:5px;font-size:12.5px;color:var(--ink)"><input type="checkbox" class="crm-fx" value="${v}" ${excl.includes(v)?"checked":""}>${t}</label>`).join("")}</span>`)}
+      ${lbl("Рилс от (₸)", inp("reels_min","напр. 30000"))}${lbl("Рилс до (₸)", inp("reels_max","напр. 200000"))}
+      ${lbl("TikTok от (₸)", inp("tt_min","напр. 30000"))}${lbl("TikTok до (₸)", inp("tt_max","напр. 200000"))}
+    </div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
+      ${chk("no_price","Без цены")}${chk("no_manager","Без менеджера")}${chk("in_work","Только в работе")}${chk("exclude_in_work","Исключить в работе")}${chk("exclude_transferred","Исключить «Передано в работу»")}
+      <button class="btn btn-ghost btn-sm" id="crm-freset">Сбросить</button>
+    </div>
+  </div>` : ""}
+  ${sel.size ? `<div style="background:var(--action-soft);border:1px solid var(--line-2);border-radius:var(--radius);padding:9px 14px;margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px">
+    <b>Выбрано: ${fmtNum(sel.size)}</b>
+    <select id="crm-ptype" style="padding:4px 8px"><option value="reels">Рилс</option><option value="tiktok">TikTok</option><option value="both">Рилс+ТТ</option><option value="stories">Сторис</option></select>
+    <b id="crm-psum">Σ ${fmtNum(selItems.reduce((s,b)=>s+(b.price[CRM.ptype||"reels"]||0),0))} ₸</b>${selItems.length<sel.size?`<span style="color:var(--ink-mute);font-size:11.5px">(сумма по этой странице)</span>`:""}
+    ${crmIsLead() ? `<button class="btn btn-ghost btn-sm" id="crm-sel-excel">Excel выбранных</button>` : ""}
+    ${crmIsLead() && edit ? `<button class="btn btn-ghost btn-sm" id="crm-sel-mgr">Распределить</button><button class="btn btn-ghost btn-sm" id="crm-sel-status">Статус</button><button class="btn btn-ghost btn-sm" id="crm-sel-del" style="color:var(--bad)">Удалить</button>` : ""}
+    ${L && sel.size < L.total ? `<button class="btn btn-ghost btn-sm" id="crm-sel-all">Выбрать все ${fmtNum(L.total)}</button>` : ""}
+    <button class="btn btn-ghost btn-sm" id="crm-sel-clear">Снять выделение</button>
+  </div>` : ""}
   ${CRM.err ? `<div class="empty" style="color:var(--bad)">${escapeHtml(CRM.err)} <button class="btn btn-ghost btn-sm" id="crm-retry">Повторить</button></div>` : ""}
   <div class="table-wrap" style="${CRM.loading?"opacity:.55":""}">
     <table>
-      <thead><tr><th>Блогер</th><th>Статус</th><th>Менеджер</th><th>Подписчики</th><th>Охват reels</th><th>Цена reels</th><th>CPV</th><th>Комментарий</th><th>Обновлён</th></tr></thead>
+      <thead><tr><th style="width:28px"><input type="checkbox" id="crm-sel-page" ${items.length && items.every(b=>sel.has(b.id))?"checked":""}></th><th class="sticky-col">Блогер</th>${cols.map(([k,t])=> CRM_SORTABLE.has(k) ? `<th class="th-sort ${f.col===k?"th-sort-active":""}" data-col="${k}">${t} ${f.col===k?(f.dir==="asc"?"↑":"↓"):"↕"}</th>` : `<th>${t}</th>`).join("")}<th></th></tr></thead>
       <tbody>${items.length ? items.map(b=>`<tr class="crm-row" data-id="${escapeHtml(b.id)}" style="cursor:pointer">
-        <td><b>${escapeHtml(b.name || "—")}</b><div style="font-size:11.5px;color:var(--ink-mute)">${b.nick ? "@"+escapeHtml(b.nick) : ""}${b.tiktok ? " · TikTok" : ""}${b.exclusive ? " · эксклюзив" : ""}</div></td>
-        <td>${crmBadge(b.st)}</td>
-        <td>${escapeHtml(b.manager || "—")}</td>
-        <td>${fmtNum(b.followers)}</td>
-        <td>${fmtNum(b.reach)}</td>
-        <td>${b.price.reels ? fmtNum(b.price.reels) + " ₸" : "—"}</td>
-        <td>${b.cpv.reels != null ? b.cpv.reels : "—"}</td>
-        <td class="wrap" style="max-width:260px">${escapeHtml((b.lastComment || "").slice(0,140))}</td>
-        <td style="color:var(--ink-mute)">${crmTimeAgo(b.updatedAt)}</td>
-      </tr>`).join("") : `<tr><td colspan="9" class="empty">${CRM.loading ? "Загружаю…" : (f.who==="mine" ? "У вас пока нет блогеров с такими условиями — попробуйте «Все менеджеры»" : "Ничего не нашлось")}</td></tr>`}</tbody>
+        <td><input type="checkbox" class="crm-sel" data-id="${escapeHtml(b.id)}" ${sel.has(b.id)?"checked":""}></td>
+        <td class="sticky-col" style="background:#fff"><b>${escapeHtml(b.name || "—")}</b><div style="font-size:11.5px;color:var(--ink-mute)">${b.nick ? "@"+escapeHtml(b.nick) : ""}${b.exclusive ? " · эксклюзив" : ""}</div></td>
+        ${cols.map(([k])=>`<td${k==="comment"?' class="wrap" style="max-width:220px"':""}>${crmCell(k,b)}</td>`).join("")}
+        <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm crm-deal" data-id="${escapeHtml(b.id)}" title="Завести интеграцию">В Barter Box</button>${crmIsLead() && edit ? ` <button class="btn btn-ghost btn-sm crm-del" data-id="${escapeHtml(b.id)}" title="Удалить" style="color:var(--bad)">✕</button>` : ""}</td>
+      </tr>`).join("") : `<tr><td colspan="${cols.length+3}" class="empty">${CRM.loading ? "Загружаю…" : (f.who==="mine" ? "У вас пока нет блогеров с такими условиями — попробуйте «Все менеджеры»" : "Ничего не нашлось")}</td></tr>`}</tbody>
     </table>
   </div>
   ${L && L.total > L.limit ? `<div class="toolbar" style="justify-content:flex-end;margin-top:10px">
     <span style="color:var(--ink-mute);font-size:12.5px">${fmtNum(from)}–${fmtNum(to)} из ${fmtNum(L.total)}</span>
     <button class="btn btn-ghost btn-sm" id="crm-prev" ${L.page<=1?"disabled":""}>‹ Назад</button>
     <button class="btn btn-ghost btn-sm" id="crm-next" ${to>=L.total?"disabled":""}>Далее ›</button>
-  </div>` : (L ? `<div style="color:var(--ink-mute);font-size:12.5px;margin-top:8px">${fmtNum(L.total)} блогеров</div>` : "")}`;
+  </div>` : ""}`;
 }
 
-let crmSearchTimer = null;
+let crmSearchTimer = null, crmFilterTimer = null;
+async function crmDownload(url, fallbackName){
+  try{
+    const res = await fetch(url, {headers:{Authorization:"Bearer "+UI.authToken}});
+    if(!res.ok){ let m=""; try{ m=(await res.json()).error; }catch(e){} throw new Error(m||("Ошибка "+res.status)); }
+    const blob = await res.blob(); const cd = res.headers.get("Content-Disposition")||""; const mm = /filename\*=UTF-8''([^;]+)/.exec(cd);
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = mm ? decodeURIComponent(mm[1]) : fallbackName; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }catch(e){ toast(e.message, true); }
+}
+async function crmBulk(body, okMsg){ try{ const r = await apiFetch("/api/crm/bulk", {method:"POST", headers:jsonHeaders, body:JSON.stringify(Object.assign({ids:[...CRM.sel]}, body))}); toast(okMsg + ": " + fmtNum(r.n)); CRM.sel.clear(); CRM.meta=null; crmLoad(); }catch(e){ toast(e.message, true); } }
 function wireCrmBloggers(){
-  const set = (k,v)=>{ CRM.f[k]=v; CRM.f.page=1; crmLoad(); };
+  const reload = ()=>{ CRM.f.page=1; CRM.sel.clear(); crmLoad(); };
+  const set = (k,v)=>{ CRM.f[k]=v; reload(); };
   const q = document.getElementById("crm-q");
-  if(q){ q.oninput = ()=>{ clearTimeout(crmSearchTimer); crmSearchTimer = setTimeout(()=>{ CRM.f.q = q.value.trim(); CRM.f.page=1; crmLoad().then(()=>{ const el=document.getElementById("crm-q"); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }); }, 400); }; }
+  if(q){ q.oninput = ()=>{ clearTimeout(crmSearchTimer); crmSearchTimer = setTimeout(()=>{ CRM.f.q = q.value.trim(); reload(); setTimeout(()=>{ const el=document.getElementById("crm-q"); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 600); }, 400); }; }
   const on = (id, fn)=>{ const el=document.getElementById(id); if(el) el.onchange = ()=> fn(el.value); };
-  on("crm-status", v=>set("status", v)); on("crm-who", v=>set("who", v)); on("crm-worked", v=>set("worked", v)); on("crm-sort", v=>set("sort", v));
+  on("crm-status", v=>set("status", v)); on("crm-who", v=>set("who", v)); on("crm-worked", v=>set("worked", v)); on("crm-batch", v=>set("batch_id", v));
+  on("crm-sort", v=>{ CRM.f.col=""; set("sort", v); });
+  document.querySelectorAll("th[data-col]").forEach(th=> th.onclick = ()=>{ const k=th.dataset.col; if(CRM.f.col===k) CRM.f.dir = CRM.f.dir==="desc"?"asc":"desc"; else { CRM.f.col=k; CRM.f.dir="desc"; } reload(); });
+  const ft=document.getElementById("crm-ftoggle"); if(ft) ft.onclick = ()=>{ CRM.showFilters=!CRM.showFilters; crmRepaint(); };
+  document.querySelectorAll(".crm-fi").forEach(el=> el.oninput = ()=>{ clearTimeout(crmFilterTimer); crmFilterTimer = setTimeout(()=>{ CRM.f[el.dataset.k] = el.value.replace(/[^\d.,]/g,"").replace(",","."); const k=el.dataset.k; reload(); setTimeout(()=>{ const x=document.querySelector(`.crm-fi[data-k="${k}"]`); if(x){ x.focus(); x.setSelectionRange(x.value.length,x.value.length); } }, 600); }, 600); });
+  document.querySelectorAll(".crm-fs").forEach(el=> el.onchange = ()=> set(el.dataset.k, el.value));
+  document.querySelectorAll(".crm-fc").forEach(el=> el.onchange = ()=> set(el.dataset.k, el.checked));
+  document.querySelectorAll(".crm-fx").forEach(el=> el.onchange = ()=> set("exclude_category", [...document.querySelectorAll(".crm-fx:checked")].map(x=>x.value).join(",")));
+  const fr=document.getElementById("crm-freset"); if(fr) fr.onclick = ()=>{ for(const k of CRM_FILTER_KEYS) CRM.f[k] = typeof CRM.f[k]==="boolean" ? false : ""; reload(); };
   const prev=document.getElementById("crm-prev"), next=document.getElementById("crm-next");
   if(prev) prev.onclick = ()=>{ CRM.f.page--; crmLoad(); window.scrollTo(0,0); };
   if(next) next.onclick = ()=>{ CRM.f.page++; crmLoad(); window.scrollTo(0,0); };
   const retry=document.getElementById("crm-retry"); if(retry) retry.onclick = crmLoad;
-  document.querySelectorAll(".crm-row").forEach(tr=> tr.onclick = ()=> modalCrmBlogger(tr.dataset.id));
+  document.querySelectorAll(".crm-row").forEach(tr=> tr.onclick = (e)=>{ if(e.target.closest("input,button,a")) return; modalCrmBlogger(tr.dataset.id); });
+  document.querySelectorAll(".crm-sel").forEach(cb=> cb.onchange = ()=>{ cb.checked ? CRM.sel.add(cb.dataset.id) : CRM.sel.delete(cb.dataset.id); crmRepaint(); });
+  const sp=document.getElementById("crm-sel-page"); if(sp) sp.onchange = ()=>{ for(const b of (CRM.list?CRM.list.items:[])) sp.checked ? CRM.sel.add(b.id) : CRM.sel.delete(b.id); crmRepaint(); };
+  const sa=document.getElementById("crm-sel-all"); if(sa) sa.onclick = async ()=>{ try{ const r = await CrmApi.list(Object.assign(crmParams(), {ids_only:"1"})); r.ids.forEach(id=>CRM.sel.add(id)); crmRepaint(); }catch(e){ toast(e.message,true); } };
+  const sc=document.getElementById("crm-sel-clear"); if(sc) sc.onclick = ()=>{ CRM.sel.clear(); crmRepaint(); };
+  const pt=document.getElementById("crm-ptype"); if(pt){ pt.value = CRM.ptype||"reels"; pt.onchange = ()=>{ CRM.ptype = pt.value; crmRepaint(); }; }
+  const se=document.getElementById("crm-sel-excel"); if(se) se.onclick = ()=> crmDownload("/api/crm/export?ids=" + encodeURIComponent([...CRM.sel].join(",")), "блогеры.xlsx");
+  const sm=document.getElementById("crm-sel-mgr"); if(sm) sm.onclick = ()=>{ openModal(`<h3>Распределить ${fmtNum(CRM.sel.size)} блогеров</h3><div class="field"><label>Менеджер</label><select id="bm-m"><option value="">— никто —</option>${CRM_STAFF.map(n=>`<option>${n}</option>`).join("")}</select></div><div class="modal-actions"><button class="btn btn-ghost" id="bm-no">Отмена</button><button class="btn btn-primary" id="bm-ok">Назначить</button></div>`); document.getElementById("bm-no").onclick=closeModal; document.getElementById("bm-ok").onclick=()=>{ const v=document.getElementById("bm-m").value; closeModal(); crmBulk({action:"manager", manager:v}, "Назначено"); }; };
+  const ss=document.getElementById("crm-sel-status"); if(ss) ss.onclick = ()=>{ const m=CRM.meta; openModal(`<h3>Статус для ${fmtNum(CRM.sel.size)} блогеров</h3><div class="field"><label>Статус</label><select id="bs-s">${Object.entries(m.talk).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}${Object.entries(m.decline).map(([k,v])=>`<option value="decl:${k}">Отказ: ${v}</option>`).join("")}</select></div><div class="modal-actions"><button class="btn btn-ghost" id="bs-no">Отмена</button><button class="btn btn-primary" id="bs-ok">Поставить</button></div>`); document.getElementById("bs-no").onclick=closeModal; document.getElementById("bs-ok").onclick=()=>{ const v=document.getElementById("bs-s").value; closeModal(); crmBulk(v.startsWith("decl:")?{action:"status",status:"declined",declineReason:v.slice(5)}:{action:"status",status:v}, "Статус поставлен"); }; };
+  const sd=document.getElementById("crm-sel-del"); if(sd) sd.onclick = ()=>{ openModal(`<h3>Удалить ${fmtNum(CRM.sel.size)} блогеров?</h3><div class="login-hint" style="text-align:left">Они пропадут из списка. В базе остаётся отметка, кто и когда удалил — при необходимости можно вернуть.</div><div class="modal-actions"><button class="btn btn-ghost" id="bd-no">Отмена</button><button class="btn btn-primary" id="bd-ok" style="background:var(--bad)">Удалить</button></div>`); document.getElementById("bd-no").onclick=closeModal; document.getElementById("bd-ok").onclick=()=>{ closeModal(); crmBulk({action:"delete"}, "Удалено"); }; };
+  document.querySelectorAll(".crm-del").forEach(b=> b.onclick = (e)=>{ e.stopPropagation(); CRM.sel = new Set([b.dataset.id]); document.getElementById("crm-sel-del") ? null : null; openModal(`<h3>Удалить блогера?</h3><div class="modal-actions"><button class="btn btn-ghost" id="bd-no">Отмена</button><button class="btn btn-primary" id="bd-ok" style="background:var(--bad)">Удалить</button></div>`); document.getElementById("bd-no").onclick=()=>{ CRM.sel.clear(); closeModal(); }; document.getElementById("bd-ok").onclick=()=>{ closeModal(); crmBulk({action:"delete"}, "Удалено"); }; });
+  document.querySelectorAll(".crm-deal").forEach(b=> b.onclick = async (e)=>{ e.stopPropagation(); try{ const x = await CrmApi.get(b.dataset.id); crmOpenDeal(x); }catch(err){ toast(err.message,true); } });
+  const cb=document.getElementById("crm-cols"); if(cb) cb.onclick = ()=>{
+    openModal(`<h3>Колонки</h3><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px">${CRM_COLS.map(([k,t])=>`<label style="display:flex;gap:6px;font-size:13px"><input type="checkbox" class="cc-k" value="${k}" ${CRM.cols.has(k)?"checked":""}>${t}</label>`).join("")}</div><div class="modal-actions"><button class="btn btn-ghost" id="cc-all">Все</button><button class="btn btn-primary" id="cc-ok">Готово</button></div>`);
+    document.getElementById("cc-all").onclick = ()=> document.querySelectorAll(".cc-k").forEach(x=>x.checked=true);
+    document.getElementById("cc-ok").onclick = ()=>{ CRM.cols = new Set([...document.querySelectorAll(".cc-k:checked")].map(x=>x.value)); try{ localStorage.setItem("bb_crm_cols", JSON.stringify([...CRM.cols])); }catch(e){} closeModal(); crmRepaint(); };
+  };
+  const tb=document.getElementById("crm-template"); if(tb) tb.onclick = ()=> crmDownload("/api/crm/template", "шаблон_блогеры.xlsx");
+  const xb=document.getElementById("crm-excel"); if(xb) xb.onclick = ()=> crmDownload("/api/crm/export?" + new URLSearchParams(Object.assign(crmParams(), {page:1})).toString(), "блогеры.xlsx");
+  const db=document.getElementById("crm-dups"); if(db) db.onclick = modalCrmDups;
+  const ib=document.getElementById("crm-import"), ifile=document.getElementById("crm-import-file");
+  if(ib && ifile){ ib.onclick = ()=> ifile.click(); ifile.onchange = async ()=>{ const file = ifile.files[0]; if(!file) return; const fd = new FormData(); fd.append("file", file);
+    try{ const r = await withBusy(ib, ()=> apiFetch("/api/crm/import", {method:"POST", body:fd})); toast(`Импорт: добавлено ${r.added}, обновлено ${r.updated}${r.skipped?", пропущено "+r.skipped:""}`); CRM.meta=null; CRM.batches=null; reload(); if(r.errors && r.errors.length) openModal(`<h3>Пропущенные строки</h3><div style="font-size:12.5px">${r.errors.map(escapeHtml).join("<br>")}</div><div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Ок</button></div>`); }
+    catch(e){ toast(e.message, true); } ifile.value=""; }; }
   const nb=document.getElementById("crm-new"); if(nb) nb.onclick = modalCrmNew;
   const cut=document.getElementById("crm-cutover"); if(cut) cut.onclick = modalCrmCutover;
+}
+async function modalCrmDups(){
+  let groups; try{ groups = await apiFetch("/api/crm/duplicates"); }catch(e){ toast(e.message,true); return; }
+  openModal(`<h3>Дубли по нику · ${groups.length}</h3>${groups.length ? `<div style="max-height:60vh;overflow:auto;font-size:12.5px">${groups.map(g=>`<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>@${escapeHtml(g.nick)}</b>${g.items.map(b=>`<div style="display:flex;gap:8px;align-items:center;margin-top:4px"><a href="#" class="dup-open" data-id="${escapeHtml(b.id)}">${escapeHtml(b.name||"—")}</a> · ${crmBadge(b.st)} · ${escapeHtml(b.manager||"без менеджера")} · добавлен ${crmDate(b.createdAt)}</div>`).join("")}</div>`).join("")}</div>` : `<div class="empty">Дублей нет</div>`}<div class="modal-actions"><button class="btn btn-primary" id="dup-close">Закрыть</button></div>`);
+  const back = document.querySelector("#modal-back .modal"); if(back) back.classList.add("modal-wide");
+  document.getElementById("dup-close").onclick = closeModal;
+  document.querySelectorAll(".dup-open").forEach(a=> a.onclick = (e)=>{ e.preventDefault(); closeModal(); modalCrmBlogger(a.dataset.id); });
+}
+function crmOpenDeal(b){
+  UI.tab = "microInfluencers"; render();
+  modalMicroDeal(null, { crmBloggerId: b.id, blogerName: b.name || ("@"+b.nick), instagramAccount: b.instagram || "", tiktokAccount: b.tiktok || "", phone: b.whatsapp || "",
+    responsible: UI.actorName || b.manager || "", followers: b.followers || 0, avgReach: b.reach || 0, followersTT: b.followersTT || 0, avgReachTT: b.reachTT || 0,
+    cost: b.price.reels || 0, er: 0, conditions: b.lastComment || "" });
 }
 
 function modalCrmCutover(){
@@ -8600,12 +8724,7 @@ async function modalCrmBlogger(id){
       priceReels: v("cb-pr"), priceTiktok: v("cb-pt"), priceBoth: v("cb-pb"), priceStories: v("cb-ps"), lastComment: v("cb-comment"), notes: v("cb-notes") };
     try{ const nb = await withBusy(save, ()=> CrmApi.save(b.id, body)); toast("Сохранено"); closeModal(); done(nb); }catch(e){ toast(e.message, true); }
   };
-  document.getElementById("cb-add-deal").onclick = ()=>{
-    closeModal(); UI.tab = "microInfluencers"; render();
-    modalMicroDeal(null, { crmBloggerId: b.id, blogerName: b.name || ("@"+b.nick), instagramAccount: b.instagram || "", tiktokAccount: b.tiktok || "", phone: b.whatsapp || "",
-      responsible: UI.actorName || b.manager || "", followers: b.followers || 0, avgReach: b.reach || 0, followersTT: b.followersTT || 0, avgReachTT: b.reachTT || 0,
-      cost: b.price.reels || 0, er: 0, conditions: b.lastComment || "" });
-  };
+  document.getElementById("cb-add-deal").onclick = ()=>{ closeModal(); crmOpenDeal(b); };
   const pay = document.getElementById("cb-pay"); if(pay) pay.onclick = ()=>{ closeModal(); modalCrmPayment(b); };
 }
 
