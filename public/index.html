@@ -8230,6 +8230,14 @@ function microProblemWarning(name, exceptId){
     ${refuse?"⛔ От этого блогера отказались":"⚠ Этот блогер отмечен как проблемный"}: ${escapeHtml(o.problemReason)} ${escapeHtml(microProblemReasonLabel(o.problemReason))}${o.problemReason2?` + ${escapeHtml(o.problemReason2)}`:""} · ${escapeHtml(pb.status)}${o.problemNote?` — ${escapeHtml(o.problemNote)}`:""} (интеграция id ${o.id}, ${escapeHtml(o.responsible||"")})
   </div>`;
 }
+// Карточка интеграции (X3): что дальше и полоска шагов ТЗ → товар → видео → оплата.
+function microDealProgressHtml(d){
+  const pub = microDealPublished(d) || !!d.publishDate, tz = String(d.tz||"").trim(), got = /доставлен/i.test(String(d.productStatus||"")) || d.productDelivery==="has", paid = d.paymentStatus==="оплачено";
+  const steps = [[!!tz, tz ? "ТЗ: " + tz : "ТЗ не отмечено"], [got, got ? "Товар вручён" : "Товар в пути"], [pub, pub ? "Видео вышло" + (d.publishDate ? " " + ddmmStr(d.publishDate) : "") : (d.plannedDate ? "Выход " + ddmmStr(d.plannedDate) : "Дата выхода не стоит")], [paid, paid ? "Оплачено" : (d.paymentStatus==="к оплате" ? "Подано на оплату" : "Оплата не подана")]];
+  const next = !tz ? "Отметить, какое ТЗ ушло блогеру — без этого не посчитать CPV по ТЗ" : !pub && d.plannedDate && d.plannedDate < todayStr() ? "Дата выхода прошла — вставьте ссылку или перенесите дату" : !pub ? "Ждём видео" + (d.agreedDate ? " к " + ddmmStr(d.agreedDate) : "") : (Number(d.cost)||0) > 0 && d.paymentStatus==="не оплачено" ? "Видео вышло — подайте на оплату" : !d.reelsLink && !d.tiktokVideoLink && !(Number(d.factReachStories)>0) ? "Вставьте ссылку на вышедшее видео" : "Всё сделано";
+  return `<div style="margin:10px 0 4px;background:#fff;border:1px solid #F3DDE7;border-radius:12px;padding:10px 14px"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline"><div><span class="pv-lbl">Что дальше</span> <b style="margin-left:6px">${escapeHtml(next)}</b></div><span class="mut" style="font-size:12px">${escapeHtml(microFormatOf(d))} · ведёт ${escapeHtml(d.responsible||"—")}${d.city?" · "+escapeHtml(d.city):""}${d.cost?" · "+fmtNum(d.cost)+" ₸":""}</span></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${steps.map(([ok,t])=>`<span class="pv-st ${ok?"s-ok":"s-m"}">${ok?"✓ ":""}${escapeHtml(t)}</span>`).join("")}</div></div>`;
+}
 function modalMicroDeal(existing, prefill){
   const isEdit = !!existing;
   let flowGoodsDirty = false;
@@ -8246,87 +8254,165 @@ function modalMicroDeal(existing, prefill){
     reelsLink:"", factReachReels:0, tiktokVideoLink:"", factReachTT:0,
     plannedDate:"", publishDate:"", notes:"",
   }, prefill||{});
+  // Форма интеграции по прототипу (X4/X3, 22.11.2026): 7 шагов слева, справа — «Заполнится само».
+  // Все прежние поля на месте (id те же): профиль — в «изменить в профиле», ручные статусы и охваты — в «Поправить вручную».
+  const fmtSet = (()=>{ const f = microFormatOf(d); return new Set([/Reels/.test(f)?"reels":"", /TikTok/.test(f)?"tt":"", /Сторис/.test(f)?"st":""].filter(Boolean)); })();
+  const bcList = String(d.barcode||"").split(/[,;\s]+/).map(c=>c.trim()).filter(Boolean);
+  const skuName = code=> (microSkuAll().find(x=>x.code===code)||{}).name || "";
+  const coop = microCoopTypeOf(d) || (isEdit ? "" : "Платная интеграция");
+  const pm = d.paymentMethod || "";
+  const deliv = d.productDelivery || "ship";
+  const tzMode = !String(d.tz||"").trim() ? "later" : d.tz==="Свой формат" ? "own" : d.tz==="Персональное" ? "pers" : "base";
+  const sec = (n, t, body)=> `<section style="display:grid;grid-template-columns:120px minmax(0,1fr);gap:14px;padding:14px 0;border-top:1px solid #F8E9EF"><div><div style="font-size:11px;font-weight:800;color:#C2306F">${n}</div><div style="font-weight:800;margin-top:2px">${t}</div></div><div style="display:flex;flex-direction:column;gap:10px;min-width:0">${body}</div></section>`;
+  const lab = (t, html, extra)=> `<label style="display:flex;flex-direction:column;gap:5px;min-width:0"><span class="pv-lbl" style="text-transform:none;font-size:11.5px;letter-spacing:0">${t}</span>${html}${extra?`<span class="mut" style="font-size:11px">${extra}</span>`:""}</label>`;
+  const chip = (cls, val, t, on)=> `<button type="button" class="pv-chip ${cls} ${on?"on":""}" data-v="${escapeHtml(val)}">${t}</button>`;
+  const pill = (t, v, hint)=> `<div style="padding:8px 0;border-top:1px solid #F3DDE7"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><b style="font-size:12.5px">${t}</b><span class="pv-st s-m" style="height:20px">${escapeHtml(v||"—")}</span></div><div class="mut" style="font-size:11.5px;margin-top:2px">${hint}</div></div>`;
+  const inpS = 'class="pv-inp" style="width:100%"';
   openModal(`
-    <h3>${isEdit?'Изменить':'Новая'} интеграция · Инфлюенс микро/средние</h3>
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) 270px;gap:22px">
+    <div style="min-width:0">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding-bottom:6px">
+      <h3 style="margin:0;font-size:18px;font-weight:800">${isEdit ? escapeHtml(deskNick(d)) + ` <span class="mut" style="font-size:12.5px;font-weight:600">· ${escapeHtml(d.product||"товар не выбран")}</span>` : "Новая интеграция"}</h3>
+      <div style="display:flex;gap:6px;flex-wrap:wrap" id="mm-coop-chips">${MICRO_COOP_TYPES.map(c=> chip("mm-coop", c, c.replace("Платная интеграция","Платная"), c===coop)).join("")}</div>
+      <input type="hidden" id="mm-coop-type" value="${escapeHtml(coop)}">
+    </div>
+    <div class="mut" style="font-size:11.5px;text-align:right;margin-top:-2px">«Доп. видео» — отдельная интеграция того же блогера; в сводке блогер считается один раз</div>
     <div id="mm-problem-warn">${microProblemWarning(d.blogerName, isEdit ? existing.id : null)}</div>
-    <div id="mm-history">${microBloggerHistoryHtml(d.blogerName, isEdit ? existing.id : null)}</div>
     <div id="mm-ip-banner">${microIpBannerHtml(d)}</div>
-    ${microIpDocsHtml(d, isEdit)}
+    ${isEdit ? microDealProgressHtml(d) : ""}
     ${isEdit ? videoStageBlock(existing) : ""}
-    <div class="form-row">
-      <div class="field"><label>Блогер</label><input id="mm-name" list="mm-blogger-list" autocomplete="off" placeholder="Начните вводить — выберите из базы или новый" value="${escapeHtml(d.blogerName)}"><datalist id="mm-blogger-list">${microKnownBloggers().map(b=>`<option value="${escapeHtml(b.name)}">${escapeHtml(b.name)} · интеграций: ${b.n}</option>`).join("")}</datalist></div>
-      <div class="field"><label>Тип сотрудничества</label><select id="mm-coop-type"><option value="">—</option>${MICRO_COOP_TYPES.map(c=>`<option ${c===microCoopTypeOf(d)?'selected':''}>${c}</option>`).join("")}</select></div>
-      <div class="field"><label>Категория блогера</label><select id="mm-blogger-category"><option value="">—</option>${MICRO_BLOGGER_CATEGORIES.map(c=>`<option ${d.bloggerCategory && c===normalizeBloggerCategory(d.bloggerCategory)?'selected':''}>${c}</option>`).join("")}</select></div>
-      <div class="field"><label>Ответственный</label><select id="mm-responsible"><option value="">—</option>${microManagerNames(d.responsible).map(n=>`<option ${n===d.responsible?'selected':''}>${escapeHtml(n)}</option>`).join("")}</select></div>
-      <div class="field"><label>Телефон</label><input id="mm-phone" value="${escapeHtml(d.phone||'')}"></div>
-      <div class="field"><label>Город</label><input id="mm-city" value="${escapeHtml(d.city||'')}"></div>
-      <div class="field"><label>Адрес</label><input id="mm-address" value="${escapeHtml(d.address||'')}"></div>
-    </div>
-    <div class="form-row">
-      <div class="field"><label>Instagram (ссылка/логин)</label><input id="mm-ig" value="${escapeHtml(d.instagramAccount||'')}"></div>
-      <div class="field"><label>Подписчики IG</label><input id="mm-followers" type="number" value="${d.followers||0}"></div>
-      <div class="field"><label>ER IG, %</label><input id="mm-er" type="number" step="0.1" value="${d.er||0}"></div>
-      <div class="field"><label>Ср. охваты IG</label><input id="mm-avg-reach" type="number" value="${d.avgReach||0}"></div>
-    </div>
-    <div class="form-row">
-      <div class="field"><label>TikTok (ссылка/логин)</label><input id="mm-tt" value="${escapeHtml(d.tiktokAccount||'')}"></div>
-      <div class="field"><label>Подписчики TT</label><input id="mm-followers-tt" type="number" value="${d.followersTT||0}"></div>
-      <div class="field"><label>ER TT, %</label><input id="mm-er-tt" type="number" step="0.1" value="${d.erTT||0}"></div>
-      <div class="field"><label>Ср. охваты TT</label><input id="mm-avg-reach-tt" type="number" value="${d.avgReachTT||0}"></div>
-    </div>
-    <div class="form-row">
-      <div class="field"><label>Сумма, ₸</label><input id="mm-cost" type="number" value="${d.cost||0}"></div>
-      <div class="field"><label>Стоимость товара, ₸</label><input id="mm-product-cost" type="number" value="${d.productCost||0}"></div>
-      <div class="field"><label>Статус оплаты</label><select id="mm-payment-status">${MICRO_PAYMENT_STATUSES.map(st=>`<option ${st===d.paymentStatus?'selected':''}>${st}</option>`).join("")}</select></div>
-      <div class="field"><label>Способ оплаты</label><select id="mm-payment-method"><option value="">—</option>${MICRO_PAYMENT_METHODS.concat(d.paymentMethod && !MICRO_PAYMENT_METHODS.includes(d.paymentMethod) ? [d.paymentMethod] : []).map(x=>`<option ${x===d.paymentMethod?'selected':''}>${escapeHtml(x)}</option>`).join("")}</select></div>
-      <div class="field"><label>ИИН</label><input id="mm-iin" value="${escapeHtml(d.iin||'')}"></div>
-    </div>
-    <div class="login-hint">Стоимость товара — себестоимость подарённого бартером товара; учитывается в расходах, CPV и ROMI вместе с суммой оплаты.</div>
-    ${microPayHtml(d, isEdit)}
-    ${(DataManager.state.automationFlow?.catalog||[]).length ? `<div class="field"><label>Выбрать товары и рассчитать себестоимость</label><div id="mm-flow-goods"></div><div class="login-hint">Это выбор товаров, без заявки и доставки. Отправка оформляется отдельно; координатор — Сая. Для нескольких видео общий расход не копируйте в каждую строку.</div></div>` : ""}
-
-    <div class="field"><label>Условия</label><input id="mm-conditions" value="${escapeHtml(d.conditions||'')}"></div>
-    <div class="form-row">
-      <div class="field"><label>Товар</label><input id="mm-product" list="product-suggestions" placeholder="Название товара как в 1С" value="${escapeHtml(d.product||'')}"></div>
-      <div class="field"><label>Штрихкод (ШК) товара</label><input id="mm-barcode" placeholder="необязательно, но надёжнее" value="${escapeHtml(d.barcode||'')}"></div>
-      <div class="field"><label>Подобрать товар (добавит ШК)</label><input id="mm-sku-pick" list="mm-sku-pick-list" placeholder="начните: флюид, праймер, салфетки…"><datalist id="mm-sku-pick-list">${microSkuAll().map(x=>`<option value="${escapeHtml(x.name+" — "+x.code)}"></option>`).join("")}</datalist></div>
-      <div class="field"><label>Категория товара <span style="font-weight:400;color:var(--ink-mute);font-size:11px">— сама по товару/ШК</span></label><input id="mm-product-category" placeholder="${escapeHtml(productCategoryOf(Object.assign({}, d, {productCategory:""})) === "Не указана" ? "не определилась — впишите" : "определилась: " + productCategoryOf(Object.assign({}, d, {productCategory:""})))}" title="Заполнять не нужно: категория для дашборда берётся по ШК и названию товара. Впишите, только если она не определилась." value="${escapeHtml(d.productCategory||'')}"></div>
-      <div class="field"><label>Статус товара</label><select id="mm-product-status">${MICRO_PRODUCT_STATUSES.map(st=>`<option ${st===d.productStatus?'selected':''}>${st}</option>`).join("")}</select></div>
-    </div>
-    <div class="form-row">
-      <div class="field"><label>Статус видео</label><select id="mm-video-status">${MICRO_VIDEO_STATUSES.map(st=>`<option ${st===d.videoStatus?'selected':''}>${st}</option>`).join("")}</select></div>
-      <div class="field"><label>Язык видео</label><select id="mm-video-lang"><option value="">— не указан —</option>${MICRO_VIDEO_LANGS.map(st=>`<option ${st===microVideoLang(d)?'selected':''}>${st}</option>`).join("")}</select></div>
-    </div>
-    <datalist id="product-suggestions">${knownProductNames().map(p=>`<option value="${escapeHtml(p)}">`).join("")}</datalist>
-    <div class="login-hint">Если укажешь ШК — вклад в продажи и ROMI будут считаться по нему (надёжнее, чем по названию товара).</div>
-    <div class="form-row">
-      <div class="field"><label>Формат</label><select id="mm-format">${MICRO_FORMATS.map(f=>`<option ${microFormatOf(d)===f?'selected':''}>${f}</option>`).join("")}</select></div>
-      <div class="field"><label>Охват сторис (вручную)</label><input id="mm-stories-reach" type="number" value="${d.factReachStories||0}"></div>
-      <div class="field"><label>Клики сторис</label><input id="mm-stories-clicks" type="number" value="${d.storiesClicks||0}"></div>
-      <div class="field"><label>Ссылка на сторис (Google Диск)</label><input id="mm-stories-link" placeholder="https://drive.google.com/..." value="${escapeHtml(d.storiesLink||'')}"></div>
-    </div>
-    <div class="form-row">
-      <div class="field"><label>Ссылка на Reels</label><input id="mm-reels-link" value="${escapeHtml(d.reelsLink||'')}"></div>
-      <div class="field"><label>Факт.охват Reels</label><input id="mm-fact-reach-reels" type="number" value="${d.factReachReels||0}"></div>
-      <div class="field"><label>Ссылка на видео TikTok</label><input id="mm-tt-link" value="${escapeHtml(d.tiktokVideoLink||'')}"></div>
-      <div class="field"><label>Факт.охват TikTok</label><input id="mm-fact-reach-tt" type="number" value="${d.factReachTT||0}"></div>
-    </div>
-    <div class="form-row">
-      ${d.id && DataManager.state.automationFlow ? `<div class="field"><a class="btn btn-ghost btn-sm" href="/flow/?lifecycle=${encodeURIComponent(d.id)}" target="_blank" rel="noopener">Доставка и сроки +2 / +4 ↗</a></div>` : ""}
-      <div class="field"><label>Договорились — блогер присылает видео</label><input id="mm-agreed-date" type="date" value="${d.agreedDate||''}"></div>
-      <div class="field"><label>Плановая дата публикации — выйдет</label><input id="mm-planned-date" type="date" value="${d.plannedDate||''}"><div style="font-size:11px;color:var(--ink-mute);margin-top:3px">ставится сама: +2 дня от договорённости</div></div>
-      <div class="field"><label>Дата выкладки (факт)</label><input id="mm-publish-date" type="date" value="${d.publishDate||''}"></div>
-    </div>
-    <div class="login-hint">Плановая дата — чтобы интеграция сразу попала в нужный месяц фильтра/графика, даже если видео ещё не вышло. Как только появится факт-дата выкладки — используется она.</div>
-    <div class="field"><label>Комментарий</label><textarea id="mm-notes">${escapeHtml(d.notes||"")}</textarea></div>
-    <label class="login-hint"${DataManager.state.automationFlow?'':' style="display:none"'}><input id="mm-brief-auto-send" type="checkbox" ${d.flowBriefAutoSend?'checked':''}> Разрешаю автоматически отправить утверждённое ТЗ в WhatsApp на проверенный телефон этой интеграции</label>
-    ${isEdit&&!UI.readOnly&&!microDealPublished(d)?`<div class="login-hint" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button type="button" class="btn btn-ghost btn-sm" id="mm-remind-now">📨 Напомнить блогеру в WhatsApp, что ждём видео</button><span id="mm-remind-msg" style="font-size:12px;color:var(--ink-mute)">${d.coordLastOutDay?'Последнее сообщение блогеру: '+escapeHtml(d.coordLastOutDay):'Автонапоминаний нет — только по кнопке'}</span></div>`:''}
-    <div class="modal-actions">
-      ${isEdit&&DataManager.state.automationFlow?'<button class="btn btn-ghost" id="mm-blogery-request">ТЗ → Blogery Audit</button>':''}
-      <button class="btn btn-ghost" id="mm-cancel">Отмена</button>
+    ${sec(1, "Блогер", `
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 180px;gap:12px;align-items:end">
+        ${lab("Ник или имя", `<input id="mm-name" class="pv-inp" list="mm-blogger-list" autocomplete="off" placeholder="@ник — выберите из базы или новый" value="${escapeHtml(d.blogerName)}"><datalist id="mm-blogger-list">${microKnownBloggers().map(b=>`<option value="${escapeHtml(b.name)}">${escapeHtml(b.name)} · интеграций: ${b.n}</option>`).join("")}</datalist>`)}
+        ${lab("Ведёт", `<select id="mm-responsible" class="pv-inp"><option value="">—</option>${microManagerNames(d.responsible).map(n=>`<option ${n===d.responsible?'selected':''}>${escapeHtml(n)}</option>`).join("")}</select>`)}
+      </div>
+      <div id="mm-prof-strip" style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;font-size:12.5px;background:#FFF9FB;border:1px solid #F3DDE7;border-radius:10px;padding:9px 12px"></div>
+      <details id="mm-prof" style="border:1px solid #F3DDE7;border-radius:10px;padding:8px 12px"><summary style="cursor:pointer;font-weight:700;color:#C2306F;font-size:12.5px">Профиль и контакты блогера</summary>
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:10px">
+          ${lab("Instagram", `<input id="mm-ig" ${inpS} value="${escapeHtml(d.instagramAccount||'')}">`)}${lab("Подписчики IG", `<input id="mm-followers" type="number" ${inpS} value="${d.followers||0}">`)}${lab("ER IG, %", `<input id="mm-er" type="number" step="0.1" ${inpS} value="${d.er||0}">`)}${lab("Ср. охват IG", `<input id="mm-avg-reach" type="number" ${inpS} value="${d.avgReach||0}">`)}
+          ${lab("TikTok", `<input id="mm-tt" ${inpS} value="${escapeHtml(d.tiktokAccount||'')}">`)}${lab("Подписчики TT", `<input id="mm-followers-tt" type="number" ${inpS} value="${d.followersTT||0}">`)}${lab("ER TT, %", `<input id="mm-er-tt" type="number" step="0.1" ${inpS} value="${d.erTT||0}">`)}${lab("Ср. охват TT", `<input id="mm-avg-reach-tt" type="number" ${inpS} value="${d.avgReachTT||0}">`)}
+          ${lab("Телефон (WhatsApp)", `<input id="mm-phone" ${inpS} value="${escapeHtml(d.phone||'')}">`)}${lab("Город", `<input id="mm-city" ${inpS} value="${escapeHtml(d.city||'')}">`)}${lab("Адрес", `<input id="mm-address" ${inpS} value="${escapeHtml(d.address||'')}">`)}${lab("ИИН", `<input id="mm-iin" ${inpS} value="${escapeHtml(d.iin||'')}">`)}
+          ${lab("Категория блогера", `<select id="mm-blogger-category" ${inpS}><option value="">—</option>${MICRO_BLOGGER_CATEGORIES.map(c=>`<option ${d.bloggerCategory && c===normalizeBloggerCategory(d.bloggerCategory)?'selected':''}>${c}</option>`).join("")}</select>`)}
+        </div></details>
+      <div id="mm-history">${microBloggerHistoryHtml(d.blogerName, isEdit ? existing.id : null)}</div>`)}
+    ${sec(2, "Что снимает", `
+      <div style="display:grid;grid-template-columns:minmax(0,2fr) 100px minmax(0,1fr);gap:12px;align-items:end">
+        ${lab("Что входит — любые сочетания", `<div style="display:flex;gap:6px;flex-wrap:wrap">${chip("mm-fmt","reels","Reels",fmtSet.has("reels"))}${chip("mm-fmt","tt","TikTok",fmtSet.has("tt"))}${chip("mm-fmt","st","Сторис",fmtSet.has("st"))}</div><input type="hidden" id="mm-format" value="${escapeHtml(microFormatOf(d))}">`)}
+        ${lab("Сторис, шт", `<input id="mm-stories-count" type="number" min="0" class="pv-inp" value="${d.storiesCount||""}">`)}
+        ${lab("Язык видео", `<select id="mm-video-lang" class="pv-inp"><option value="">— не указан —</option>${MICRO_VIDEO_LANGS.map(st=>`<option value="${st}" ${st===microVideoLang(d)?'selected':''}>${({ru:"Русский",kz:"Казахский"})[st]||"Под музыку"}</option>`).join("")}</select>`)}
+      </div>`)}
+    ${sec(3, "Товар", `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div style="display:flex;flex-direction:column;gap:8px"><span class="pv-lbl" style="text-transform:none;font-size:11.5px;letter-spacing:0">Что рекламирует в видео — для вклада в продажи</span>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span id="mm-bc-chips" style="display:contents"></span><input id="mm-sku-pick" class="pv-inp" list="mm-sku-pick-list" placeholder="+ товар по названию или ШК" style="height:28px;width:220px"><datalist id="mm-sku-pick-list">${microSkuAll().map(x=>`<option value="${escapeHtml(x.name+" — "+x.code)}"></option>`).join("")}</datalist></div>
+          <input type="hidden" id="mm-barcode" value="${escapeHtml(d.barcode||'')}">
+          ${lab("Название в отчётах", `<input id="mm-product" list="product-suggestions" class="pv-inp" placeholder="подставится по ШК" value="${escapeHtml(d.product||'')}"><datalist id="product-suggestions">${knownProductNames().map(p=>`<option value="${escapeHtml(p)}">`).join("")}</datalist>`)}
+          <span class="mut" style="font-size:11px">Обычно один. Продажи и ROMI считаются только по этим ШК. Нет в списке — <a href="#" onclick="closeModal();UI.tab='crmProducts';render();return false" style="font-weight:700">добавить в «Товары»</a></span></div>
+        <div style="display:flex;flex-direction:column;gap:8px"><span class="pv-lbl" style="text-transform:none;font-size:11.5px;letter-spacing:0">Что получает блогер</span>
+          ${(DataManager.state.automationFlow?.catalog||[]).length ? `<div id="mm-flow-goods"></div>` : ""}
+          ${lab("Себестоимость товара, ₸", `<input id="mm-product-cost" type="number" class="pv-inp" value="${d.productCost||0}">`, "весь набор; идёт в расходы, CPV и ROMI вместе с суммой")}
+          <span class="mut" style="font-size:11px">Можно отправить набор, даже если снимает про один товар.</span></div>
+      </div>
+      ${lab("Как блогер получит товар", `<div style="display:flex;gap:6px;flex-wrap:wrap">${chip("mm-dlv","ship","Отправим",deliv==="ship")}${chip("mm-dlv","kaspi","Самовыкуп Kaspi",deliv==="kaspi")}${chip("mm-dlv","has","Уже есть у блогера",deliv==="has")}</div><input type="hidden" id="mm-delivery" value="${escapeHtml(deliv)}">`)}
+      <div id="mm-dlv-note" style="font-size:12px"></div>`)}
+    ${sec(4, "Деньги", `
+      <div style="display:grid;grid-template-columns:150px minmax(0,1.3fr) minmax(0,1fr);gap:12px;align-items:end">
+        ${lab("Сумма, ₸", `<input id="mm-cost" type="number" class="pv-inp" value="${d.cost||0}">`)}
+        ${lab("Как платим", `<div style="display:flex;gap:6px;flex-wrap:wrap">${chip("mm-pm","Наличные","ИИН / Kaspi",/налич/i.test(pm))}${chip("mm-pm","ИП","ИП",/^ип/i.test(pm))}</div><input type="hidden" id="mm-payment-method" value="${escapeHtml(pm)}">`)}
+        ${lab("Когда", `<select id="mm-pay-terms" class="pv-inp">${["100% после выхода","50% до / 50% после","100% до выхода"].concat(d.payTerms && !["100% после выхода","50% до / 50% после","100% до выхода"].includes(d.payTerms) ? [d.payTerms] : []).map(x=>`<option ${x===(d.payTerms||"100% после выхода")?"selected":""}>${escapeHtml(x)}</option>`).join("")}</select>`)}
+      </div>
+      ${microIpDocsHtml(d, isEdit)}
+      ${isEdit ? microPayHtml(d, isEdit) : ""}`)}
+    ${sec(5, "Сроки", `
+      <div class="mut" style="font-size:12px">Несколько видео или блогеров сразу — кнопка «Импорт» над таблицей интеграций</div>
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:end">
+        ${lab("Договорились на — блогер пришлёт видео", `<input id="mm-agreed-date" type="date" class="pv-inp" value="${d.agreedDate||''}">`, "дата, которую назвал блогер")}
+        ${lab("Выйдет", `<input id="mm-planned-date" type="date" class="pv-inp" style="background:#FBF5F8" value="${d.plannedDate||''}">`, "само: +2 дня на согласование, можно поменять")}
+        <div class="mut" id="mm-dates-hint" style="font-size:12px;padding-bottom:6px"></div>
+      </div>`)}
+    ${sec(6, "ТЗ", `
+      <div style="border:1px solid #F3DDE7;border-radius:10px;overflow:hidden">
+        ${[["later","Решим позже","по умолчанию — спросим на Рабочем столе, когда отправите"],["base","Базовое",`<span id="mm-tz-wrap">${microTzCell(Object.assign({}, d, {id:"mm"})).replace('class="micro-tz-select"','id="mm-tz" class="pv-inp"')}</span> — из «Базы ТЗ»`],["pers","Персональное", isEdit && DataManager.state.automationFlow ? "запрос в Blogery Audit — кнопка «ТЗ → Blogery Audit» внизу" : "после сохранения — запрос в Blogery Audit, тимлид подтверждает"],["own","Свой формат","своим стилем или по референсу"]].map(([v,t,h],i)=>`<label style="display:grid;grid-template-columns:18px 120px minmax(0,1fr);gap:10px;align-items:center;padding:8px 12px;${i?"border-top:1px solid #F8E9EF;":""}background:${tzMode===v?"#FFF4F9":"#fff"}"><input type="radio" name="mm-tzmode" value="${v}" ${tzMode===v?"checked":""}><b>${t}</b><span class="mut">${h}</span></label>`).join("")}
+      </div>`)}
+    ${sec(7, "Комментарий", `<textarea id="mm-notes" rows="2" class="pv-inp" style="height:auto;padding:8px 10px;width:100%" placeholder="Что важно — например «только казахский, без цены в кадре»">${escapeHtml(d.notes||"")}</textarea>`)}
+    ${isEdit ? sec(8, "Вышло — ссылки", `
+      <div class="mut" style="font-size:12px">По ссылке статус станет «опубликовано», дата выкладки — сегодня (можно поправить)</div>
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">
+        ${lab("Reels", `<input id="mm-reels-link" class="pv-inp" placeholder="https://instagram.com/reel/…" value="${escapeHtml(d.reelsLink||'')}">`)}
+        ${lab("TikTok", `<input id="mm-tt-link" class="pv-inp" placeholder="https://tiktok.com/…" value="${escapeHtml(d.tiktokVideoLink||'')}">`)}
+        ${lab("Сторис — папка / файлы", `<input id="mm-stories-link" class="pv-inp" placeholder="https://drive.google.com/…" value="${escapeHtml(d.storiesLink||'')}">`)}
+        ${lab("Дата выкладки", `<input id="mm-publish-date" type="date" class="pv-inp" value="${d.publishDate||''}">`)}
+        ${lab("Сторис: просмотры", `<input id="mm-stories-reach" type="number" class="pv-inp" value="${d.factReachStories||0}">`)}
+        ${lab("Сторис: клики по ссылке", `<input id="mm-stories-clicks" type="number" class="pv-inp" value="${d.storiesClicks||0}">`)}
+      </div>
+      ${!UI.readOnly&&!microDealPublished(d)?`<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button type="button" class="btn btn-sm" id="mm-remind-now">Напомнить в WhatsApp, что ждём видео</button><span id="mm-remind-msg" class="mut" style="font-size:12px">${d.coordLastOutDay?'Последнее напоминание: '+escapeHtml(d.coordLastOutDay):'Автонапоминаний нет — только по кнопке'}</span></div>`:""}`)
+    : `<input type="hidden" id="mm-reels-link" value=""><input type="hidden" id="mm-tt-link" value=""><input type="hidden" id="mm-stories-link" value=""><input type="hidden" id="mm-publish-date" value=""><input type="hidden" id="mm-stories-reach" value="0"><input type="hidden" id="mm-stories-clicks" value="0">`}
+    <div class="modal-actions" style="border-top:1px solid #F8E9EF;padding-top:14px;margin-top:0">
+      ${isEdit&&DataManager.state.automationFlow?'<button class="btn" id="mm-blogery-request">ТЗ → Blogery Audit</button>':''}
+      <button class="btn" id="mm-cancel">${isEdit?"Закрыть":"Отмена"}</button>
       <button class="btn btn-primary" id="mm-save">${isEdit?'Сохранить':'Добавить'}</button>
     </div>
+    </div>
+    <aside style="background:#FDF6F9;border:1px solid #F3DDE7;border-radius:12px;padding:14px 16px;align-self:start;position:sticky;top:0">
+      <b style="font-size:13px">Заполнится само — вводить не нужно</b>
+      ${pill("Статус товара", d.productStatus || "новая", "из доставок: заказан → доставлено. Вручную — только самовыкуп")}
+      ${pill("Проблема", d.problemStatus || "—", "молчит после напоминания, дата прошла, оплачено а видео нет — подскажет Рабочий стол")}
+      ${pill("Статус видео", d.videoStatus || "ждём", "вставили ссылку → «опубликовано»")}
+      ${pill("Дата выкладки", d.publishDate ? ddmmStr(d.publishDate) : "—", "ставится в день, когда добавили ссылку")}
+      ${pill("Статус оплаты", d.paymentStatus || "не подано", "из «Оплат»: к оплате → оплачено")}
+      ${pill("Факт. охваты", microDealFactReach(d) ? fmtNum(microDealFactReach(d)) : "—", "собираются по ссылкам, руками не вводятся")}
+      ${pill("Категория товара", productCategoryOf(d) === "Не указана" ? "—" : productCategoryOf(d), "по ШК")}
+      ${pill("ИИН / реквизиты", (d.iin || (d.ipRequisites && d.ipRequisites.iin)) ? "есть" : "нет", "из профиля блогера или из переписки")}
+      <details style="margin-top:10px;border-top:1px solid #F3DDE7;padding-top:8px"><summary style="cursor:pointer;font-size:12px;font-weight:700;color:#C2306F">Поправить вручную</summary>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+          ${lab("Статус товара", `<select id="mm-product-status" ${inpS}>${MICRO_PRODUCT_STATUSES.map(st=>`<option ${st===d.productStatus?'selected':''}>${st}</option>`).join("")}</select>`)}
+          ${lab("Статус видео", `<select id="mm-video-status" ${inpS}>${MICRO_VIDEO_STATUSES.map(st=>`<option ${st===d.videoStatus?'selected':''}>${st}</option>`).join("")}</select>`)}
+          ${lab("Статус оплаты", `<select id="mm-payment-status" ${inpS}>${MICRO_PAYMENT_STATUSES.map(st=>`<option ${st===d.paymentStatus?'selected':''}>${st}</option>`).join("")}</select>`)}
+          ${lab("Категория товара", `<input id="mm-product-category" ${inpS} placeholder="сама по ШК" value="${escapeHtml(d.productCategory||'')}">`)}
+          ${lab("Факт. охват Reels", `<input id="mm-fact-reach-reels" type="number" ${inpS} value="${d.factReachReels||0}">`)}
+          ${lab("Факт. охват TikTok", `<input id="mm-fact-reach-tt" type="number" ${inpS} value="${d.factReachTT||0}">`)}
+          ${lab("Условия (старое поле)", `<input id="mm-conditions" ${inpS} value="${escapeHtml(d.conditions||'')}">`)}
+          <label style="display:flex;gap:6px;font-size:11.5px;align-items:flex-start${DataManager.state.automationFlow?'':';display:none'}"><input id="mm-brief-auto-send" type="checkbox" ${d.flowBriefAutoSend?'checked':''}> Отправить утверждённое ТЗ в WhatsApp само</label>
+        </div></details>
+    </aside>
+    </div>
   `);
+  { const ms = document.querySelectorAll(".modal-back .modal"), m = ms[ms.length-1]; if(m){ m.classList.add("modal-wide"); m.style.setProperty("max-width","1200px","important"); m.style.width="min(1200px,96vw)"; } }
+  // Чипы: тип сотрудничества, формат, доставка, способ оплаты
+  const chipGroup = (cls, onPick)=> document.querySelectorAll("."+cls).forEach(b=> b.onclick = ()=>{ document.querySelectorAll("."+cls).forEach(x=> x.classList.toggle("on", x===b)); onPick(b.dataset.v); });
+  chipGroup("mm-coop", v=> document.getElementById("mm-coop-type").value = v);
+  chipGroup("mm-pm", v=>{ const el = document.getElementById("mm-payment-method"); el.value = v; el.dispatchEvent(new Event("change")); });
+  const dlvNote = ()=>{ const v = document.getElementById("mm-delivery").value, pc = Number(document.getElementById("mm-product-cost").value)||0, city = document.getElementById("mm-city").value.trim();
+    document.getElementById("mm-dlv-note").innerHTML = v==="ship" ? `<div style="background:#FFF4F9;border:1px solid #F3DDE7;border-radius:10px;padding:8px 12px"><b>Отправим:</b> блогеру не возмещаем. В расходы — себестоимость ${fmtNum(pc)} ₸ (весь набор)${city?` + доставка в ${escapeHtml(city)}`:" + доставка"} — подтянется от логиста после отправки.</div>`
+      : v==="kaspi" ? `<div style="background:#fff;border:1px dashed #EBCFDC;border-radius:10px;padding:8px 12px"><b>Самовыкуп Kaspi:</b> блогер покупает сам, возмещаем цену Kaspi <input id="mm-kaspi-price" type="number" class="pv-inp" style="height:26px;width:100px" value="${d.kaspiPrice||""}"> ₸ — пойдёт в стоимость товара.</div>`
+      : `<div class="pv-note">Товар уже есть у блогера — стоимость товара 0, доставки нет.</div>`;
+    const kp = document.getElementById("mm-kaspi-price"); if(kp) kp.oninput = ()=>{ document.getElementById("mm-product-cost").value = Number(kp.value)||0; }; };
+  chipGroup("mm-dlv", v=>{ document.getElementById("mm-delivery").value = v; if(v==="has") document.getElementById("mm-product-cost").value = 0; dlvNote(); });
+  document.getElementById("mm-product-cost").addEventListener("input", dlvNote); dlvNote();
+  document.querySelectorAll(".mm-fmt").forEach(b=> b.onclick = ()=>{ b.classList.toggle("on"); const on = v=> document.querySelector(`.mm-fmt[data-v="${v}"]`).classList.contains("on");
+    const r = on("reels"), t = on("tt"), s = on("st");
+    document.getElementById("mm-format").value = s && !r && !t ? "Сторис" : s && r && !t ? "Reels + Сторис" : s ? "Сторис + Reels + TikTok" : "Reels + TikTok"; });
+  // Профиль: короткая строка вместо восьми полей
+  const strip = ()=>{ const v = id=> (document.getElementById(id)||{}).value || ""; const n = x=> Number(x)||0;
+    const iin = v("mm-iin") || (d.ipRequisites && d.ipRequisites.iin);
+    document.getElementById("mm-prof-strip").innerHTML = [
+      v("mm-ig") || n(v("mm-followers")) ? `<span><span class="mut">Instagram</span> <b>${n(v("mm-followers")) ? fmtNum(n(v("mm-followers"))) : "—"}</b>${n(v("mm-er")) ? ` · ER ${String(v("mm-er")).replace(".",",")}%` : ""}${n(v("mm-avg-reach")) ? ` · ср. охват ${fmtNum(n(v("mm-avg-reach")))}` : ""}</span>` : "",
+      v("mm-tt") || n(v("mm-followers-tt")) ? `<span><span class="mut">TikTok</span> <b>${n(v("mm-followers-tt")) ? fmtNum(n(v("mm-followers-tt"))) : "—"}</b>${n(v("mm-avg-reach-tt")) ? ` · ср. ${fmtNum(n(v("mm-avg-reach-tt")))}` : ""}</span>` : "",
+      `<span class="mut">${iin ? "ИИН есть" : "ИИН нет"}${v("mm-city") ? " · " + escapeHtml(v("mm-city")) : ""}${v("mm-phone") ? " · " + escapeHtml(v("mm-phone")) : " · нет телефона"}</span>`,
+      `<a href="#" id="mm-prof-open" style="font-weight:700">изменить в профиле</a>`].filter(Boolean).join("");
+    document.getElementById("mm-prof-open").onclick = e=>{ e.preventDefault(); const p = document.getElementById("mm-prof"); p.open = !p.open; }; };
+  document.querySelectorAll("#mm-prof input, #mm-prof select").forEach(el=> el.addEventListener("input", strip)); strip();
+  // ШК — чипами
+  const bcChips = ()=>{ const bc = document.getElementById("mm-barcode"); const codes = bc.value.split(/[,;\s]+/).map(c=>c.trim()).filter(Boolean);
+    document.getElementById("mm-bc-chips").innerHTML = codes.map(c=>`<span class="pv-st s-a" style="height:26px;gap:6px">${escapeHtml((skuName(c) ? skuName(c)+" · " : "") + c)} <a href="#" data-bc="${escapeHtml(c)}" style="color:#C2306F">✕</a></span>`).join("");
+    document.querySelectorAll("[data-bc]").forEach(a=> a.onclick = e=>{ e.preventDefault(); bc.value = codes.filter(x=> x!==a.dataset.bc).join(","); bcChips(); }); };
+  bcChips();
+  { const dh = ()=>{ const ag = document.getElementById("mm-agreed-date").value, pl = document.getElementById("mm-planned-date").value;
+      document.getElementById("mm-dates-hint").textContent = ag || pl ? `${ag ? ddmmStr(ag) + " — ждём видео (напомнить в WhatsApp с Рабочего стола)" : ""}${ag && pl ? ", " : ""}${pl ? ddmmStr(pl) + " — выход" : ""}. В планере у менеджеров видны обе даты, у руководства — только «Выйдет».` : "Укажите, когда блогер пришлёт видео — дата выхода поставится сама."; };
+    document.getElementById("mm-agreed-date").addEventListener("change", ()=> setTimeout(dh, 0)); document.getElementById("mm-planned-date").addEventListener("change", dh); dh(); }
+  document.querySelectorAll('input[name="mm-tzmode"]').forEach(r=> r.onchange = ()=>{ document.querySelectorAll('input[name="mm-tzmode"]').forEach(x=> x.closest("label").style.background = x.checked ? "#FFF4F9" : "#fff"); if(r.value==="base"){ const t = document.getElementById("mm-tz"); if(t) t.focus(); } });
+  { const t = document.getElementById("mm-tz"); if(t) t.addEventListener("change", ()=>{ const b = document.querySelector('input[name="mm-tzmode"][value="base"]'); if(b && t.value){ b.checked = true; b.onchange(); } }); }
+  { const lk = ["mm-reels-link","mm-tt-link"]; lk.forEach(id=>{ const el = document.getElementById(id); if(el && el.type!=="hidden") el.addEventListener("change", ()=>{ if(!el.value.trim()) return; const vs = document.getElementById("mm-video-status"); if(vs) vs.value = "опубликовано"; const pd = document.getElementById("mm-publish-date"); if(pd && !pd.value) pd.value = todayStr(); }); }); }
   document.getElementById("mm-cancel").onclick = closeModal;
 
   // ТЗ из Blogery Audit: берём свежий список с сервера — страница могла быть открыта до того, как ТЗ пришло.
@@ -8369,6 +8455,8 @@ function modalMicroDeal(existing, prefill){
     if(!cur.includes(hit.code)) cur.push(hit.code);
     bc.value = cur.join(",");
     skuPick.value = "";
+    const pn = document.getElementById("mm-product"); if(pn && !pn.value.trim()) pn.value = hit.name;
+    bcChips();
   });
   { const pm = document.getElementById("mm-payment-method"), ib = document.getElementById("mm-ip-banner");
     if(pm && ib) pm.addEventListener("change", ()=>{ const keep = {markingChecked: (document.getElementById("mm-marking-checked")||{}).checked, avrReceived: (document.getElementById("mm-avr-received")||{}).checked};
@@ -8393,7 +8481,9 @@ function modalMicroDeal(existing, prefill){
         put("mm-tt", pf.tiktokAccount); put("mm-followers-tt", pf.followersTT); put("mm-er-tt", pf.erTT); put("mm-avg-reach-tt", pf.avgReachTT);
         put("mm-blogger-category", pf.bloggerCategory ? normalizeBloggerCategory(pf.bloggerCategory) : ""); put("mm-coop-type", pf.coopType);
         put("mm-payment-method", pf.paymentMethod); put("mm-iin", pf.iin);
+        document.querySelectorAll(".mm-pm").forEach(x=> x.classList.toggle("on", x.dataset.v === document.getElementById("mm-payment-method").value));
       }
+      strip();
     }
   });
   // Сохраняем только то, что поменяли в этой форме (29.10.2026): раньше форма отправляла ВСЕ поля, и если
@@ -8439,6 +8529,14 @@ function modalMicroDeal(existing, prefill){
       plannedDate: document.getElementById("mm-planned-date").value,
       publishDate: document.getElementById("mm-publish-date").value,
       notes: document.getElementById("mm-notes").value.trim(),
+      storiesCount: parseInt(document.getElementById("mm-stories-count").value,10)||0,
+      productDelivery: document.getElementById("mm-delivery").value,
+      ...(document.getElementById("mm-kaspi-price") ? {kaspiPrice: parseInt(document.getElementById("mm-kaspi-price").value,10)||0} : {}),
+      payTerms: document.getElementById("mm-pay-terms").value,
+      ...(()=>{ const mode = (document.querySelector('input[name="mm-tzmode"]:checked')||{}).value || "later";
+        if(mode==="own") return {tz:"Свой формат", tzGroup:"Свой формат"}; if(mode==="pers") return {tz:"Персональное", tzGroup:"Персональное"};
+        if(mode==="base"){ const v = (document.getElementById("mm-tz")||{}).value || ""; const [g,it] = v.split("\u0001"); return it ? {tz:it, tzGroup:g} : {tz:"", tzGroup:""}; }
+        return {tz:"", tzGroup:""}; })(),
       flowBriefAutoSend: document.getElementById("mm-brief-auto-send").checked,
       ...(readMicroIpRequisites() ? {ipRequisites: readMicroIpRequisites()} : {}),
       ...(document.getElementById("mm-marking-checked") ? {markingChecked: document.getElementById("mm-marking-checked").checked} : {}),
@@ -9125,7 +9223,7 @@ function deskReturnList(){
   const today = todayStr(), by = new Map();
   for(const d of (DataManager.state.microInfluencerDeals||[])){
     if(!microDealPublished(d)) continue;
-    const k = String(d.instagramAccount||d.blogerName||"").toLowerCase(); if(!k) continue;
+    const k = deskNick(d).replace(/^@/,"").toLowerCase().trim(); if(!k || k==="—") continue;
     const r = by.get(k) || {deals:[], last:""}; r.deals.push(d); const dt = String(d.publishDate||d.plannedDate||""); if(dt > r.last){ r.last = dt; r.lastDeal = d; } by.set(k, r);
   }
   const out = [];
@@ -9176,7 +9274,7 @@ function deskSections(){
   return S;
 }
 UI.deskSec = UI.deskSec || "";
-function deskNick(d){ const n = String(d.instagramAccount||"").replace(/\/+$/,"").split("/").pop(); return n ? "@"+n.replace("@","") : (d.blogerName||"—"); }
+function deskNick(d){ const n = String(d.instagramAccount||"").split(/[?#]/)[0].replace(/\/+$/,"").split("/").pop().replace(/^@/,"").toLowerCase(); if(n) return "@"+n; const b = String(d.blogerName||"").trim(); return b ? (b.startsWith("@") ? b.toLowerCase() : b) : "—"; }
 function deskAction(x){
   const d = x.d, wa = x.wa && waLink(d.phone, x.wa);
   if(x.act==="wa") return wa ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(wa)}">Напомнить в WhatsApp</a>` : `<button class="btn btn-sm" onclick="openMicroById(${d.id})">Нет телефона — открыть</button>`;
