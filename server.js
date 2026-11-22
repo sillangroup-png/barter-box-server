@@ -958,6 +958,7 @@ automationFlow.mount(app, {getState:()=>state, persist:()=>persist(), requireAut
 require("./lifecycle").mount(app,{getState:()=>state,persist:()=>persist(),requireAuth});
 require("./blogery-client").createClient({getState:()=>state,persist:()=>persist()}).mount(app,requireAuth);
 require("./crm-link").mount(app,{getState:()=>state,persist:()=>persist(),requireAuth});
+require("./crm-bloggers").mount(app,{getState:()=>state,requireAuth,kostPool:pgPool});
 require("./finance-client").createFinanceClient({getState:()=>state,persist:()=>persist()}).mount(app,requireAuth);
 require("./contracts").createContracts({getState:()=>state,dataDir:DATA_DIR}).mount(app,requireAuth);
 
