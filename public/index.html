@@ -379,6 +379,9 @@ select.pv-st{appearance:none;-webkit-appearance:none;cursor:pointer;padding-righ
 .mut{color:#8A7F86}
 a{color:#D6337E;text-decoration:none}a:hover{color:#B0215F}
 select.pv-st{width:auto;max-width:210px;height:24px}
+
+/* 23.11.2026: кнопки выгрузки — только Нина и Сая */
+body.no-export [id^="export-"][id$="-btn"]{display:none !important}
 </style>
 </head>
 <body>
@@ -819,6 +822,8 @@ function driveFolderIcon(d){
   return ` <a href="${escapeHtml(f.url)}" target="_blank" rel="noopener" title="${escapeHtml(title)}" style="text-decoration:none">📁${f.count!=null?`<span style="font-size:11px">${f.count}</span>`:""}</a>`;
 }
 function toast(msg, isError){
+  // 23.11.2026: у менеджеров без права выгрузки не показываем «выгружено» поверх «Выгрузка доступна только Нине и Сае».
+  if(!isError && !UI.canExport && /выгружен/i.test(String(msg||""))) return;
   const t = document.getElementById("toast");
   t.textContent = msg;
   t.classList.toggle("error", !!isError);
@@ -11149,6 +11154,7 @@ function renderDriverOrderModal(){
    ========================================================================= */
 function render(){
   if(!UI.role){ renderLogin(); return; }
+  try{ document.body.classList.toggle("no-export", !UI.canExport); }catch(e){}
   if(UI.role==="manager" || UI.role==="marketer"){ renderDeskShell(); return; }
   if(UI.role==="driver"){ renderDriverShell(); return; }
   renderLogin();
