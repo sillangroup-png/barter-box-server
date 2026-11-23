@@ -531,6 +531,13 @@ function mount(app, { getState, requireAuth, kostPool, persist, env = process.en
   // ---------- Оплаты по прототипу (23.11.2026): Excel, импорт файла пополнения с проверкой, массовая смена статуса ----------
   const payRows = async (ids) => { const r = await pool.query(`select p.id, p.data, p.status, p.manager, b.data->>'name' blogger_name, b.data->>'instagram_url' blogger_instagram
       from crm.payments p left join crm.bloggers b on b.id = p.blogger_id where not p.deleted ${ids ? 'and p.id = any($1)' : ''} order by p.created_at desc nulls last limit 5000`, ids ? [ids] : []); return r.rows.map(payView); };
+  // 23.11.2026: какие блогеры — ИП (по заявкам на оплату). Только ники/инстаграм, без реквизитов — чтобы в Barter Box везде стояла пометка «ИП».
+  app.get('/api/crm/ip-bloggers', requireAuth, async (req, res) => {
+    if (!need(res)) return; if (!canStaff(req)) return res.status(403).json({ error: 'Нет доступа' });
+    try { const r = await pool.query(`select distinct lower(coalesce(b.data->>'instagram_url','')) ig, lower(coalesce(b.data->>'name','')) nm from crm.payments p join crm.bloggers b on b.id = p.blogger_id where not p.deleted and coalesce((p.data->>'is_ip')::boolean, false)`);
+      res.json({ items: r.rows.map((x) => [x.ig, x.nm]) });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
   // Мои заявки на оплату — менеджер видит только поданные им (все статусы).
   app.get('/api/crm/payments/mine', requireAuth, async (req, res) => {
     if (!need(res)) return; if (!canStaff(req)) return res.status(403).json({ error: 'Нет доступа' });
