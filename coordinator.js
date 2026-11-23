@@ -615,7 +615,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   // ---------- «Оплачено — сообщите блогеру» (23.11.2026) ----------
   // Нина ставит «оплачено» → у менеджера на Рабочем столе плашка. Менеджер/тимлид отправляет «Оплата прошла» одному или всем.
   // Перед отправкой смотрим переписку: если блогер после оплаты уже сам написал про оплату — не пишем, показываем его сообщение.
-  const PAID_TEXT = "Здравствуйте! Оплата прошла, спасибо за сотрудничество 🙌";
+  // Текст Нины 23.11.2026; приветствие по времени Алматы.
+  const paidText = () => { const h = almatyHour(); return `${h < 12 ? "Доброе утро" : h < 18 ? "Добрый день" : "Добрый вечер"}! Направили вам оплату 💚🙌`; };
   const RE_PAIDMSG = /оплат|оплачен|пришл[аио]|получил|поступил|деньг|перевел|перевели|төлен|алдым|келді|спасибо|рахмет/i;
   function paidWrote(d) {
     const since = Date.parse(d.paidAt || 0) - 6 * H;
@@ -635,7 +636,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const inScope = paidScope(req), weekAgo = Date.now() - 21 * 24 * H;
     const items = (getState().microInfluencerDeals || []).filter((d) => d.paymentStatus === "оплачено" && d.paidAt && Date.parse(d.paidAt) > weekAgo && !d.paidMsgSent && !d.paidSkip && inScope(d))
       .map((d) => { const w = paidWrote(d); return { id: d.id, blogger: d.blogerName || "", product: d.product || "", manager: d.responsible || "", cost: Number(d.cost) || 0, paidAt: d.paidAt, phone: !!waNumber(d.phone), wrote: w ? { at: w.at, text: String(w.text).slice(0, 160) } : null }; });
-    res.json({ text: PAID_TEXT, items });
+    res.json({ text: paidText(), items });
   });
   app.post("/api/coord/paid-notify", requireAuth, async (req, res) => {
     if (!staff(req, res)) return;
@@ -650,7 +651,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       const n = waNumber(d.phone);
       if (!n) { out.errors.push(`${d.blogerName}: нет номера`); continue; }
       if (sentPhones.has(n)) { d.paidMsgSent = new Date().toISOString(); continue; } // одному блогеру — одно сообщение
-      try { const r = await sendNow(d, PAID_TEXT); log(d.id, "out", `[оплата] ${r.via}: ${PAID_TEXT}`); d.paidMsgSent = new Date().toISOString(); sentPhones.add(n); out.sent++; }
+      try { const t = paidText(); const r = await sendNow(d, t); log(d.id, "out", `[оплата] ${r.via}: ${t}`); d.paidMsgSent = new Date().toISOString(); sentPhones.add(n); out.sent++; }
       catch (e) { out.errors.push(`${d.blogerName}: ${e.message}`); }
     }
     persist(); res.json(out);
