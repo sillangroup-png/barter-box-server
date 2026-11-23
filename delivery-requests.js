@@ -67,6 +67,34 @@ function mount(app, { getState, requireAuth, persist }) {
     const r = all[i]; if (!(isLead(req) || (r.createdBy === req.session.name && r.status === 'new'))) return res.status(403).json({ error: 'Отменить можно только свою новую заявку' });
     all.splice(i, 1); persist(); res.json({ ok: true });
   });
+  // 23.11.2026: импорт списка «Бартер — логист» из Excel (Сая и Нина). Колонки: Дата, Менеджер, Ник, Город, Адрес, Телефон, Товары.
+  // Адреса и телефоны блогеров живут только в данных Barter Box — в репозиторий не кладём.
+  const upload = require('multer')({ storage: require('multer').memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+  const MGR = { oxana: 'Оксана', sabrina: 'Сабрина', anastasiia: 'Анастасия', anastasia: 'Анастасия', ajar: 'Ажар', azhar: 'Ажар', kamila: 'Камила', madina: 'Мадина', marina: 'Марина', zarina: 'Зарина', nadira: 'Надира', anelya: 'Анеля', anel: 'Анеля' };
+  app.post('/api/delivery-requests/import', requireAuth, upload.single('file'), (req, res) => {
+    if (!isLead(req)) return res.status(403).json({ error: 'Импорт — только Сая и Нина' });
+    let XLSX; try { XLSX = require('xlsx'); } catch (e) { return res.status(503).json({ error: 'Excel недоступен' }); }
+    if (!req.file) return res.status(400).json({ error: 'Нет файла' });
+    let rows; try { const wb = XLSX.read(req.file.buffer, { type: 'buffer' }); rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' }); } catch (e) { return res.status(400).json({ error: 'Не читается файл' }); }
+    const pick = (r, ...ks) => { for (const k of Object.keys(r)) if (ks.some((x) => k.toLowerCase().includes(x))) return String(r[k]).trim(); return ''; };
+    const norm = (v) => { let x = String(v || '').trim().toLowerCase(); if (x.includes('instagram.com/')) x = x.split('instagram.com/')[1].split(/[/?#]/)[0]; if (x.includes('tiktok.com/')) x = x.split('tiktok.com/')[1].split(/[/?#]/)[0]; return x.replace(/^@/, ''); };
+    const st = getState(); const all = list(); const deals = st.microInfluencerDeals || []; let id = all.reduce((m, r) => Math.max(m, r.id || 0), 0); let added = 0, skipped = 0;
+    const status = STATUS[String(req.body && req.body.status || '')] ? req.body.status : 'sent';
+    for (const r of rows) {
+      const nick = norm(pick(r, 'ник', 'блогер')); if (!nick) continue;
+      const m0 = pick(r, 'менеджер'); const manager = MGR[m0.toLowerCase()] || m0;
+      const phone = pick(r, 'телефон').replace(/[^\d+]/g, ''); const day = /^\d{4}-\d{2}-\d{2}/.test(pick(r, 'дата')) ? pick(r, 'дата').slice(0, 10) : today();
+      if (all.some((x) => norm(x.blogger) === nick && String(x.phone || '').replace(/[^\d+]/g, '') === phone && x.status !== 'failed')) { skipped++; continue; }
+      const cands = deals.filter((d) => [d.instagramAccount, d.tiktokAccount, d.blogerName].some((v) => norm(v) === nick));
+      const deal = cands.filter((d) => d.responsible === manager).sort((a, b) => b.id - a.id)[0] || cands.sort((a, b) => b.id - a.id)[0];
+      const at = day + 'T09:00:00.000Z';
+      all.push({ id: ++id, dealId: deal ? deal.id : null, createdAt: at, createdBy: manager, manager, blogger: '@' + nick, phone, city: pick(r, 'город'), address: pick(r, 'адрес'),
+        items: [{ name: pick(r, 'товар'), code: '', qty: 1, cost: 0 }], productCost: 0, deliveryCost: 0, note: 'импорт списка логиста ' + today().slice(8, 10) + '.' + today().slice(5, 7), status,
+        sentAt: status === 'sent' ? at : undefined, history: [{ at: new Date().toISOString(), by: req.session.name, status }] });
+      added++;
+    }
+    persist(); res.json({ ok: true, added, skipped });
+  });
   // Файл для логиста (новые → «Подано логисту») и Excel по фильтру — только Сая и Нина
   app.get('/api/delivery-requests/export', requireAuth, (req, res) => {
     if (!isLead(req)) return res.status(403).json({ error: 'Только Сая и Нина' });

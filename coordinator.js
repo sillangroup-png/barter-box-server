@@ -841,15 +841,19 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   // Принудительно: отправить напоминание этой строке СЕЙЧАС (кнопка «📨 напомнить сейчас»). Ручное действие менеджера:
   // работает и в режиме dry, без тихих часов и графика; но только в рамках теста (менеджер + номера из COORD_PILOT_PHONES).
   // Напомнить блогеру сейчас (одна строка или все без видео). Видео пришло/опубликовано — не пишем.
-  async function remindNow(d, force) {
+  async function remindNow(d, force, own) {
     const fail = (m) => { const e = new Error(m); e.status = 400; throw e; };
-    if (!inPilot(d)) fail("Строка не в рассылке: ответственный должен быть в COORD_PILOT_MANAGER, нужен номер WhatsApp");
-    if (transport() === "none") fail("Отправка не настроена: в Render нет WAZZUP_API_KEY / BITRIX_WEBHOOK_URL");
+    // 23.11.2026: кнопка менеджера — ручное действие, пишем любому блогеру с номером (не только пилот COORD_PILOT_MANAGER).
+    if (!waNumber(d.phone)) fail("У блогера нет номера WhatsApp");
+    if (transport() === "none" && !chatappFor(d.phone)) fail("Отправка не настроена: в Render нет WAZZUP_API_KEY / BITRIX_WEBHOOK_URL");
     if (d.coordStop) fail("Напоминания для этой строки остановлены");
     const pd = String(d.plannedDate || "").slice(0, 10), today = almatyDate();
     const stage = stageOf(d), due = dueOf(d);
     let kind, ds;
-    if (force === "video_today" && !["received", "approved", "published"].includes(stage)) { kind = "video_today"; ds = ddmm(today); }
+    const ownText = String(own || "").trim().slice(0, 1000);
+    if (ownText && stage === "published") fail("Уже опубликовано");
+    if (ownText) { kind = "own"; }
+    else if (force === "video_today" && !["received", "approved", "published"].includes(stage)) { kind = "video_today"; ds = ddmm(today); }
     else if (stage === "approved") { kind = "link_ask"; ds = ddmm(pd); }
     else if (stage === "received") fail("Видео уже пришло и ждёт проверки — блогеру напоминать не нужно");
     else if (stage === "published") fail("Уже опубликовано");
@@ -857,7 +861,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     else if (today > due) { kind = "overdue"; ds = ddmm(due); }
     else if (today === due) { kind = "due_today"; ds = ddmm(due); }
     else { kind = "due_soon"; ds = whenWord(today, due); }
-    const text = TEXTS[kind]([nameOf(d), d.product || "интеграции", ds]);
+    const text = kind === "own" ? ownText : TEXTS[kind]([nameOf(d), d.product || "интеграции", ds]);
     try {
       const r = await sendNow(d, text);
       d.coordLastOutDay = today;
@@ -874,7 +878,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (!staff(req, res)) return;
     const d = (getState().microInfluencerDeals || []).find((x) => x.id === +req.params.id);
     if (!d) return res.status(404).json({ error: "не найдено" });
-    try { res.json(await remindNow(d, req.body && req.body.kind)); } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+    try { res.json(await remindNow(d, req.body && req.body.kind, req.body && req.body.text)); } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
   });
   // «Напомнить всем»: только строки без присланного/опубликованного видео и не чаще раза в день на блогера.
   app.post("/api/coord/send-now-many", requireAuth, async (req, res) => {
