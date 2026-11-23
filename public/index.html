@@ -1881,6 +1881,8 @@ function influencerDetailStats(rows){
 const MICRO_FORMATS = ["Reels + TikTok","Сторис","Reels + Сторис","Сторис + Reels + TikTok"];
 function microFormatOf(d){ return MICRO_FORMATS.includes(d && d.contentFormat) ? d.contentFormat : "Reels + TikTok"; }
 function microHasStories(d){ return !!d && (/Сторис/.test(microFormatOf(d)) || (d.factReachStories||0) > 0); }
+// 23.11.2026: дата выкладки в будущем — это план, а не «вышло».
+function microPubDone(d){ const p = String(d && d.publishDate || "").slice(0,10); return !!p && p <= todayStr(); }
 function microDealPublished(d){ return !!d && (d.videoStatus==="опубликовано" || (microHasStories(d) && (d.factReachStories||0) > 0)); }
 function microDealFactReach(d){ return (d.factReachReels||0) + (d.factReachTT||0) + (d.factReachStories||0); }
 // Таблица показывает и редактирует ОДНУ общую ячейку "Факт.охват" (Reels+TikTok вместе), но
@@ -8245,7 +8247,7 @@ function microProblemWarning(name, exceptId){
 }
 // Карточка интеграции (X3): что дальше и полоска шагов ТЗ → товар → видео → оплата.
 function microDealProgressHtml(d){
-  const pub = microDealPublished(d) || !!d.publishDate, tz = String(d.tz||"").trim(), got = /доставлен/i.test(String(d.productStatus||"")) || d.productDelivery==="has", paid = d.paymentStatus==="оплачено";
+  const pub = microDealPublished(d) || microPubDone(d), tz = String(d.tz||"").trim(), got = /доставлен/i.test(String(d.productStatus||"")) || d.productDelivery==="has", paid = d.paymentStatus==="оплачено";
   const steps = [[!!tz, tz ? "ТЗ: " + tz : "ТЗ не отмечено"], [got, got ? "Товар вручён" : "Товар в пути"], [pub, pub ? "Видео вышло" + (d.publishDate ? " " + ddmmStr(d.publishDate) : "") : (d.plannedDate ? "Выход " + ddmmStr(d.plannedDate) : "Дата выхода не стоит")], [paid, paid ? "Оплачено" : (d.paymentStatus==="к оплате" ? "Подано на оплату" : "Оплата не подана")]];
   const next = !tz ? "Отметить, какое ТЗ ушло блогеру — без этого не посчитать CPV по ТЗ" : !pub && d.plannedDate && d.plannedDate < todayStr() ? "Дата выхода прошла — вставьте ссылку или перенесите дату" : !pub ? "Ждём видео" + (d.agreedDate ? " к " + ddmmStr(d.agreedDate) : "") : (Number(d.cost)||0) > 0 && d.paymentStatus==="не оплачено" ? "Видео вышло — подайте на оплату" : !d.reelsLink && !d.tiktokVideoLink && !(Number(d.factReachStories)>0) ? "Вставьте ссылку на вышедшее видео" : "Всё сделано";
   return `<div style="margin:10px 0 4px;background:#fff;border:1px solid #F3DDE7;border-radius:12px;padding:10px 14px"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline"><div><span class="pv-lbl">Что дальше</span> <b style="margin-left:6px">${escapeHtml(next)}</b></div><span class="mut" style="font-size:12px">${escapeHtml(microFormatOf(d))} · ведёт ${escapeHtml(d.responsible||"—")}${d.city?" · "+escapeHtml(d.city):""}${d.cost?" · "+fmtNum(d.cost)+" ₸":""}</span></div>
@@ -8541,7 +8543,7 @@ function modalMicroDeal(existing, prefill){
       storiesLink: document.getElementById("mm-stories-link").value.trim(),
       agreedDate: (document.getElementById("mm-agreed-date")||{}).value || "",
       plannedDate: document.getElementById("mm-planned-date").value,
-      publishDate: document.getElementById("mm-publish-date").value,
+      publishDate: (v=> v && v > todayStr() && !document.getElementById("mm-reels-link").value.trim() && !document.getElementById("mm-tt-link").value.trim() ? "" : v)(document.getElementById("mm-publish-date").value),
       notes: document.getElementById("mm-notes").value.trim(),
       storiesCount: parseInt(document.getElementById("mm-stories-count").value,10)||0,
       productDelivery: document.getElementById("mm-delivery").value,
@@ -9134,8 +9136,8 @@ function attentionItems(){
   const today = todayStr(), mine = d=> (crmIsLeadName() && UI.deskAll) ? true : (!UI.actorName || d.responsible===UI.actorName);
   const out = [];
   for(const d of (DataManager.state.microInfluencerDeals||[])){
-    if(!mine(d) || /отмен/i.test(String(d.problemStatus||""))) continue;
-    const pub = microDealPublished(d) || !!d.publishDate, vd = microVideoDue(d), pd = String(d.plannedDate||"").slice(0,10);
+    if(!mine(d) || /отмен/i.test(String(d.problemStatus||"")) || String(d.plannedDate||d.publishDate||"").slice(0,7)!==today.slice(0,7)) continue;
+    const pub = microDealPublished(d) || microPubDone(d), vd = microVideoDue(d), pd = String(d.plannedDate||"").slice(0,10);
     if(!pub && pd === today) out.push({d, sev:1, what:"Сегодня выход", next:"Проверить публикацию и вставить ссылку"});
     else if(!pub && pd && pd < today) out.push({d, sev:3, what:`Выход был ${ddmmStr(pd)} — нет ссылки`, next:"Вставить ссылку или перенести дату", wa:"Здравствуйте! Подскажите, когда выйдет публикация MIXIT?"});
     if(pub && (Number(d.cost)||0) > 0 && d.paymentStatus === "не оплачено") out.push({d, sev:1, what:"Вышло — оплата не подана", next:"Подать на оплату Нине"});
@@ -9182,7 +9184,7 @@ function modalMicroCard(d){
   const all = dealsOfBlogger(d).filter(x=> !/отмен/i.test(String(x.problemStatus||"")));
   const others = all.filter(x=> x.id!==d.id && !microDealPublished(x)).sort((a,b)=> String(a.plannedDate).localeCompare(String(b.plannedDate)));
   const past = all.filter(x=> x.id!==d.id && microDealPublished(x)).sort((a,b)=> String(b.publishDate||b.plannedDate).localeCompare(String(a.publishDate||a.plannedDate)));
-  const ip = bloggerIsIp(d), pub = microDealPublished(d) || !!d.publishDate;
+  const ip = bloggerIsIp(d), pub = microDealPublished(d) || microPubDone(d);
   const lang = ({ru:"на русском",kz:"на казахском","под музыку":"под музыку"})[microVideoLang(d)] || "";
   const cpvOf = x=>{ const r = microDealFactReach(x), c = microDealTotalCost(x); return r && c ? (c/r).toFixed(2).replace(".",",") : "—"; };
   const card = (t, body, right)=> `<div style="background:#fff;border:1px solid #F1E1E8;border-radius:14px;padding:14px 16px;box-shadow:var(--shadow-sm)"><div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;margin-bottom:10px"><b style="font-size:14.5px">${t}</b>${right||""}</div>${body}</div>`;
@@ -9388,7 +9390,7 @@ function deskMyDeals(){ const n = UI.actorName; return (DataManager.state.microI
 function deskGroupOf(x){ return /Видео|видео/.test(x.what) ? "video" : /ссылк|выход/i.test(x.what) ? "links" : /оплат/i.test(x.what) ? "pay" : "other"; }
 function deskGaps(){
   const today = todayStr(), mine = deskMyDeals().filter(d=> !/отмен/i.test(String(d.problemStatus||"")));
-  const pub = d=> microDealPublished(d) || !!d.publishDate;
+  const pub = d=> microDealPublished(d) || microPubDone(d);
   return [
     ["Нет даты выхода", mine.filter(d=> !d.plannedDate && !pub(d))],
     ["Вышло, но нет ссылки", mine.filter(d=> pub(d) && !d.reelsLink && !d.tiktokVideoLink && !(Number(d.factReachStories)>0))],
@@ -9445,8 +9447,10 @@ function deskTeamPlace(){
 // Разделы «Рабочего стола»: в каждом — строка с одним главным действием.
 function deskSections(){
   const today = todayStr(), in7 = addDaysYMD(today, 7);
-  const mine = deskMyDeals().filter(d=> !/отмен/i.test(String(d.problemStatus||"")));
-  const pub = d=> microDealPublished(d) || !!d.publishDate;
+  // 23.11.2026 (Нина): на Рабочем столе — только интеграции текущего месяца (по дате выхода).
+  const curM = today.slice(0,7), inMonth = d=> String(d.plannedDate||d.publishDate||"").slice(0,7)===curM;
+  const mine = deskMyDeals().filter(d=> !/отмен/i.test(String(d.problemStatus||"")) && inMonth(d));
+  const pub = d=> microDealPublished(d) || microPubDone(d);
   const isIp = d=> /ИП/i.test(String(d.paymentMethod||""));
   const S = {late:[], today:[], tz:[], pay:[], links:[], wait:[]};
   for(const d of mine){
@@ -9594,7 +9598,7 @@ function wireTzBase(){
     document.querySelectorAll(".tzb-pick").forEach(p=> p.onclick = ()=>{ closeModal(); setTz(+p.dataset.id, g, it); }); });
 }
 function microQuickDefs(){
-  const t = todayStr(), pub = d=> microDealPublished(d) || !!d.publishDate, open = d=> !/отмен/i.test(String(d.problemStatus||""));
+  const t = todayStr(), pub = d=> microDealPublished(d) || microPubDone(d), open = d=> !/отмен/i.test(String(d.problemStatus||""));
   return [
     {k:"notz", t:"Нет ТЗ", f:d=> open(d) && !pub(d) && !String(d.tz||"").trim()},
     {k:"wait", t:"Ждём видео", f:d=> open(d) && !pub(d) && (videoStageOf(d)==="wait"||videoStageOf(d)==="revise"||videoStageOf(d)==="reshoot")},
@@ -9608,7 +9612,7 @@ function microQuickDefs(){
 const PLN = { month: "", mode: "out", who: "all", mgr: "", prod: "", day: "", dayF: "all", open: {} };
 function plnOnlyOut(){ return true; /* 23.11.2026: пока только по дате выхода, без «+2 дня» */ }
 function plnDealDay(d, mode){ return mode==="agreed" ? microVideoDue(d) : String(d.publishDate || d.plannedDate || "").slice(0,10); }
-function plnStatus(d){ const t = todayStr(), pub = microDealPublished(d) || !!d.publishDate; if(pub) return "ok"; if((PLN._prop && PLN._prop.has(d.id)) || d.vmoved) return "move"; if(d.plannedDate && String(d.plannedDate) < t) return "late"; return "wait"; }
+function plnStatus(d){ const t = todayStr(), pub = microDealPublished(d) || microPubDone(d); if(pub) return "ok"; if((PLN._prop && PLN._prop.has(d.id)) || d.vmoved) return "move"; if(d.plannedDate && String(d.plannedDate) < t) return "late"; return "wait"; }
 function tplPlanner(){
   const t = todayStr(); if(!PLN.month) PLN.month = t.slice(0,7);
   PLN._prop = new Map(((DataManager.state.coord||{}).events||[]).filter(e=> !e.read && e.proposedDate && e.dealId).map(e=> [e.dealId, e.proposedDate])); if(plnOnlyOut()) PLN.mode = "out";
