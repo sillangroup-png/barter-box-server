@@ -106,7 +106,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   const addWorkdays = (ymd, n) => { let x = ymd; for (let i = 0; i < n; i++) x = nextWorkday(x); return x; };
   // Сколько рабочих дней прошло после срока (срок не считается): срок пн, сегодня ср → 2.
   const workdaysAfter = (due, today) => { if (!due || today <= due) return 0; let n = 0, x = due; while (x < today) { x = addDays(x, 1); if (isWd(x)) n++; } return n; };
-  const isDone = (d) => isPublished(d) || !!d.publishDate;
+  const isDone = (d) => isPublished(d) || (!!d.publishDate && String(d.publishDate).slice(0, 10) <= almatyDate()); // 23.11.2026: будущая дата выкладки — ещё не вышло
   const stageOf = (d) => (isDone(d) ? "published" : ["received", "lead", "revise", "reshoot", "approved"].includes(d.vstage) ? d.vstage : "wait");
   // Тимлиды (как в Barter Box: группы менеджеров). Чужой/неизвестный менеджер — к COORD_TEAMLEAD (по умолчанию Нина).
   const TEAM_GROUPS = [
