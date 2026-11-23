@@ -9203,6 +9203,7 @@ function modalMicroCard(d){
     </div>
     ${others.length ? `<div class="pv-note" style="margin-top:10px"><b>Ещё с этим блогером сейчас:</b> ${others.map(x=>`<a href="#" data-mc-open="${x.id}" style="font-weight:700">${escapeHtml(microFormatOf(x))}${x.product?" · "+escapeHtml(x.product):""} · ${x.plannedDate?"план "+ddmmStr(x.plannedDate):"без даты"} · ${escapeHtml(x.paymentStatus||"не оплачено")}</a>`).join(" &nbsp;·&nbsp; ")} <span class="mut">— отдельные интеграции, у каждой своя дата и оплата</span></div>` : ""}
     <div style="margin-top:10px">${deskDateProposalsHtml(d.id)}</div>
+    ${!UI.readOnly && !pub ? `<div style="margin-top:10px;background:#fff;border:1px solid #F3DDE7;border-radius:12px;padding:8px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b style="font-size:13px">Дата выхода</b><input type="date" id="mc-pdate" class="pv-inp" value="${escapeHtml(String(d.plannedDate||"").slice(0,10))}" style="width:160px"><span class="mut" style="font-size:12px">меняется сразу — без «Изменить»</span></div>` : ""}
     ${false && !d.agreedDate && !d.datesChecked && !pub && /^\d{4}-\d{2}-\d{2}/.test(d.plannedDate||"") ? `<div style="margin-top:10px;background:#FFF6E3;border:1px solid #F6E2B8;border-radius:12px;padding:10px 14px;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap"><span><b>Проверьте дату ${ddmmStr(d.plannedDate)}</b> — это день выхода или день, когда блогер присылает видео?</span><span style="display:flex;gap:6px"><button class="btn btn-sm mc-dc" data-k="pub">Это выход (видео ${ddmmStr(addDaysYMD(d.plannedDate,-2))})</button><button class="btn btn-sm mc-dc" data-k="vid">Это видео (выход ${ddmmStr(addDaysYMD(d.plannedDate,2))})</button></span></div>` : ""}
     ${microDealProgressHtml(d)}
     <div style="display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;margin-top:12px;align-items:start">
@@ -9247,6 +9248,7 @@ function modalMicroCard(d){
     inp.onkeydown = e=>{ if(e.key==="Enter") go(); }; inp.onblur = go; });
   bindVideoStageButtons(()=> microCardRefresh(d.id));
   wireDateProposals(()=>{ render(); microCardRefresh(d.id); });
+  const pdt = document.getElementById("mc-pdate"); if(pdt) pdt.onchange = ()=>{ const v = pdt.value; if(v && v!==String(d.plannedDate||"").slice(0,10)) save({plannedDate:v}, "Дата выхода: "+ddmmStr(v)); };
   document.querySelectorAll(".mc-dc").forEach(b=> b.onclick = ()=> save(Object.assign({datesChecked:true}, b.dataset.k==="pub" ? {agreedDate: addDaysYMD(d.plannedDate,-2)} : {agreedDate: d.plannedDate, plannedDate: addDaysYMD(d.plannedDate,2)}), "Даты сохранены"));
   wireMicroPay(d.id);
   const rm = document.getElementById("mc-remind"); if(rm) rm.onclick = async ()=>{ try{ await withBusy(rm, ()=> apiFetch('/api/coord/deal/'+d.id+'/send-now',{method:'POST'})); toast("Напоминание отправлено"); loadChat(); }catch(e){ const l = wa("Здравствуйте! Напоминаю про видео для MIXIT — когда сможете прислать?"); if(l) window.open(l, "_blank", "noopener"); } };
