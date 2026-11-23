@@ -381,7 +381,7 @@ a{color:#D6337E;text-decoration:none}a:hover{color:#B0215F}
 select.pv-st{width:auto;max-width:210px;height:24px}
 
 /* 23.11.2026: кнопки выгрузки — только Нина и Сая */
-body.no-export [id^="export-"][id$="-btn"]{display:none !important}
+body.no-export [id^="export-"][id$="-btn"]:not(#export-micro-csv-btn):not(#export-deal-csv-btn){display:none !important}
 </style>
 </head>
 <body>
@@ -823,7 +823,7 @@ function driveFolderIcon(d){
 }
 function toast(msg, isError){
   // 23.11.2026: у менеджеров без права выгрузки не показываем «выгружено» поверх «Выгрузка доступна только Нине и Сае».
-  if(!isError && !UI.canExport && /выгружен/i.test(String(msg||""))) return;
+  if(!isError && !UI.canExport && /выгружен/i.test(String(msg||"")) && !/^Таблица выгружена$/.test(String(msg||""))) return;
   const t = document.getElementById("toast");
   t.textContent = msg;
   t.classList.toggle("error", !!isError);
@@ -1081,7 +1081,8 @@ function wireInlineEdit(container, onSave){
 }
 // Выгрузки (CSV/Excel) — только у Нины и Саи (флаг приходит с сервера из подписанной сессии).
 // Пустые шаблоны для импорта качать может любой.
-function exportAllowed(filename){ return !!UI.canExport || /template/i.test(String(filename||"")); }
+function exportAllowed(filename){ return !!UI.canExport || /template/i.test(String(filename||"")) || /^barter-box-(micro-influencers|influencer-deals)-export/.test(String(filename||"")); } // 23.11.2026: таблицы интеграций — менеджеры тоже (свои строки)
+const exportMine = d=> !!UI.canExport || !UI.actorName || d.responsible===UI.actorName;
 function downloadFile(filename, content, mime){
   if(!exportAllowed(filename)){ toast("Выгрузка доступна только Нине и Сае", true); return; }
   const blob = new Blob([content], {type: mime||"text/plain;charset=utf-8"});
@@ -10436,7 +10437,7 @@ function wireDeskTab(){
     // те же строки, что и filteredInfluencerDealRows() отдаёт для рендера, чтобы экспорт не
     // расходился с тем, что маркетолог видит на экране.
     document.getElementById("export-deal-csv-btn").onclick = ()=>{
-      const rows = filteredInfluencerDealRows();
+      const rows = filteredInfluencerDealRows().filter(r=> exportMine(r.deal));
       // "id" первой колонкой — чтобы "Импорт CSV" мог узнать в строке уже существующую
       // интеграцию и обновить её, а не завести дубль (см. /api/influencer-deals/import).
       const header = ["id","блогер","ответственный","категория","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","план_вклад","вклад_в_продажи","romi","статус","instagram","ссылка_на_reels","папка_видео"];
@@ -10644,7 +10645,7 @@ function wireDeskTab(){
       // с ReferenceError при клике (кнопка визуально работала, но ничего не скачивалось и не было
       // видимой ошибки). Экспортируем полный список интеграций — так же, как это уже сделано для
       // "Сводного отчёта" (там тоже выгружаются все заказы, а не только видимые на экране).
-      DataManager.state.microInfluencerDeals.forEach(d=>{
+      DataManager.state.microInfluencerDeals.filter(exportMine).forEach(d=>{
         lines.push([
           d.id, d.responsible||"", d.blogerName||"", d.bloggerCategory||"", d.phone||"", d.city||"", d.address||"",
           d.instagramAccount||"", d.followers||0, d.er||0, d.avgReach||0,
