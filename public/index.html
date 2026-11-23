@@ -9251,7 +9251,7 @@ function modalMicroCard(d){
   const pdt = document.getElementById("mc-pdate"); if(pdt) pdt.onchange = ()=>{ const v = pdt.value; if(v && v!==String(d.plannedDate||"").slice(0,10)) save({plannedDate:v}, "Дата выхода: "+ddmmStr(v)); };
   document.querySelectorAll(".mc-dc").forEach(b=> b.onclick = ()=> save(Object.assign({datesChecked:true}, b.dataset.k==="pub" ? {agreedDate: addDaysYMD(d.plannedDate,-2)} : {agreedDate: d.plannedDate, plannedDate: addDaysYMD(d.plannedDate,2)}), "Даты сохранены"));
   wireMicroPay(d.id);
-  const vt = document.getElementById("mc-vtoday"); if(vt) vt.onclick = async ()=>{ const txt = "Добрый день! Сегодня ожидаем видео на согласование."; try{ await withBusy(vt, ()=> apiFetch('/api/coord/deal/'+d.id+'/send-now',{method:'POST', headers:jsonHeaders, body:JSON.stringify({kind:"video_today"})})); toast("Отправлено: "+txt); loadChat(); }catch(e){ const l = wa(txt); if(l) window.open(l, "_blank", "noopener"); else toast(e.message, true); } };
+  const vt = document.getElementById("mc-vtoday"); if(vt) vt.onclick = async ()=>{ const txt = "Добрый день! Сегодня ожидаем видео на согласование."; try{ await withBusy(vt, ()=> apiFetch('/api/coord/deal/'+d.id+'/send-now',{method:'POST', headers:jsonHeaders, body:JSON.stringify({kind:"video_today"})})); toast("Отправлено: "+txt); loadChat(); }catch(e){ toast("Не отправилось: "+e.message, true); const l = wa(txt); if(l) window.open(l, "_blank", "noopener"); } };
   const rm = document.getElementById("mc-remind"); if(rm) rm.onclick = async ()=>{ try{ await withBusy(rm, ()=> apiFetch('/api/coord/deal/'+d.id+'/send-now',{method:'POST'})); toast("Напоминание отправлено"); loadChat(); }catch(e){ const l = wa("Здравствуйте! Напоминаю про видео для MIXIT — когда сможете прислать?"); if(l) window.open(l, "_blank", "noopener"); } };
   const loadChat = async ()=>{ const box = document.getElementById("mc-chat"), mode = document.getElementById("mc-chat-mode"); if(!box) return;
     try{ const r = await apiFetch('/api/coord/deal/'+d.id+'/chat');
@@ -9475,10 +9475,13 @@ function deskSections(){
 }
 UI.deskSec = UI.deskSec || "";
 function rawNick(d){ const n = String(d.instagramAccount||"").split(/[?#]/)[0].replace(/\/+$/,"").split("/").pop().replace(/^@/,"").toLowerCase(); if(n) return "@"+n; const b = String(d.blogerName||"").trim(); return b ? (/^@?[\w.]+$/.test(b) ? "@"+b.replace(/^@/,"").toLowerCase() : b) : "—"; }
+// 23.11.2026: «Напомнить» отправляет сообщение сразу с рабочего номера (не открывает WhatsApp). Если отправить нельзя — откроет WhatsApp с готовым текстом.
+function deskSendBtn(d, text, wa){ return `<button class="btn btn-sm desk-send" data-id="${d.id}" data-text="${escapeHtml(text)}" data-wa="${escapeHtml(wa)}">Напомнить в WhatsApp</button>`; }
+async function deskSendNow(b){ try{ const r = await withBusy(b, ()=> apiFetch('/api/coord/deal/'+b.dataset.id+'/send-now', {method:'POST', headers:jsonHeaders, body:JSON.stringify({text:b.dataset.text})})); toast("Отправлено ✓"); b.textContent = "Отправлено ✓"; b.disabled = true; }catch(e){ toast("Не отправилось: "+e.message+" — открываю WhatsApp", true); window.open(b.dataset.wa, "_blank", "noopener"); } }
 function deskAction(x){
   const d = x.d, wa = x.wa && waLink(d.phone, x.wa);
-  if(x.act==="late") return `${wa ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(wa)}">Напомнить в WhatsApp</a>` : `<span class="mut" style="font-size:11.5px">нет телефона</span>`}<input class="pv-inp desk-link" data-id="${d.id}" placeholder="вышло? вставьте ссылку" style="width:190px">`;
-  if(x.act==="wa") return wa ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(wa)}">Напомнить в WhatsApp</a>` : `<button class="btn btn-sm" onclick="openMicroById(${d.id})">Нет телефона — открыть</button>`;
+  if(x.act==="late") return `${wa ? deskSendBtn(d, x.wa, wa) : `<span class="mut" style="font-size:11.5px">нет телефона</span>`}<input class="pv-inp desk-link" data-id="${d.id}" placeholder="вышло? вставьте ссылку" style="width:190px">`;
+  if(x.act==="wa") return wa ? deskSendBtn(d, x.wa, wa) : `<button class="btn btn-sm" onclick="openMicroById(${d.id})">Нет телефона — открыть</button>`;
   if(x.act==="tz") return microTzCell(d).replace('class="micro-tz-select"','class="micro-tz-select pv-inp desk-tz"');
   const ids = (x.deals||[d]).map(z=>z.id).join(",");
   if(x.act==="pay") return `<button class="btn btn-sm btn-primary desk-pay" data-ids="${ids}">Подать на оплату · ${fmtNum(x.sum!=null?x.sum:d.cost)} ₸</button>`;
@@ -9701,7 +9704,7 @@ function tplDeliveryReq(){
   return `
   <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:12px">
     <div><h1 style="margin:0;font-size:22px;font-weight:800">${lead?"Заявки на доставку":"Мои заявки на доставку"}</h1><div class="mut" style="margin-top:3px">${lead?"подают менеджеры из карточки интеграции · видят Сая и Нина":"подаются из карточки интеграции — кнопка «Заявка на доставку» · статус меняют Сая и Нина"}</div></div>
-    ${lead ? `<button class="btn" id="dlv-excel">Excel по фильтру</button>` : ""}
+    ${lead ? `<div style="display:flex;gap:8px"><button class="btn" id="dlv-import">Импорт списка (Excel)</button><input type="file" id="dlv-import-file" accept=".xlsx,.xls,.csv" style="display:none"><button class="btn" id="dlv-excel">Excel по фильтру</button></div>` : ""}
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
     ${["new","sent","delivered","failed","all"].map(k=>`<button class="pv-chip dlv-st ${DLV.st===k?"on":""}" data-k="${k}">${k==="all"?"Все":DLV_LABEL[k]} <span class="n">${k==="all"?all.length:n(k)}</span></button>`).join("")}
@@ -9714,8 +9717,8 @@ function tplDeliveryReq(){
     <thead><tr>${lead?`<th style="width:28px"><input type="checkbox" id="dlv-all" ${items.length && items.every(r=>DLV.sel.has(r.id))?"checked":""}></th>`:""}<th>Дата</th><th>Менеджер</th><th>Блогер</th><th>Город</th><th>Адрес</th><th>Что отправляем</th><th style="text-align:right">Себестоимость<br>в расходы</th><th style="text-align:right">Доставка</th><th>Статус</th><th></th></tr></thead>
     <tbody>${items.length ? items.map(r=>`<tr>
       ${lead?`<td><input type="checkbox" class="dlv-sel" data-id="${r.id}" ${DLV.sel.has(r.id)?"checked":""}></td>`:""}
-      <td class="mut">${crmDate(r.createdAt)}</td><td>${escapeHtml(r.manager||"—")}</td><td><a href="#" onclick="openMicroById(${r.dealId});return false" style="font-weight:800;color:#2B2228">${escapeHtml(r.blogger||"—")}</a></td>
-      <td>${escapeHtml(r.city||"—")}</td><td style="max-width:200px">${escapeHtml(r.address||"")}</td><td style="max-width:240px">${what(r)}</td>
+      <td class="mut">${crmDate(r.createdAt)}</td><td>${escapeHtml(r.manager||"—")}</td><td>${r.dealId ? `<a href="#" onclick="openMicroById(${r.dealId});return false" style="font-weight:800;color:#2B2228">${escapeHtml(r.blogger||"—")}</a>` : `<b>${escapeHtml(r.blogger||"—")}</b>`}<div class="mut" style="font-size:11px">${escapeHtml(r.phone||"")}</div></td>
+      <td>${escapeHtml(r.city||"—")}</td><td style="max-width:200px">${escapeHtml(r.address||"")}</td><td style="max-width:240px">${what(r)}${r.note?`<div class="mut" style="font-size:11px">${escapeHtml(r.note)}</div>`:""}</td>
       <td style="text-align:right"><b>${fmtNum(r.productCost)} ₸</b></td><td style="text-align:right">${r.deliveryCost?fmtNum(r.deliveryCost)+" ₸":"—"}</td>
       <td><span class="pv-st ${DLV_CLS[r.status]||"s-m"}">${escapeHtml(DLV_LABEL[r.status]||r.status)}</span></td>
       <td style="white-space:nowrap;text-align:right">${lead ? `${r.status!=="sent"&&r.status!=="delivered"?`<button class="btn btn-sm dlv-set" data-id="${r.id}" data-st="sent">Подано логисту</button>`:""}${r.status!=="delivered"?`<button class="btn btn-sm btn-primary dlv-set" data-id="${r.id}" data-st="delivered">Доставлено</button>`:""}${r.status!=="failed"&&r.status!=="delivered"?`<button class="btn btn-sm dlv-set" data-id="${r.id}" data-st="failed">Не доставлено</button>`:""}` : (r.status==="new" ? `<button class="btn btn-sm dlv-del" data-id="${r.id}">Отменить</button>` : "")}</td></tr>`).join("")
@@ -9737,6 +9740,9 @@ function wireDeliveryReq(){
   document.querySelectorAll(".dlv-del").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch("/api/delivery-requests/"+b.dataset.id, {method:"DELETE"})); toast("Заявка отменена"); myDlvLoad(); }catch(e){ toast(e.message, true); } });
   const lg = document.getElementById("dlv-logist"); if(lg) lg.onclick = async ()=>{ await crmDownload("/api/delivery-requests/export?logist=1&ids="+[...DLV.sel].join(","), "для_логиста.xlsx"); DLV.sel.clear(); setTimeout(myDlvLoad, 800); };
   const ex = document.getElementById("dlv-excel"); if(ex) ex.onclick = ()=> crmDownload("/api/delivery-requests/export?ids="+vis().map(r=>r.id).join(","), "заявки_на_доставку.xlsx");
+  const ib = document.getElementById("dlv-import"), fi = document.getElementById("dlv-import-file");
+  if(ib && fi){ ib.onclick = ()=> fi.click(); fi.onchange = async ()=>{ const f = fi.files[0]; if(!f) return; const fd = new FormData(); fd.append("file", f); fd.append("status", "sent");
+    try{ const r = await withBusy(ib, ()=> apiFetch("/api/delivery-requests/import", {method:"POST", body:fd})); toast(`Загружено: ${r.added}${r.skipped?" · уже были: "+r.skipped:""} — статус «Подано логисту»`); DLV.st = "sent"; myDlvLoad(); }catch(e){ toast(e.message, true); } fi.value = ""; }; }
 }
 // Заявка на доставку из карточки интеграции
 function modalDeliveryRequest(d){
@@ -9861,6 +9867,7 @@ function tplDesk(){
 }
 function wireDesk(){
   wireDateProposals(()=> renderDeskTab());
+  document.querySelectorAll(".desk-send").forEach(b=> b.onclick = ()=> deskSendNow(b));
   const rAll = document.getElementById("desk-remind-all"); if(rAll) rAll.onclick = async ()=>{ const ra = rAll; const ids = ra.dataset.ids.split(",").filter(Boolean).map(Number); if(!ids.length){ toast("Ни у кого нет номера WhatsApp", true); return; } if(!confirm("Отправить напоминание в WhatsApp "+ids.length+" блогерам?")) return;
     try{ const r = await withBusy(ra, ()=> apiFetch("/api/coord/send-now-many", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids})})); toast(`Отправлено: ${r.sent||0} · пропущено: ${r.skipped||0}${r.skipped?" (номер не в рабочем WhatsApp — напомните кнопкой в строке)":""}`); }catch(e){ toast(e.message, true); } };
   const gaps = deskGaps();
