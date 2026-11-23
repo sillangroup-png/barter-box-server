@@ -8373,8 +8373,8 @@ function modalMicroDeal(existing, prefill){
     ${sec(2, "Что снимает", `
       <div style="display:grid;grid-template-columns:minmax(0,2fr) 100px minmax(0,1fr);gap:12px;align-items:end">
         ${lab("Что входит — любые сочетания", `<div style="display:flex;gap:6px;flex-wrap:wrap">${chip("mm-fmt","reels","Reels",fmtSet.has("reels"))}${chip("mm-fmt","tt","TikTok",fmtSet.has("tt"))}${chip("mm-fmt","st","Сторис",fmtSet.has("st"))}</div><input type="hidden" id="mm-format" value="${escapeHtml(microFormatOf(d))}">`)}
-        ${lab("Сторис, шт", `<input id="mm-stories-count" type="number" min="0" class="pv-inp" value="${d.storiesCount||""}">`)}
-        ${lab("Язык видео", `<select id="mm-video-lang" class="pv-inp"><option value="">— не указан —</option>${MICRO_VIDEO_LANGS.map(st=>`<option value="${st}" ${st===microVideoLang(d)?'selected':''}>${({ru:"Русский",kz:"Казахский"})[st]||"Под музыку"}</option>`).join("")}</select>`)}
+        <input id="mm-stories-count" type="hidden" value="${d.storiesCount||""}">
+        ${UI.canExport ? "" : `<span class="mut" style="font-size:11.5px;align-self:center">язык определится по видео сам</span>`}<span style="${UI.canExport?"":"display:none"}">${lab("Язык видео", `<select id="mm-video-lang" class="pv-inp"><option value="">— не указан —</option>${MICRO_VIDEO_LANGS.map(st=>`<option value="${st}" ${st===microVideoLang(d)?'selected':''}>${({ru:"Русский",kz:"Казахский"})[st]||"Под музыку"}</option>`).join("")}</select>`)}</span>
       </div>`)}
     ${sec(3, "Товар", `
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
@@ -9280,6 +9280,8 @@ function modalMicroCard(d){
     <div style="margin-top:10px">${deskDateProposalsHtml(d.id)}</div>
     ${!UI.readOnly ? `<div style="margin-top:10px;background:#fff;border:1px solid #F3DDE7;border-radius:12px;padding:10px 14px;display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
       ${!pub ? `<label style="display:flex;flex-direction:column;gap:3px"><span class="pv-lbl">Плановая дата</span><input type="date" id="mc-pdate" class="pv-inp" value="${escapeHtml(String(d.plannedDate||"").slice(0,10))}" style="width:150px"></label>` : ""}
+      <label style="display:flex;flex-direction:column;gap:3px;min-width:240px"><span class="pv-lbl">Товар (название или ШК)</span><input class="pv-inp" id="mc-prod" list="mc-prod-list" value="${escapeHtml(d.product||"")}" placeholder="начните вводить"><datalist id="mc-prod-list">${microSkuAll().map(x=>`<option value="${escapeHtml(x.name+" — "+x.code)}"></option>`).join("")}</datalist></label>
+      <label style="display:flex;flex-direction:column;gap:3px"><span class="pv-lbl">Что снимает</span><span style="display:flex;gap:4px">${[["Reels","reels"],["TikTok","tt"],["Сторис","st"]].map(([t,k])=>`<button type="button" class="pv-chip mc-fmt ${new RegExp(t).test(microFormatOf(d))?"on":""}" data-k="${k}">${t}</button>`).join("")}</span></label>
       <label style="display:flex;flex-direction:column;gap:3px"><span class="pv-lbl">Сумма, ₸</span><input type="number" class="pv-inp mc-f" data-f="cost" data-num="1" value="${Number(d.cost)||""}" style="width:110px"></label>
       <label style="display:flex;flex-direction:column;gap:3px"><span class="pv-lbl">Телефон (WhatsApp)</span><input class="pv-inp mc-f" data-f="phone" value="${escapeHtml(d.phone||"")}" style="width:150px"></label>
       <label style="display:flex;flex-direction:column;gap:3px"><span class="pv-lbl">Ведёт</span><select class="pv-inp mc-f" data-f="responsible" style="width:130px">${microManagerNames(d.responsible).map(n=>`<option ${n===d.responsible?"selected":""}>${escapeHtml(n)}</option>`).join("")}</select></label>
@@ -9336,6 +9338,11 @@ function modalMicroCard(d){
   bindVideoStageButtons(()=> microCardRefresh(d.id));
   wireDateProposals(()=>{ render(); microCardRefresh(d.id); });
   document.querySelectorAll(".mc-f").forEach(el=> el.onchange = ()=>{ const f = el.dataset.f, v = el.dataset.num ? (parseInt(el.value,10)||0) : el.value.trim(); if(String(v) === String(d[f]==null?"":d[f])) return; save({[f]: v}, "Сохранено"); });
+  const mprod = document.getElementById("mc-prod"); if(mprod) mprod.onchange = ()=>{ const v = mprod.value.trim(); if(!v || v===d.product) return; const hit = microSkuAll().find(x=> v===x.name+" — "+x.code || v===x.code);
+    save(hit ? {product:hit.name, barcode:hit.code} : {product:v}, "Товар: "+(hit?hit.name:v)); };
+  document.querySelectorAll(".mc-fmt").forEach(b=> b.onclick = ()=>{ b.classList.toggle("on"); const on = k=> document.querySelector(`.mc-fmt[data-k="${k}"]`).classList.contains("on"); const r = on("reels"), t = on("tt"), st = on("st");
+    const f = st && !r && !t ? "Сторис" : st && r && !t ? "Reels + Сторис" : st ? "Сторис + Reels + TikTok" : "";
+    save({contentFormat:f}, "Формат: "+(f||"Reels + TikTok")); });
   const fct = document.getElementById("mc-fact"); if(fct) fct.onchange = ()=>{ const v = fct.value; if(v === String(d.publishDate||"").slice(0,10)) return; if(v && v > todayStr()){ toast("Дата выхода не может быть в будущем — для будущего есть плановая дата", true); fct.value = d.publishDate||""; return; } save(v ? {publishDate:v, videoStatus:"опубликовано"} : {publishDate:""}, v ? "Дата выхода: "+ddmmStr(v) : "Дата выхода убрана"); };
   const otd = document.getElementById("mc-out-today"); if(otd) otd.onclick = ()=> save({publishDate:todayStr(), videoStatus:"опубликовано"}, "Отмечено: вышло сегодня");
   const pdt = document.getElementById("mc-pdate"); if(pdt) pdt.onchange = ()=>{ const v = pdt.value; if(v && v!==String(d.plannedDate||"").slice(0,10)) save({plannedDate:v}, "Дата выхода: "+ddmmStr(v)); };
