@@ -959,6 +959,7 @@ require("./lifecycle").mount(app,{getState:()=>state,persist:()=>persist(),requi
 require("./blogery-client").createClient({getState:()=>state,persist:()=>persist()}).mount(app,requireAuth);
 require("./crm-link").mount(app,{getState:()=>state,persist:()=>persist(),requireAuth});
 require("./crm-bloggers").mount(app,{getState:()=>state,requireAuth,kostPool:pgPool});
+require("./delivery-requests").mount(app,{getState:()=>state,requireAuth,persist});
 require("./finance-client").createFinanceClient({getState:()=>state,persist:()=>persist()}).mount(app,requireAuth);
 require("./contracts").createContracts({getState:()=>state,dataDir:DATA_DIR}).mount(app,requireAuth);
 
@@ -2011,6 +2012,8 @@ app.post("/api/audit/:n/revert", requireAuth, (req,res)=>{
   persist();
   res.json(r);
 });
+// База ТЗ из Blogery Audit (файл Нины 23.11.2026): шаблоны по товарам, статус, автор — без текстов (тексты в Blogery Audit).
+app.get("/api/tz-library", requireAuth, (req,res)=>{ try{ const L = require("./tz-library.json"); res.json(L.items.map(([id,group,hook,status,tpl,blogger])=>({id, group, match:L.groups[group]||"", hook, status, tpl:!!tpl, blogger}))); }catch(e){ res.json([]); } });
 app.put("/api/micro-tz-catalog", requireAuth, (req,res)=>{
   const s = req.session || {};
   if(s.role !== "manager" && s.role !== "marketer") return res.status(403).json({error:"Справочник ТЗ меняет менеджер или маркетолог"});

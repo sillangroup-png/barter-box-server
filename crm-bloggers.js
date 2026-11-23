@@ -456,7 +456,7 @@ function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
   });
 
   // ---------- Товары: один справочник (crm.items, collection='products'); меняют Нина и Сая ----------
-  const prodView = r => { const d = r.data || {}; return { id: r.id, name: d.name || '', article: d.article || d.barcode || (String(r.id).startsWith('sku:') ? String(r.id).slice(4) : ''), category: d.category || '', cost: num(d.cost),
+  const prodView = r => { const d = r.data || {}; return { id: r.id, name: d.name || '', article: d.article || d.barcode || (String(r.id).startsWith('sku:') ? String(r.id).slice(4) : ''), sku: d.sku || '', category: d.category || '', cost: num(d.cost),
     tz: d.tz || (Array.isArray(d.tz_list) ? d.tz_list.join('\n') : (d.tz_list || '')), notes: d.notes || '', updatedAt: d.updated_at || null }; };
   app.get('/api/crm/products', requireAuth, async (req, res) => {
     if (!canStaff(req) || !need(res)) return;
@@ -523,6 +523,57 @@ function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
       await pool.query('update crm.payments set data=$2, status=$3, updated_at=now() where id=$1', [req.params.id, d, s]);
       // Статус блогера «Оплачено» больше не ставим — оплата живёт отдельно (см. прототип).
       res.json({ ok: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  // ---------- Оплаты по прототипу (23.11.2026): Excel, импорт файла пополнения с проверкой, массовая смена статуса ----------
+  const payRows = async (ids) => { const r = await pool.query(`select p.id, p.data, p.status, p.manager, b.data->>'name' blogger_name, b.data->>'instagram_url' blogger_instagram
+      from crm.payments p left join crm.bloggers b on b.id = p.blogger_id where not p.deleted ${ids ? 'and p.id = any($1)' : ''} order by p.created_at desc nulls last limit 5000`, ids ? [ids] : []); return r.rows.map(payView); };
+  // Мои заявки на оплату — менеджер видит только поданные им (все статусы).
+  app.get('/api/crm/payments/mine', requireAuth, async (req, res) => {
+    if (!need(res)) return; if (!canStaff(req)) return res.status(403).json({ error: 'Нет доступа' });
+    try { const me = req.session.name; const items = (await payRows()).filter(p => p.manager === me);
+      const counts = {}; for (const p of items) { const c = counts[p.status] || (counts[p.status] = { n: 0, sum: 0 }); c.n++; c.sum += Number(p.amount) || 0; }
+      res.json({ items, counts });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  app.get('/api/crm/payments/export', requireAuth, async (req, res) => {
+    if (!need(res)) return; if (!isNina(req)) return res.status(403).json({ error: 'Только Нина' }); if (!XLSX) return res.status(503).json({ error: 'Excel недоступен' });
+    try { const ids = req.query.ids ? String(req.query.ids).split(',').filter(Boolean) : null; let items = await payRows(ids);
+      if (!ids && req.query.status && req.query.status !== 'all') items = items.filter(p => p.status === req.query.status);
+      sendXlsx(res, 'оплаты.xlsx', [['Дата', 'Менеджер', 'Блогер', 'ФИО получателя', 'ИИН', 'Kaspi', 'Видео ₸', 'Товар ₸', 'Сумма ₸', 'ИП', 'За что', 'Статус', 'Примечание'],
+        ...items.map(p => [String(p.createdAt || '').slice(0, 10), p.manager || '', p.blogger || '', p.recipient || '', p.iin || '', p.kaspi || '', p.amountVideo || '', p.amountProduct || '', p.amount || 0, p.isIp ? 'ИП' : '', p.name || '', p.statusLabel, p.notes || ''])], 'Оплаты');
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  const normName = s => String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-яәіңғүұқөһ ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const digits = s => String(s || '').replace(/\D/g, '');
+  app.post('/api/crm/payments/import-preview', requireAuth, upload.single('file'), async (req, res) => {
+    if (!need(res)) return; if (!isNina(req)) return res.status(403).json({ error: 'Только Нина' }); if (!XLSX || !req.file) return res.status(400).json({ error: 'Нужен файл Excel' });
+    try {
+      const wb = XLSX.read(req.file.buffer, { type: 'buffer' }); const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' });
+      const subs = (await payRows()).filter(p => p.status === 'submitted' || p.status === 'pending');
+      const used = new Set(), toPaid = [], mismatch = [], notFound = [];
+      for (const row of aoa) {
+        const cells = row.map(x => String(x)); const text = normName(cells.join(' ')); if (!text) continue;
+        const nums = row.map(x => typeof x === 'number' ? x : Number(String(x).replace(/[\s ₸,]/g, ''))).filter(x => Number.isFinite(x) && x >= 100 && x < 100000000);
+        if (!nums.length) continue;
+        const dg = digits(cells.join(' '));
+        const cand = subs.filter(p => !used.has(p.id) && ((() => { const nm = normName(p.recipient).split(' ').filter(Boolean); if (!nm.length || nm[0].length < 3) return false; const tw = ' ' + text + ' '; return tw.includes(' ' + nm[0] + ' ') && (!nm[1] || tw.includes(' ' + nm[1].slice(0, 1))); })() || (digits(p.kaspi).length >= 10 && dg.includes(digits(p.kaspi).slice(-10)))));
+        if (!cand.length) { notFound.push({ row: cells.filter(Boolean).join(' · ').slice(0, 160), amount: nums[0] }); continue; }
+        const hit = cand.find(p => nums.includes(Number(p.amount)));
+        if (hit) { used.add(hit.id); toPaid.push({ id: hit.id, blogger: hit.blogger, recipient: hit.recipient, amount: hit.amount, status: hit.statusLabel }); }
+        else mismatch.push({ id: cand[0].id, blogger: cand[0].blogger, recipient: cand[0].recipient, amount: cand[0].amount, fileAmount: nums[0], status: cand[0].statusLabel });
+      }
+      res.json({ file: req.file.originalname, rows: aoa.length, toPaid, mismatch, notFound });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+  app.post('/api/crm/payments/bulk', requireAuth, async (req, res) => {
+    if (!need(res)) return; if (!isNina(req)) return res.status(403).json({ error: 'Только Нина' }); if (!(await requireCutover(res))) return;
+    const ids = Array.isArray((req.body || {}).ids) ? req.body.ids.map(String) : []; const s = String((req.body || {}).status || '');
+    if (!ids.length || !PAY_STATUS[s]) return res.status(400).json({ error: 'Нужны ids и статус' });
+    try { let n = 0; const now = new Date().toISOString();
+      for (const id of ids) { const r = await pool.query('select data from crm.payments where id=$1', [id]); if (!r.rows[0]) continue; const d = r.rows[0].data; d.status = s; d.updated_at = now; if (s === 'paid') { d.paid_by = req.session.name; d.paid_at = now; }
+        await pool.query('update crm.payments set data=$2, status=$3, updated_at=now() where id=$1', [id, d, s]); n++; }
+      res.json({ ok: true, n });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
   // Менеджер подаёт на оплату. Наличные/Kaspi (не ИП) — сумма кратна 500.
