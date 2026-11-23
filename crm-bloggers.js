@@ -38,7 +38,10 @@ function declineCode(status, reason) {
   return 'other';
 }
 
-function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
+function mount(app, { getState, requireAuth, kostPool, persist, env = process.env }) {
+  // 23.11.2026: статус оплаты в интеграции ставится сам — подали заявку → «к оплате», Нина отметила → «оплачено».
+  const PAY_TO_DEAL = { pending: 'к оплате', submitted: 'к оплате', approved: 'к оплате', paid: 'оплачено' };
+  const syncDealPay = (dealId, s) => { const v = PAY_TO_DEAL[s]; if (!dealId || !v) return; const d = ((getState() || {}).microInfluencerDeals || []).find((x) => String(x.id) === String(dealId)); if (d && d.paymentStatus !== v) { d.paymentStatus = v; if (persist) persist(); } };
   const URL = env.BB_DB_URL || '';
   const pool = URL ? new Pool({ connectionString: URL, ssl: { rejectUnauthorized: false }, max: 4, idleTimeoutMillis: 30000, connectionTimeoutMillis: 10000 }) : null;
   const need = (res) => { if (!pool) { res.status(503).json({ error: 'База не подключена (BB_DB_URL)' }); return false; } return true; };
@@ -520,7 +523,7 @@ function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
       const r = await pool.query('select data from crm.payments where id=$1', [req.params.id]);
       if (!r.rows[0]) return res.status(404).json({ error: 'Оплата не найдена' });
       const d = r.rows[0].data; d.status = s; d.updated_at = new Date().toISOString(); if (s === 'paid') { d.paid_by = req.session.name; d.paid_at = d.updated_at; }
-      await pool.query('update crm.payments set data=$2, status=$3, updated_at=now() where id=$1', [req.params.id, d, s]);
+      await pool.query('update crm.payments set data=$2, status=$3, updated_at=now() where id=$1', [req.params.id, d, s]); syncDealPay(d.bb_deal_id, s);
       // Статус блогера «Оплачено» больше не ставим — оплата живёт отдельно (см. прототип).
       res.json({ ok: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -572,7 +575,7 @@ function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
     if (!ids.length || !PAY_STATUS[s]) return res.status(400).json({ error: 'Нужны ids и статус' });
     try { let n = 0; const now = new Date().toISOString();
       for (const id of ids) { const r = await pool.query('select data from crm.payments where id=$1', [id]); if (!r.rows[0]) continue; const d = r.rows[0].data; d.status = s; d.updated_at = now; if (s === 'paid') { d.paid_by = req.session.name; d.paid_at = now; }
-        await pool.query('update crm.payments set data=$2, status=$3, updated_at=now() where id=$1', [id, d, s]); n++; }
+        await pool.query('update crm.payments set data=$2, status=$3, updated_at=now() where id=$1', [id, d, s]); syncDealPay(d.bb_deal_id, s); n++; }
       res.json({ ok: true, n });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
@@ -594,7 +597,7 @@ function mount(app, { getState, requireAuth, kostPool, env = process.env }) {
       const d = { id, blogger_id: b.bloggerId, manager_id: manager && !manager.startsWith('bb:') ? await crmUserId(pool, manager) : null, manager_name_bb: req.session.name || null,
         recipient_name: str(b.recipient), iin: str(b.iin, 20), kaspi: str(b.kaspi, 40), payment_name: str(b.name), amount, amount_video: num(b.amountVideo), amount_product: num(b.amountProduct),
         is_ip: !!b.isIp, notes: str(b.notes, 1000), status: 'pending', created_at: now, updated_at: now, created_by_bb: req.session.name || null, bb_deal_id: str(b.dealId, 80) };
-      await pool.query('insert into crm.payments(id,data,status,blogger_id,manager,created_at) values ($1,$2,$3,$4,$5,$6)', [id, d, 'pending', b.bloggerId, manager, now]);
+      await pool.query('insert into crm.payments(id,data,status,blogger_id,manager,created_at) values ($1,$2,$3,$4,$5,$6)', [id, d, 'pending', b.bloggerId, manager, now]); syncDealPay(b.dealId, 'pending');
       res.json({ ok: true, id });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

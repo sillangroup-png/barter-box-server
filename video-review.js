@@ -214,4 +214,66 @@ async function reviewVideo(url, { mimeHint } = {}) {
   }
 }
 
-module.exports = { reviewVideo, parseReview, SYSTEM_INSTRUCTION };
+
+// 23.11.2026: язык видео и похожее базовое ТЗ (для автопроставления в интеграцию). Отдельный короткий запрос.
+async function classifyVideo(url, candidates) {
+  const key = String(process.env.GEMINI_API_KEY || "").trim();
+  if (!key) throw new Error("В Render не задан GEMINI_API_KEY");
+  const model = String(process.env.GEMINI_MODEL || "gemini-3.5-flash").trim();
+  const H = { "x-goog-api-key": key };
+  const dl = await fetch(url);
+  if (!dl.ok) throw new Error(`не удалось скачать видео (${dl.status})`);
+  const buf = Buffer.from(await dl.arrayBuffer());
+  if (buf.length > MAX_BYTES) throw new Error("видео больше 200 МБ");
+  let mime = String(dl.headers.get("content-type") || "").split(";")[0].trim();
+  if (!/^video\//.test(mime)) mime = /\.mov(\?|$)/i.test(url) ? "video/quicktime" : "video/mp4";
+  const st = await fetch(`${API}/upload/v1beta/files`, { method: "POST", headers: { ...H, "X-Goog-Upload-Protocol": "resumable", "X-Goog-Upload-Command": "start",
+    "X-Goog-Upload-Header-Content-Length": String(buf.length), "X-Goog-Upload-Header-Content-Type": mime, "Content-Type": "application/json" },
+    body: JSON.stringify({ file: { display_name: `bb-classify-${Date.now()}` } }) });
+  const upUrl = st.headers.get("x-goog-upload-url");
+  if (!st.ok || !upUrl) throw new Error(`Gemini: загрузка не началась (${st.status})`);
+  const up = await fetch(upUrl, { method: "POST", headers: { "Content-Length": String(buf.length), "X-Goog-Upload-Offset": "0", "X-Goog-Upload-Command": "upload, finalize" }, body: buf });
+  let file = (await up.json().catch(() => ({}))).file;
+  if (!up.ok || !file) throw new Error(`Gemini: загрузка не удалась (${up.status})`);
+  try {
+    for (let waited = 0; file.state === "PROCESSING" && waited < 180000; waited += 4000) {
+      await sleep(4000);
+      const g = await fetch(`${API}/v1beta/${file.name}`, { headers: H });
+      if (g.ok) file = await g.json();
+    }
+    if (file.state !== "ACTIVE") throw new Error("Gemini не смог обработать видео");
+    const list = (candidates || []).map((c) => `${c.id} | ${c.group} | ${c.title}${c.hook ? " | хук: " + c.hook : ""}${c.angle ? " | идея: " + c.angle : ""}`).join("\n");
+    const prompt = [
+      "Посмотри рекламный ролик блогера для косметики MIXIT.",
+      "1) Язык речи/текста в видео: ru (русский), kz (казахский) или music (без речи, только музыка и надписи).",
+      "2) Какой из базовых сценариев (ТЗ) ниже ролик повторяет по идее, хуку и структуре. Если ни один явно не подходит — tz_id пустой.",
+      "Сценарии (id | товар | название | хук | идея):", list || "(список пуст)",
+      'Ответь СТРОГО JSON без пояснений: {"lang":"ru|kz|music","tz_id":"…","confidence":0.0-1.0}',
+    ].join("\n");
+    const fallback = String(process.env.GEMINI_FALLBACK_MODEL || "gemini-flash-latest").trim();
+    let lastErr = "";
+    for (const m of [model].concat(fallback && fallback !== model ? [fallback] : [])) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const r = await fetch(`${API}/v1beta/models/${encodeURIComponent(m)}:generateContent`, { method: "POST", headers: { ...H, "Content-Type": "application/json" },
+          body: JSON.stringify({ contents: [{ role: "user", parts: [{ file_data: { mime_type: mime, file_uri: file.uri } }, { text: prompt }] }], generationConfig: { temperature: 0, responseMimeType: "application/json" } }) });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok) {
+          const text = ((j.candidates || [])[0]?.content?.parts || []).map((p) => p.text || "").join("").trim();
+          let o = {}; try { o = JSON.parse((text.match(/\{[\s\S]*\}/) || ["{}"])[0]); } catch (e) {}
+          const lang = o.lang === "ru" ? "ru" : o.lang === "kz" ? "kz" : o.lang === "music" ? "под музыку" : "";
+          const tz = (candidates || []).find((c) => c.id === String(o.tz_id || "")) || null;
+          return { lang, tz, confidence: Number(o.confidence) || 0, model: m };
+        }
+        lastErr = `${r.status} ${(j.error && j.error.message) || ""}`.slice(0, 200);
+        if (r.status === 404) break;
+        if (![429, 500, 503].includes(r.status)) break;
+        await sleep([10000, 20000, 40000][attempt]);
+      }
+    }
+    throw new Error(`Gemini: ${lastErr}`);
+  } finally {
+    fetch(`${API}/v1beta/${file.name}`, { method: "DELETE", headers: H }).catch(() => {});
+  }
+}
+
+module.exports = { reviewVideo, classifyVideo, parseReview, SYSTEM_INSTRUCTION };

@@ -23,12 +23,12 @@
 // передаёт чат менеджеру (imopenlines.bot.session.operator) — работа менеджеров в Битриксе не меняется.
 // Лимит: COORD_DAILY_CAP сообщений в день на всех (по умолчанию 30).
 const crypto = require("crypto");
-const { reviewVideo } = require("./video-review.js");
+const { reviewVideo, classifyVideo } = require("./video-review.js");
 const videoFlow = require("./video-flow.js");
 
 const H = 3600 * 1000;
 const WAZZUP = "https://api.wazzup24.com/v3";
-const MAX_LOG = 1500, MAX_EVENTS = 500, SEEN_KEEP_MS = 7 * 24 * H;
+const MAX_LOG = 6000, MAX_EVENTS = 500, SEEN_KEEP_MS = 7 * 24 * H;
 const RETRY_MIN = [5, 15, 60, 60, 60];
 const STALE_MS = 6 * H;
 const SOON_DAYS = 2, MAX_REMINDERS_PER_DATE = 3;
@@ -77,6 +77,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const c = C();
     c.log.push(Object.assign({ at: new Date().toISOString(), dealId: dealId || null, dir, text: String(text).slice(0, 600) }, extra || {}));
     if (c.log.length > MAX_LOG) c.log.splice(0, c.log.length - MAX_LOG);
+    if (dir === "out" && dealId) { const d = (getState().microInfluencerDeals || []).find((x) => x.id === dealId); const n = d && waNumber(d.phone); if (n && c.inbox && c.inbox[n]) c.inbox[n].lastOut = new Date().toISOString(); }
   };
   const event = (d, kind, text, extra) => {
     const c = C();
@@ -85,6 +86,34 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (c.events.length > MAX_EVENTS) c.events.splice(0, c.events.length - MAX_EVENTS);
     return c.events[c.events.length - 1];
   };
+  // ---------- «Входящие» (23.11.2026) ----------
+  // Все диалоги с блогерами — общий номер Wazzup и номер ChatApp, все менеджеры. Сообщение привязывается к интеграции по телефону
+  // (ближайшая по дате, ещё не вышедшая), пишется в переписку карточки. «Ждёт ответа» — последнее сообщение от блогера.
+  // Блогерам здесь ничего не отправляется автоматически.
+  const IB = () => { const c = C(); c.inbox = c.inbox && typeof c.inbox === "object" ? c.inbox : {}; return c.inbox; };
+  const dealsByPhone = (n) => (getState().microInfluencerDeals || []).filter((d) => waNumber(d.phone) === n && !/отмен/i.test(String(d.problemStatus || "")));
+  function pickDeal(list) {
+    const today = almatyDate(), act = list.filter((d) => !isPublished(d)), pool = act.length ? act : list;
+    const dist = (d) => Math.abs(daysBetween(today, String(d.plannedDate || today).slice(0, 10)) || 0);
+    return pool.slice().sort((a, b) => dist(a) - dist(b))[0] || null;
+  }
+  const isVideoMsg = (type, url, name) => String(type) === "video" || /\.(mp4|mov|webm|m4v)(?:$|[?#])/i.test(String(url || "") + " " + String(name || ""));
+  function inboxRecord({ phone, side, text, type, url, via, id, at, noLog }) {
+    const n = waNumber(phone); if (!n) return null;
+    const c = C();
+    if (id) { const key = "ib:" + via + ":" + id; if (c.seen[key]) return null; c.seen[key] = Date.now(); }
+    const list = dealsByPhone(n); if (!list.length) return null;
+    const d = pickDeal(list); if (!d) return null;
+    const ib = IB(), t = at || new Date().toISOString();
+    const row = ib[n] = Object.assign(ib[n] || { phone: n }, { dealId: d.id, manager: d.responsible || "", blogger: d.blogerName || d.instagramAccount || "", via });
+    const body = type && type !== "text" ? `[${type === "video" ? "видео" : type === "image" ? "фото" : type === "audio" ? "голосовое" : "файл"}] ${text || ""} ${url || ""}`.trim() : String(text || "").trim();
+    if (side === "in") { if (via === "wazzup") c.lastIn[n] = t; row.lastIn = t; row.lastInText = body.slice(0, 300); row.lastInType = type || "text"; }
+    else row.lastOut = t;
+    if (!noLog) log(d.id, side === "in" ? "in" : "out", (side === "in" ? "" : "мы (" + via + "): ") + body);
+    const keys = Object.keys(ib); if (keys.length > 4000) { keys.sort((a, b) => String(ib[a].lastIn || ib[a].lastOut || "").localeCompare(String(ib[b].lastIn || ib[b].lastOut || ""))).slice(0, keys.length - 4000).forEach((k) => delete ib[k]); }
+    return { d, row };
+  }
+  const waiting = (r) => !!r.lastIn && r.lastIn > (r.lastOut || "") && r.lastIn > (r.doneAt || "");
   const inPilot = (d) => {
     const k = cfg();
     // COORD_PILOT_MANAGER — одно имя или несколько через запятую: «Марина, Камила».
@@ -437,6 +466,16 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     // Берём только наш канал (WAZZUP_CHANNEL_ID), входящие, от номеров из теста. Всё остальное — сразу мимо, ничего не сохраняем.
     if (!msg || !ourChannel || String(msg.channelId || "") !== ourChannel) return false;
     if(videoFlow.enabled() && reviewTransport.incoming(msg,ourChannel))return true;
+    if (String(msg.chatType || "whatsapp") === "whatsapp") {
+      const n0 = waNumber(msg.chatId), pilotIn = !msg.isEcho && (getState().microInfluencerDeals || []).some((d) => inPilot(d) && waNumber(d.phone) === n0);
+      // Сообщения, отправленные через API (наши кнопки), уже в журнале — не дублируем.
+      const apiOut = msg.isEcho && (msg.authorType === "api" || /^bb-/.test(String(msg.crmMessageId || "")) || C().seen["out:" + msg.messageId]);
+      if (!apiOut) {
+        const r = inboxRecord({ phone: msg.chatId, side: msg.isEcho ? "out" : "in", text: msg.text, type: msg.type, url: msg.contentUri, via: "wazzup", id: msg.messageId, at: msg.dateTime, noLog: pilotIn });
+        if (r && !msg.isEcho && !pilotIn && isVideoMsg(msg.type, msg.contentUri, msg.fileName)) queueClassify(r.d, msg.contentUri);
+        if (r && !pilotIn) return true;
+      }
+    }
     if (msg.isEcho || String(msg.chatType || "whatsapp") !== "whatsapp") return false;
     const chatId = waNumber(msg.chatId);
     if (!chatId) return false;
@@ -480,6 +519,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         log(d.id, "sys", "видео пришло — статус «📥 проверить»");
         const ev = event(d, "media", process.env.GEMINI_API_KEY ? "Блогер прислал видео на согласование — 🤖 ИИ разбирает (1–2 мин)" : "Блогер прислал видео на согласование — посмотрите и отправьте тимлиду", { url: u, review: true });
         if (process.env.GEMINI_API_KEY && u) startReview(d, u, ev && ev.id);
+        if (u) queueClassify(d, u);
         // Ответ блогеру «видео получили» — один раз на пачку (если шлёт несколько частей подряд).
         if (!d.vackAt || Date.now() - Date.parse(d.vackAt) > 6 * H) {
           d.vackAt = new Date().toISOString();
@@ -533,6 +573,98 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     } catch (e) { console.error("Wazzup webhook:", e.message); }
     if (changed) persist();
   });
+
+  // ---------- ChatApp: входящие (23.11.2026) ----------
+  // Адрес вставляется один раз в кабинете ChatApp (вебхук сообщений). Формат — события API ChatApp: {data:[{fromMe, side, type,
+  // message:{text,file}, chat:{phone}}], meta:{type:"message"}}; на всякий случай понимаем и плоский {phone, text, fromMe}.
+  app.post("/api/chatapp/webhook/:secret", require("express").urlencoded({ extended: true, limit: "2mb" }), (req, res) => {
+    const k = cfg();
+    if (k.secret.length < 16 || req.params.secret !== k.secret) return res.status(404).end();
+    res.status(200).json({ ok: true });
+    try {
+      const b = req.body || {};
+      const meta = b.meta || {};
+      if (meta.type && !/message/i.test(String(meta.type))) return;
+      const items = Array.isArray(b.data) ? b.data : b.data && typeof b.data === "object" ? [b.data] : Array.isArray(b) ? b : [b];
+      let changed = false;
+      for (const m of items) {
+        if (!m || typeof m !== "object") continue;
+        const chat = m.chat || {};
+        const phone = chat.phone || m.phone || String(chat.id || m.chatId || "").replace(/@.*/, "");
+        const msg = m.message && typeof m.message === "object" ? m.message : { text: m.message || m.text };
+        const f = msg.file; const url = f ? (typeof f === "string" ? f : f.link || f.url || f.src || "") : String(m.file || "");
+        const out = m.fromMe === true || m.fromMe === "1" || m.fromMe === "true" || m.side === "out";
+        if (out && m.fromApp) continue; // отправлено нашими кнопками через API — уже в журнале
+        const type = String(m.type || (url ? "file" : "text"));
+        const at = m.time ? new Date(Number(m.time) > 1e12 ? Number(m.time) : Number(m.time) * 1000).toISOString() : null;
+        const r = inboxRecord({ phone, side: out ? "out" : "in", text: msg.text || msg.caption || "", type, url, via: "chatapp", id: m.id || m.messageId, at });
+        if (r) { changed = true; if (!out && url && isVideoMsg(type, url, f && f.name)) queueClassify(r.d, url); }
+      }
+      if (changed) persist();
+    } catch (e) { console.error("ChatApp webhook:", e.message); }
+  });
+  app.get("/api/chatapp/webhook-url", requireAuth, (req, res) => {
+    if (!(req.session && req.session.canExport)) return res.status(403).json({ error: "Только Нина и Сая" });
+    const k = cfg(); if (k.secret.length < 16) return res.status(400).json({ error: "В Render нет COORD_WEBHOOK_SECRET" });
+    const base = String(process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || "https://barter-box-server.onrender.com").replace(/\/$/, "");
+    res.json({ url: `${base}/api/chatapp/webhook/${k.secret}` });
+  });
+
+  // ---------- «Входящие»: список, отметка «ответила» ----------
+  const LEAD_NAMES = new Set(["Нина", "Сая"]);
+  app.get("/api/inbox", requireAuth, (req, res) => {
+    if (!staff(req, res)) return;
+    const s = req.session || {}, all = (s.canExport && LEAD_NAMES.has(s.name)) || s.role === "marketer";
+    const me = personKey(s.name), mine = req.query.mine === "1" || !all;
+    const st = getState(), byId = new Map((st.microInfluencerDeals || []).map((d) => [d.id, d]));
+    const rows = Object.values(IB()).filter((r) => !mine || personKey(r.manager) === me).map((r) => {
+      const d = byId.get(r.dealId) || {};
+      return { phone: r.phone, dealId: r.dealId, manager: r.manager, blogger: d.blogerName || r.blogger, product: d.product || "", via: r.via,
+        lastIn: r.lastIn || "", lastInText: r.lastInText || "", lastInType: r.lastInType || "", lastOut: r.lastOut || "", waiting: waiting(r) };
+    }).sort((a, b) => String(b.lastIn || b.lastOut).localeCompare(String(a.lastIn || a.lastOut)));
+    res.json({ all, items: rows.slice(0, 400) });
+  });
+  app.post("/api/inbox/:phone/done", requireAuth, (req, res) => {
+    if (!staff(req, res)) return;
+    const r = IB()[waNumber(req.params.phone)]; if (!r) return res.status(404).json({ error: "не найдено" });
+    r.doneAt = new Date().toISOString(); r.doneBy = (req.session && req.session.name) || "";
+    persist(); res.json({ ok: true });
+  });
+
+  // ---------- Автопроставление ТЗ и языка по присланному видео (23.11.2026) ----------
+  // ИИ смотрит видео и выбирает из базовых ТЗ «Базы ТЗ» похожее + язык. Ставим только в пустые поля — менеджер может поменять.
+  const classifyQueue = []; let classifying = false;
+  function tzCandidates(d) {
+    let lib = null; try { lib = require("./tz-library.json"); } catch (e) { return []; }
+    const texts = new Map((getState().tzTexts || []).map((t) => [String(t.id), t]));
+    const items = (lib.items || []).filter((x) => x[3] !== "archive");
+    const prod = String(d.product || "").toLowerCase();
+    const groups = Object.entries(lib.groups || {}).filter(([g, re]) => { if (!prod) return true; try { return (re && new RegExp(re, "i").test(prod)) || prod.includes(g.toLowerCase()); } catch (e) { return prod.includes(g.toLowerCase()); } }).map(([g]) => g);
+    const pool = groups.length ? items.filter((x) => groups.includes(x[1])) : items;
+    return pool.slice(0, 60).map((x) => { const t = texts.get(String(x[0])) || {}; return { id: String(x[0]), group: x[1], title: x[2], hook: String(t.hook || "").slice(0, 160), angle: String(t.angle || "").slice(0, 160) }; });
+  }
+  function queueClassify(d, url) {
+    if (!process.env.GEMINI_API_KEY || !url || !d) return;
+    if (String(d.tz || "").trim() && d.videoLang) return; // всё уже заполнено
+    if (classifyQueue.some((j) => j.dealId === d.id)) return;
+    classifyQueue.push({ dealId: d.id, url }); runClassify();
+  }
+  async function runClassify() {
+    if (classifying) return; classifying = true;
+    try {
+      while (classifyQueue.length) {
+        const job = classifyQueue.shift();
+        const d = (getState().microInfluencerDeals || []).find((x) => x.id === job.dealId); if (!d) continue;
+        try {
+          const r = await classifyVideo(job.url, tzCandidates(d));
+          const ch = [];
+          if (!d.videoLang && r.lang) { d.videoLang = r.lang; ch.push("язык: " + ({ ru: "русский", kz: "казахский", "под музыку": "под музыку" })[r.lang]); }
+          if (!String(d.tz || "").trim() && r.tz && r.confidence >= 0.6) { d.tz = r.tz.title; d.tzGroup = r.tz.group; d.tzAuto = { id: r.tz.id, confidence: r.confidence, at: new Date().toISOString() }; ch.push("ТЗ: " + r.tz.title); }
+          if (ch.length) { log(d.id, "sys", "ИИ по видео проставил — " + ch.join(", ")); persist(); }
+        } catch (e) { log(d.id, "sys", "ИИ не определил ТЗ/язык: " + String(e.message).slice(0, 150)); persist(); }
+      }
+    } finally { classifying = false; }
+  }
 
   // ---------- Битрикс24: отправка и бот ----------
   function bxPhoneVariants(n) { return [`+${n}`, n, `8${n.slice(1)}`]; }
@@ -851,7 +983,6 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const stage = stageOf(d), due = dueOf(d);
     let kind, ds;
     const ownText = String(own || "").trim().slice(0, 1000);
-    if (ownText && stage === "published") fail("Уже опубликовано");
     if (ownText) { kind = "own"; }
     else if (force === "video_today" && !["received", "approved", "published"].includes(stage)) { kind = "video_today"; ds = ddmm(today); }
     else if (stage === "approved") { kind = "link_ask"; ds = ddmm(pd); }
