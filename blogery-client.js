@@ -7,7 +7,7 @@ function createClient({getState,persist,fetchImpl=fetch,env=process.env}){
  function findDeal(iid){const st=getState();iid=String(iid);return /^L\d+$/.test(iid)?{large:true,deal:(st.influencerDeals||[]).find(d=>'L'+d.id===iid)}:{large:false,deal:(st.microInfluencerDeals||[]).find(d=>String(d.id)===iid)};}
  function request(deal,actor,notes='',large=false){
   const iid=(large?'L':'')+String(deal.id);
-  const old=store().find(r=>String(r.integrationId)===iid&&r.status!=='cancelled');if(old)return old;
+  const old=store().filter(r=>String(r.integrationId)===iid&&r.status!=='cancelled'&&r.status!=='approved').pop();if(old)return old;/* 23.11.2026: если прошлое ТЗ уже готово — новый запрос (например, отдельно на блок сторис) */
   const products=(deal.flowGoods||[]).map(x=>({id:x.id,name:x.name,barcode:x.barcode,kaspiArticle:x.kaspiArticle,qty:x.qty}));
   if(!products.length&&deal.product)products.push({name:deal.product,barcode:deal.barcode||'',qty:1});if(!products.length)throw Error('Сначала укажите товар');
   const blogger=large?{id:deal.crmBloggerId||'',handle:deal.instagramLink||deal.blogerLogin,name:String(deal.blogerLogin||'').replace(/^@/,'')}:{id:deal.crmBloggerId||'',handle:deal.instagramAccount||deal.blogerName,name:deal.blogerName};
@@ -80,7 +80,7 @@ function createClient({getState,persist,fetchImpl=fetch,env=process.env}){
   // Очередь ТЗ для вкладки «База ТЗ» (23.11.2026): запросы и отправки — без ссылок на файлы и телефонов.
   app.get('/api/automation/brief-requests',requireAuth,staff,(req,res)=>{const st=getState();res.json({requests:store().filter(r=>r.status!=='cancelled').slice(-300).map(r=>({id:r.id,integrationId:r.integrationId,status:r.status,requestedBy:r.requestedBy,createdAt:r.createdAt||null,approvedAt:r.approvedAt||null,lastError:r.lastError||null,notes:(r.payload&&r.payload.notes)||''})),
    sent:(st.briefDelivery||[]).slice(-200).map(j=>({integrationId:j.integrationId,versionId:j.versionId,status:j.status,approvedBy:j.approvedBy||'',createdAt:j.createdAt||null,sentAt:j.sentAt||null}))});});
-  app.get('/api/automation/brief-request/:id',requireAuth,staff,(req,res)=>res.json({request:store().find(r=>r.integrationId===req.params.id)||null,approved:findDeal(req.params.id).deal?.flowBriefHistory||[]}));
+  app.get('/api/automation/brief-request/:id',requireAuth,staff,(req,res)=>res.json({request:store().filter(r=>r.integrationId===req.params.id&&r.status!=='cancelled').pop()||null,approved:findDeal(req.params.id).deal?.flowBriefHistory||[]}));
   const timer=setInterval(()=>drain().catch(()=>{}),30000);timer.unref();
  }
  return {request,drain,mount};

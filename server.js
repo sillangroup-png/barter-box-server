@@ -2014,6 +2014,21 @@ app.post("/api/audit/:n/revert", requireAuth, (req,res)=>{
 });
 // База ТЗ из Blogery Audit (файл Нины 23.11.2026): шаблоны по товарам, статус, автор — без текстов (тексты в Blogery Audit).
 app.get("/api/tz-library", requireAuth, (req,res)=>{ try{ const L = require("./tz-library.json"); res.json(L.items.map(([id,group,hook,status,tpl,blogger])=>({id, group, match:L.groups[group]||"", hook, status, tpl:!!tpl, blogger}))); }catch(e){ res.json([]); } });
+// Утверждённые базовые ТЗ (тексты) — Нина/Сая загружают файл из Blogery Audit (briefs_clean.json) кнопкой в «Базе ТЗ».
+// Хранятся в данных Barter Box (диск), не в репозитории. Блок «Для команды» в текст для блогера не попадает.
+const tzTextsUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20*1024*1024 } });
+app.get("/api/tz-texts", requireAuth, (req,res)=>{ res.json((state.tzTexts||[]).map(({text, ...x})=> x)); });
+app.get("/api/tz-texts/:id", requireAuth, (req,res)=>{ const x = (state.tzTexts||[]).find(t=> t.id===req.params.id); if(!x) return res.status(404).json({error:"ТЗ не найдено"}); res.json(x); });
+app.post("/api/tz-texts/import", requireAuth, tzTextsUpload.single("file"), (req,res)=>{
+  if(!req.session.canExport) return res.status(403).json({error:"Загружают Нина и Сая"});
+  let rows; try{ rows = JSON.parse(req.file.buffer.toString("utf8")); }catch(e){ return res.status(400).json({error:"Это не JSON-файл из Blogery Audit"}); }
+  if(!Array.isArray(rows)) return res.status(400).json({error:"Нужен список ТЗ (briefs_clean.json)"});
+  const ok = rows.filter(b=> b && b.is_template && (b.status==="Утверждено" || b.status_code==="ok") && b.text);
+  state.tzTexts = ok.map(b=> ({ id:String(b.id), family:String(b.family||""), product:String(b.product||""), hook:String(b.hook||""), angle:String(b.angle||""),
+    approved:String(b.approved_at||b.updated_at||"").slice(0,10), text:String(b.text).split(/\n##\s*Для команды/)[0].trimEnd()+"\n" }));
+  state.tzTextsUploadedAt = new Date().toISOString(); state.tzTextsUploadedBy = req.session.name||"";
+  persist(); res.json({ok:true, count: state.tzTexts.length});
+});
 app.put("/api/micro-tz-catalog", requireAuth, (req,res)=>{
   const s = req.session || {};
   if(s.role !== "manager" && s.role !== "marketer") return res.status(403).json({error:"Справочник ТЗ меняет менеджер или маркетолог"});
