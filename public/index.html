@@ -9531,7 +9531,10 @@ function wireDateProposals(after){
 // ===== База ТЗ по прототипу X14 (23.11.2026): запросы → на рассмотрении → утверждено → отправлено; ниже — справочник ТЗ с использованием и CPV =====
 const TZB = { data:null, loading:false, err:null, f:"all", prod:"", who:"" };
 // 23.11.2026 (Нина): ТЗ из коннектора Claude приходят «на проверке» — сначала «Утвердить» (Нина, Сая, Сауле), потом «Отправить блогеру»
-const TZB_LEADS = ["Нина","Сая","Сауле"];
+// кто утверждает: тимлид группы менеджера интеграции (MICRO_RESPONSIBLE_GROUPS), Нина и Сауле — любые
+const TZB_ALL = ["Нина","Сауле"];
+const tzbLeadOf = d=>{ const n = String(d&&d.responsible||"").trim(); for(const g of MICRO_RESPONSIBLE_GROUPS){ if(g.lead===n || g.members.includes(n)) return g.lead; } return "Нина"; };
+const tzbCanApprove = d=> TZB_ALL.includes(UI.actorName) || UI.actorName===tzbLeadOf(d);
 const tzbFrom = v=>{ const m = String(v.approvedBy||"").match(/Claude\s*·\s*(.+)$/i); return m ? "от "+m[1].trim()+" через Claude, ждёт проверки" : String(v.approvedBy||""); };
 const tzbNeedsLead = v=> /^(на проверке|Claude)/i.test(String(v&&v.approvedBy||"")) && !(v&&v.leadApprovedBy);
 async function tzbLoad(){ TZB.loading = true; try{ TZB.data = await apiFetch("/api/automation/brief-requests"); TZB.err = null; }catch(e){ TZB.err = e.message; TZB.data = {requests:[], sent:[]}; } TZB.loading = false; if(UI.tab==="tzBase") render(); }
@@ -9555,7 +9558,7 @@ function tplTzBase(){
   if(TZB.who==="mine") queue = queue.filter(x=> mine(x.d)); else if(TZB.who==="new") queue = queue.filter(x=> x.kind==="none" || x.r.status==="pending"); else if(TZB.who==="work") queue = queue.filter(x=> x.kind==="req" && x.r.status!=="pending");
   // Утверждено — ждёт отправки блогеру
   const sentSet = new Set(sent.filter(j=> j.status==="sent").map(j=> String(j.integrationId)+":"+j.versionId));
-  const review = deals.filter(d=> (d.flowBriefHistory||[]).some(v=> v.status==="approved" && !sentSet.has(String(d.id)+":"+v.versionId))).map(d=> ({d, v: (d.flowBriefHistory||[]).filter(v=> v.status==="approved").slice(-1)[0]}));
+  const review = deals.filter(d=> (d.flowBriefHistory||[]).some(v=> v.status==="approved" && !sentSet.has(String(d.id)+":"+v.versionId))).map(d=> ({d, v: (d.flowBriefHistory||[]).filter(v=> v.status==="approved").slice(-1)[0]})).sort((a,b)=> (tzbNeedsLead(b.v) && tzbCanApprove(b.d) ? 1 : 0) - (tzbNeedsLead(a.v) && tzbCanApprove(a.d) ? 1 : 0));
   const sentToday = sent.filter(j=> String(j.sentAt||j.createdAt||"").slice(0,10)===today).map(j=> ({j, d: tzbDeal(j.integrationId)})).filter(x=> x.d);
   const st = tzbStats(), cat = microTzCatalog();
   const lib = []; for(const g of cat) for(const it of (g.items||[])){ const s = st.get(it) || {n:0, cost:0, reach:0}; lib.push({group:g.group, item:it, all:!!g.all, n:s.n, cpv: s.reach ? s.cost/s.reach : null}); }
@@ -9587,9 +9590,9 @@ function tplTzBase(){
       : `<div class="mut" style="padding:12px 16px">Запросов нет</div>`}
   </div>
   <div class="panel" style="padding:0;margin-bottom:14px;overflow:hidden">
-    <div style="padding:14px 16px"><b style="font-size:15px">На рассмотрении · ${review.length}</b> <span class="mut" style="font-size:12px">ТЗ от Claude сначала утверждают Нина, Сая или Сауле, потом «Отправить блогеру» — уходит в WhatsApp само</span></div>
+    <div style="padding:14px 16px"><b style="font-size:15px">На рассмотрении · ${review.length}</b> <span class="mut" style="font-size:12px">ТЗ от Claude сначала утверждает тимлид менеджера (Нина, Сая, Анеля; Нина и Сауле — любые), потом «Отправить блогеру» — уходит в WhatsApp само</span></div>
     ${review.length ? review.map(({d,v})=> row(`<div>${nick(d)}</div><span>${escapeHtml(d.responsible||"—")}</span><span><span class="pv-st s-a">Персональное</span></span><span class="mut">«${escapeHtml(v.title||"ТЗ")}»${tzbNeedsLead(v)?` · <span style="color:#B7791F;font-weight:700">${escapeHtml(tzbFrom(v))}</span>`:v.leadApprovedBy?` · утвердил(а) ${escapeHtml(v.leadApprovedBy)}`:v.approvedBy?` · утвердил(а) ${escapeHtml(v.approvedBy)}`:""}</span>`,
-        `${v.files && v.files.pdf ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(v.files.pdf)}">Открыть</a>` : ""}${tzbNeedsLead(v) ? (TZB_LEADS.includes(UI.actorName) ? `<button class="btn btn-sm btn-primary tzb-approve" data-id="${d.id}" data-v="${escapeHtml(v.versionId)}">Утвердить</button>` : `<span class="pv-st s-w">ждёт тимлида</span>`) : `<button class="btn btn-sm btn-primary tzb-send" data-id="${d.id}" data-v="${escapeHtml(v.versionId)}">Отправить блогеру</button>`}`)).join("")
+        `${v.files && v.files.pdf ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(v.files.pdf)}">Открыть</a>` : ""}${tzbNeedsLead(v) ? (tzbCanApprove(d) ? `<button class="btn btn-sm btn-primary tzb-approve" data-id="${d.id}" data-v="${escapeHtml(v.versionId)}">Утвердить</button>` : `<span class="pv-st s-w">ждёт: ${escapeHtml(tzbLeadOf(d))}</span>`) : `<button class="btn btn-sm btn-primary tzb-send" data-id="${d.id}" data-v="${escapeHtml(v.versionId)}">Отправить блогеру</button>`}`)).join("")
       : `<div class="mut" style="padding:0 16px 14px">Пусто</div>`}
   </div>
   <div class="panel" style="padding:0;margin-bottom:14px;overflow:hidden">
