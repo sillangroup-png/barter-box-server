@@ -969,7 +969,7 @@ let SKU_CATALOG_REMOTE = null, skuCatalogLoading = false;
 function microSkuAll(){
   const seen = new Set(MICRO_SKU_CATALOG.map(x=>x.code));
   const extra = (SKU_CATALOG_REMOTE||[]).filter(x=> x.code && !seen.has(x.code)).map(x=>({
-    group:"Kaspi", name: x.name || "(название не найдено в базе)", code: x.code, qty: x.qty, extra: true }));
+    group:"Kaspi", name: x.name || (typeof PROD !== "undefined" && PROD.list ? ((PROD.list.find(p=> String(p.article||"").trim()===x.code)||{}).name) : "") || "(название не найдено в базе)", code: x.code, qty: x.qty, extra: true })); // 23.11.2026: имя из «Товаров», если в каталоге Kaspi его нет
   const added = (typeof PROD !== "undefined" && PROD.list ? PROD.list : []).filter(p=> p.article && !seen.has(p.article) && !extra.some(x=>x.code===p.article)).map(p=>({group:p.category||"Добавлено", name:p.name, code:p.article}));
   return MICRO_SKU_CATALOG.concat(added, extra);
 }
@@ -9327,7 +9327,7 @@ function prodRows(){
   const over = new Map(); const custom = [];
   for(const p of (PROD.list||[])){ const code = String(p.article||"").trim(); if(code){ over.set(code, p); const s = String(p.sku||"").trim(); if(s && s!==code && !over.has(s)) over.set(s, p); } else custom.push(p); }
   const seen = new Set(), usedIds = new Set();
-  const rows = microSkuAll().map(x=>{ seen.add(x.code); const o = over.get(x.code) || {}; if(o.id) usedIds.add(o.id); return {code:x.code, name:x.name, group:x.group, extra:!!x.extra, qty:x.qty, cost:o.cost, tz:o.tz, notes:o.notes, id:o.id, base:!x.extra}; });
+  const rows = microSkuAll().map(x=>{ seen.add(x.code); const o = over.get(x.code) || {}; if(o.id) usedIds.add(o.id); return {code:x.code, name:(o.name && /не найдено/.test(String(x.name||""))) ? o.name : x.name, group:x.group, extra:!!x.extra, qty:x.qty, cost:o.cost, tz:o.tz, notes:o.notes, id:o.id, base:!x.extra}; });
   for(const [code,p] of over) if(!seen.has(code) && !usedIds.has(p.id) && code===String(p.article||"").trim() && (usedIds.add(p.id), true)) rows.push({code, name:p.name, group:p.category||"Добавлено", cost:p.cost, tz:p.tz, notes:p.notes, id:p.id, added:true});
   for(const p of custom) rows.push({code:"", name:p.name, group:p.category||"Из CRM", cost:p.cost, tz:p.tz, notes:p.notes, id:p.id, added:true});
   return rows;
