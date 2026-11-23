@@ -6055,7 +6055,8 @@ function tplMicroInfluencers(){
   // занести в таблицу плановую дату будущей публикации и сразу увидеть её сгруппированной по
   // нужному месяцу, как в графике/календаре, не дожидаясь факта.
   if(mf.month){
-    deals = deals.filter(d=> microDealDate(d).slice(0,7)===mf.month);
+    // 23.11.2026: интеграции без даты показываем в любом месяце — иначе их «не видно», будто удалены.
+    deals = deals.filter(d=> !microDealDate(d) || microDealDate(d).slice(0,7)===mf.month);
   }
   if(mf.dateFrom){
     deals = deals.filter(d=> microDealDate(d) >= mf.dateFrom);
@@ -9408,7 +9409,8 @@ function deskGaps(){
   return [
     ["Нет даты выхода", mine.filter(d=> !d.plannedDate && !pub(d))],
     ["Вышло, но нет ссылки", mine.filter(d=> pub(d) && !d.reelsLink && !d.tiktokVideoLink && !(Number(d.factReachStories)>0))],
-    ["Нет суммы", mine.filter(d=> !pub(d) && !(Number(d.cost)>0) && d.coopType!=="За товар")],
+    // 23.11.2026: доп. видео без доплаты (у блогера есть другая интеграция с суммой или «доп» в названии) — сумма не нужна.
+    ["Нет суммы", mine.filter(d=> !pub(d) && !(Number(d.cost)>0) && d.coopType!=="За товар" && !/доп/i.test(String(d.blogerName||"")+" "+String(d.conditions||"")) && !microBloggerDeals(d.blogerName).some(x=> x.id!==d.id && Number(x.cost)>0))],
     ["Товар не выбран", mine.filter(d=> !pub(d) && !String(d.product||"").trim())],
     ["Нет телефона блогера", mine.filter(d=> !pub(d) && !String(d.phone||"").replace(/\D/g,""))],
   ].filter(g=> g[1].length);
