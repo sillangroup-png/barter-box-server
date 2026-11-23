@@ -234,6 +234,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     d.plannedDate = to;
     d.vmoved = { from, to, why, at: new Date().toISOString() };
     d.vmoves = (Number(d.vmoves) || 0) + 1;
+    if (from && from !== to) d.planHistory = (Array.isArray(d.planHistory) ? d.planHistory : []).concat([{ at: new Date().toISOString(), from, to, by: why || "" }]).slice(-30);
   }
   // 11.11.2026 (ТЗ MIXIT §12): дату НЕ двигаем. Плановая дата = согласованная с блогером; поменять её может только
   // менеджер (или «Принять дату» по просьбе блогера). В DAYPLAN_HOUR (10:00 Алматы) фиксируем НЕИЗМЕНЯЕМЫЙ снимок
