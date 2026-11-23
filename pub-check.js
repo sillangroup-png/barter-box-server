@@ -180,9 +180,12 @@ function mount(app, { getState, persist, requireAuth }) {
       const s2 = (d.linkSuggest || []).find((x) => x.url === url); if (!s2) return res.status(400).json({ error: 'нет такой ссылки' });
       if (s2.platform === 'tt') d.tiktokVideoLink = url; else d.reelsLink = url;
       d.videoStatus = 'опубликовано'; if (!d.publishDate) d.publishDate = s2.day || String(d.plannedDate || '').slice(0, 10);
-      d.linkAuto = { at: new Date().toISOString(), urls: [url], confirmedBy: s.name || '' };
-    }
-    delete d.linkSuggest; persist(); res.json({ ok: true });
+      d.linkAuto = { at: new Date().toISOString(), urls: ((d.linkAuto && d.linkAuto.urls) || []).concat([url]), confirmedBy: s.name || '' };
+      // Reels и TikTok — отдельно: подтвердили одну площадку, варианты другой остаются (23.11.2026).
+      d.linkSuggest = (d.linkSuggest || []).filter((x) => x.platform !== s2.platform && !(x.platform === 'tt' ? d.tiktokVideoLink : d.reelsLink));
+      if (!d.linkSuggest.length) delete d.linkSuggest;
+    } else delete d.linkSuggest;
+    persist(); res.json({ ok: true, left: (d.linkSuggest || []).length });
   });
   return { run, classifyPublished };
 }
