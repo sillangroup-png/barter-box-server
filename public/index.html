@@ -9540,7 +9540,8 @@ function deskSections(){
     if(!pub(d) && Array.isArray(d.linkSuggest) && d.linkSuggest.length){ S.late.push({d, tag:"похоже, вышло — проверьте ссылку", cls:"s-w", act:"suggest"}); continue; }
     if(!pub(d) && pd && pd < today) S.late.push({d, tag:`должен был выйти ${ddmmStr(pd)}`, cls:"s-b", act:"late", wa:"Здравствуйте! По нашей договорённости публикация для MIXIT должна была выйти "+ddmmStr(pd)+". Подскажите, когда выйдет? Если уже вышла — пришлите ссылку, пожалуйста 🙏"});
     if(!pub(d) && pd === today) S.today.push({d, tag:"выход сегодня", cls:"s-w", act:"wa", wa:"Доброе утро! Напоминаем: сегодня публикация для MIXIT. После выхода пришлите, пожалуйста, ссылку 🙌"});
-    if(!pub(d) && !String(d.tz||"").trim() && pd >= today) S.tz.push({d, tag:"ТЗ не выбрано", cls:"s-a", act:"tz"});
+    if(!String(d.tz||"").trim() && d.tzAutoGuess) S.tz.push({d, tag: d.tzAutoGuess.title ? `ИИ: на базовое не похоже (ближе всего «${d.tzAutoGuess.title}», ${Math.round((d.tzAutoGuess.confidence||0)*100)}%) — это персональное?` : "ИИ: на базовые ТЗ не похоже — это персональное?", cls:"s-a", act:"tzask"});
+    else if(!pub(d) && !String(d.tz||"").trim() && pd >= today) S.tz.push({d, tag:"ТЗ не выбрано", cls:"s-a", act:"tz"});
     if(pub(d) && !d.reelsLink && !d.tiktokVideoLink && !(Number(d.factReachStories)>0)) S.links.push({d, tag:"вышло, ссылки нет", cls:"s-w", act:"link"});
     if(!pub(d) && pd > today && pd <= in7) S.wait.push({d, tag:`выход ${ddmmStr(pd)}`, cls:"s-m", act:"wa", wa:"Здравствуйте! Напоминаю: публикация для MIXIT запланирована на "+ddmmStr(pd)+" 🙌"});
   }
@@ -9617,6 +9618,7 @@ function modalChats(phone){
 }
 function deskAction(x){
   const d = x.d, wa = x.wa && waLink(d.phone, x.wa);
+  if(x.act==="tzask") return `<button class="btn btn-sm btn-primary desk-tzset" data-id="${d.id}" data-g="Персональное" data-t="Персональное">Да, персональное</button>${d.tzAutoGuess.title ? `<button class="btn btn-sm desk-tzset" data-id="${d.id}" data-g="${escapeHtml(d.tzAutoGuess.group||"")}" data-t="${escapeHtml(d.tzAutoGuess.title)}">Нет, это «${escapeHtml(d.tzAutoGuess.title)}»</button>` : ""}` + microTzCell(d).replace('class="micro-tz-select"','class="micro-tz-select pv-inp desk-tz" title="другое базовое"');
   if(x.act==="suggest") return d.linkSuggest.map((s,i)=>`<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(s.url)}" title="${escapeHtml(s.caption||"")}">${s.platform==="tt"?"TikTok":"Reels"} ${escapeHtml(ddmmStr(s.day)||"")}</a><button class="btn btn-sm btn-primary desk-sug-ok" data-id="${d.id}" data-url="${escapeHtml(s.url)}">Это оно</button>`).join("") + `<button class="btn btn-sm desk-sug-no" data-id="${d.id}">Не то</button>`;
   if(x.act==="reply") return `<span class="mut" style="font-size:11px">${x.ib.via==="chatapp"?"ChatApp":"общий номер"}</span><button class="btn btn-sm btn-primary" onclick="modalChats('${escapeHtml(x.ib.phone)}')">Ответить</button><button class="btn btn-sm desk-ib-done" data-phone="${escapeHtml(x.ib.phone)}">Ответила</button>`;
   if(x.act==="late") return `${wa ? deskSendBtn(d, x.wa, wa) : `<span class="mut" style="font-size:11.5px">нет телефона</span>`}<input class="pv-inp desk-link" data-id="${d.id}" placeholder="вышло? вставьте ссылку" style="width:190px">`;
@@ -10097,6 +10099,7 @@ function wireDesk(){
   document.querySelectorAll(".desk-avr").forEach(b=> b.onclick = ()=> doneMany(b.dataset.ids.split(",").map(Number), {avrReceived:true}, {avrReceived:false}, "АВР и ЭСФ получены"));
   document.querySelectorAll(".desk-link").forEach(inp=> inp.onkeydown = (e)=>{ if(e.key!=="Enter") return; const v = inp.value.trim(); if(!/^https?:\/\//.test(v)){ toast("Вставьте ссылку целиком", true); return; }
     const ch = /tiktok/i.test(v) ? {tiktokVideoLink:v, videoStatus:"опубликовано"} : {reelsLink:v, videoStatus:"опубликовано"}; const id = +inp.dataset.id; const d = (DataManager.state.microInfluencerDeals||[]).find(x=>x.id===id); if(d && !d.publishDate) ch.publishDate = todayStr() < String(d.plannedDate||"") ? todayStr() : (d.plannedDate||todayStr()); done(id, ch, "Ссылка сохранена"); });
+  document.querySelectorAll(".desk-tzset").forEach(b=> b.onclick = ()=> done(+b.dataset.id, {tz:b.dataset.t, tzGroup:b.dataset.g}, "ТЗ: " + b.dataset.t));
   document.querySelectorAll(".desk-tz").forEach(sel=> sel.onchange = ()=>{ const [g,it] = sel.value.split("\u0001"); if(!it) return; done(+sel.dataset.id, {tz:it, tzGroup:g}, "ТЗ выбрано: " + it); });
 }
 
