@@ -237,11 +237,12 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     // Тексты утверждены Ниной 03.11.2026 (без «Это MIXIT» — блогеры и так знают, кто пишет).
     overdue: (v) => `Здравствуйте! Видео на согласование ждали ${v[2]}. Подскажите, пожалуйста, когда сможете прислать? 🙏`,
     due_soon: (v) => `Добрый день! 🌸 Ожидаем ${v[2]} видео на согласование 🤍`,
-    due_today: (v) => `Здравствуйте! 😊 Сегодня ждём видео на согласование 🎬 Пришлите его, пожалуйста, сюда, когда будет готово 🙏`,
+    due_today: (v) => `Добрый день! Сегодня ожидаем видео на согласование.`, // Нина 23.11.2026
+    video_today: (v) => `Добрый день! Сегодня ожидаем видео на согласование.`, // кнопка менеджера «Сегодня ждём видео»
     link_ask: (v) => `Здравствуйте! Сегодня день публикации 🎬 Когда выложите, пришлите, пожалуйста, ссылку 💚`,
     approved: (v) => `Спасибо! 💚 Видео согласовано ✅ Публикация ${v[2]} - когда выложите, пришлите, пожалуйста, ссылку 🙏`,
     received_ack: (v) => `Спасибо, видео получили! 🙌 Посмотрим и вернёмся с ответом ${v[2]}`,
-    link_thanks: (v) => `Спасибо! Ссылку получили 💚 Было приятно работать!`,
+    link_thanks: (v) => `Спасибо!`, // Нина 23.11.2026: без «приятно было работать» — не прощаемся
     revise: (v) => `Спасибо за видео! 💚 Есть правки:\n${v[3]}\nПришлите, пожалуйста, исправленный вариант до ${v[2]} 🙏`,
     reshoot: (v) => `Спасибо за видео! 💚 К сожалению, нужно переснять:\n${v[3]}\nПришлите, пожалуйста, новый вариант до ${v[2]} 🙏`,
   };
@@ -840,7 +841,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   // Принудительно: отправить напоминание этой строке СЕЙЧАС (кнопка «📨 напомнить сейчас»). Ручное действие менеджера:
   // работает и в режиме dry, без тихих часов и графика; но только в рамках теста (менеджер + номера из COORD_PILOT_PHONES).
   // Напомнить блогеру сейчас (одна строка или все без видео). Видео пришло/опубликовано — не пишем.
-  async function remindNow(d) {
+  async function remindNow(d, force) {
     const fail = (m) => { const e = new Error(m); e.status = 400; throw e; };
     if (!inPilot(d)) fail("Строка не в рассылке: ответственный должен быть в COORD_PILOT_MANAGER, нужен номер WhatsApp");
     if (transport() === "none") fail("Отправка не настроена: в Render нет WAZZUP_API_KEY / BITRIX_WEBHOOK_URL");
@@ -848,7 +849,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const pd = String(d.plannedDate || "").slice(0, 10), today = almatyDate();
     const stage = stageOf(d), due = dueOf(d);
     let kind, ds;
-    if (stage === "approved") { kind = "link_ask"; ds = ddmm(pd); }
+    if (force === "video_today" && !["received", "approved", "published"].includes(stage)) { kind = "video_today"; ds = ddmm(today); }
+    else if (stage === "approved") { kind = "link_ask"; ds = ddmm(pd); }
     else if (stage === "received") fail("Видео уже пришло и ждёт проверки — блогеру напоминать не нужно");
     else if (stage === "published") fail("Уже опубликовано");
     else if (!due) fail("Нет плановой даты");
@@ -872,7 +874,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (!staff(req, res)) return;
     const d = (getState().microInfluencerDeals || []).find((x) => x.id === +req.params.id);
     if (!d) return res.status(404).json({ error: "не найдено" });
-    try { res.json(await remindNow(d)); } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+    try { res.json(await remindNow(d, req.body && req.body.kind)); } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
   });
   // «Напомнить всем»: только строки без присланного/опубликованного видео и не чаще раза в день на блогера.
   app.post("/api/coord/send-now-many", requireAuth, async (req, res) => {
