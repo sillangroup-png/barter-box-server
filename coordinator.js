@@ -661,7 +661,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   const LEAD_NAMES = new Set(["Нина", "Сая"]);
   app.get("/api/inbox", requireAuth, (req, res) => {
     if (!staff(req, res)) return;
-    const s = req.session || {}, all = (s.canExport && LEAD_NAMES.has(s.name)) || s.role === "marketer";
+    // 24.11.2026: всех видят только Нина, Сая и руководство; роль «маркетолог» есть и у менеджеров (Сабрина видела чужие диалоги).
+    const s = req.session || {}, all = (s.canExport && LEAD_NAMES.has(s.name)) || ["Мария", "Сауле", "Константин"].includes(s.name);
     const me = personKey(s.name), mine = req.query.mine === "1" || !all;
     const st = getState(), byId = new Map((st.microInfluencerDeals || []).map((d) => [d.id, d]));
     const rows = Object.values(IB()).filter((r) => !mine || personKey(r.manager) === me).map((r) => {
