@@ -8439,7 +8439,7 @@ function modalMicroDeal(existing, prefill){
       ${pill("Факт. охваты", microDealFactReach(d) ? fmtNum(microDealFactReach(d)) : "—", "собираются по ссылкам, руками не вводятся")}
       ${pill("Категория товара", productCategoryOf(d) === "Не указана" ? "—" : productCategoryOf(d), "по ШК")}
       ${pill("ИИН / реквизиты", (d.iin || (d.ipRequisites && d.ipRequisites.iin)) ? "есть" : "нет", "из профиля блогера или из переписки")}
-      <details style="margin-top:10px;border-top:1px solid #F3DDE7;padding-top:8px"><summary style="cursor:pointer;font-size:12px;font-weight:700;color:#C2306F">Поправить вручную</summary>
+      <details open style="margin-top:10px;border-top:1px solid #F3DDE7;padding-top:8px"><summary style="cursor:pointer;font-size:12px;font-weight:700;color:#C2306F">Если надо поправить</summary>
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
           <div style="${UI.canExport?"display:flex;flex-direction:column;gap:8px":"display:none"}">
           ${lab("Статус товара", `<select id="mm-product-status" ${inpS}>${MICRO_PRODUCT_STATUSES.map(st=>`<option ${st===d.productStatus?'selected':''}>${st}</option>`).join("")}</select>`)}
@@ -8449,7 +8449,7 @@ function modalMicroDeal(existing, prefill){
           ${lab("Категория товара", `<input id="mm-product-category" ${inpS} placeholder="сама по ШК" value="${escapeHtml(d.productCategory||'')}">`)}
           ${lab("Факт. охват Reels", `<input id="mm-fact-reach-reels" type="number" ${inpS} value="${d.factReachReels||0}">`)}
           ${lab("Факт. охват TikTok", `<input id="mm-fact-reach-tt" type="number" ${inpS} value="${d.factReachTT||0}">`)}
-          ${lab("Условия (старое поле)", `<input id="mm-conditions" ${inpS} value="${escapeHtml(d.conditions||'')}">`)}
+          <input id="mm-conditions" type="hidden" value="${escapeHtml(d.conditions||'')}">
           <label style="display:flex;gap:6px;font-size:11.5px;align-items:flex-start${DataManager.state.automationFlow?'':';display:none'}"><input id="mm-brief-auto-send" type="checkbox" ${d.flowBriefAutoSend?'checked':''}> Отправить утверждённое ТЗ в WhatsApp само</label>
         </div></details>
     </aside>
