@@ -659,7 +659,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
           const r = await classifyVideo(job.url, tzCandidates(d));
           const ch = [];
           if (!d.videoLang && r.lang) { d.videoLang = r.lang; ch.push("язык: " + ({ ru: "русский", kz: "казахский", "под музыку": "под музыку" })[r.lang]); }
-          if (!String(d.tz || "").trim() && r.tz && r.confidence >= 0.6) { d.tz = r.tz.title; d.tzGroup = r.tz.group; d.tzAuto = { id: r.tz.id, confidence: r.confidence, at: new Date().toISOString() }; ch.push("ТЗ: " + r.tz.title); }
+          if (!String(d.tz || "").trim() && r.tz && r.confidence >= 0.7) { d.tz = r.tz.title; d.tzGroup = r.tz.group; d.tzAuto = { id: r.tz.id, confidence: r.confidence, at: new Date().toISOString() }; ch.push("ТЗ: " + r.tz.title); }
           if (ch.length) { log(d.id, "sys", "ИИ по видео проставил — " + ch.join(", ")); persist(); }
         } catch (e) { log(d.id, "sys", "ИИ не определил ТЗ/язык: " + String(e.message).slice(0, 150)); persist(); }
       }
