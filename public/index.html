@@ -9272,7 +9272,7 @@ function modalMicroCard(d){
         ${!UI.readOnly ? `<button class="btn btn-ghost" id="mc-edit" title="профиль блогера, товар, формат, ИИН и остальные поля">Все поля</button>` : ""}
         <button class="btn" onclick="closeModal()">Закрыть</button></div>
     </div>
-    ${others.length ? `<div class="pv-note" style="margin-top:10px"><b>Ещё с этим блогером сейчас:</b> ${others.map(x=>`<a href="#" data-mc-open="${x.id}" style="font-weight:700">${escapeHtml(microFormatOf(x))}${x.product?" · "+escapeHtml(x.product):""} · ${x.plannedDate?"план "+ddmmStr(x.plannedDate):"без даты"} · ${escapeHtml(x.paymentStatus||"не оплачено")}</a>`).join(" &nbsp;·&nbsp; ")} <span class="mut">— отдельные интеграции, у каждой своя дата и оплата</span></div>` : ""}
+    ${others.length ? `<div class="pv-note" style="margin-top:10px"><b>Ещё с этим блогером сейчас (${others.length}):</b> ${others.slice(0,5).map(x=>`<a href="#" data-mc-open="${x.id}" style="font-weight:700">${escapeHtml(microFormatOf(x))}${x.product?" · "+escapeHtml(x.product):""} · ${x.plannedDate?"план "+ddmmStr(x.plannedDate):"без даты"} · ${escapeHtml(x.paymentStatus||"не оплачено")}</a>`).join(" &nbsp;·&nbsp; ")}${others.length>5?` <span class="mut">и ещё ${others.length-5}</span>`:""} <span class="mut">— отдельные интеграции, у каждой своя дата и оплата</span></div>` : ""}
     <div style="margin-top:10px">${deskDateProposalsHtml(d.id)}</div>
     ${!UI.readOnly ? `<div style="margin-top:10px;background:#fff;border:1px solid #F3DDE7;border-radius:12px;padding:10px 14px;display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
       ${!pub ? `<label style="display:flex;flex-direction:column;gap:3px"><span class="pv-lbl">Плановая дата</span><input type="date" id="mc-pdate" class="pv-inp" value="${escapeHtml(String(d.plannedDate||"").slice(0,10))}" style="width:150px"></label>` : ""}
@@ -9563,7 +9563,11 @@ function deskSections(){
   return S;
 }
 UI.deskSec = UI.deskSec || "";
-function rawNick(d){ const n = String(d.instagramAccount||"").split(/[?#]/)[0].replace(/\/+$/,"").split("/").pop().replace(/^@/,"").toLowerCase(); if(n) return "@"+n; const b = String(d.blogerName||"").trim(); return b ? (/^@?[\w.]+$/.test(b) ? "@"+b.replace(/^@/,"").toLowerCase() : b) : "—"; }
+// 23.11.2026: ник — первый кусок пути после instagram.com («instagram.com/nick/reels/» → nick). Раньше брался последний
+// кусок, и 69 разных блогеров со ссылкой вида «…/nick/reels/» склеились в одного «@reels». Ссылка на пост/рилс (/p/, /reel/) — не ник.
+function rawNick(d){ const u = String(d.instagramAccount||"").trim(), m = u.match(/instagram\.com\/([^/?#\s]+)/i);
+  const n = (m ? m[1] : (/^https?:/i.test(u) ? "" : u.split(/[/?#\s]/)[0])).replace(/^@/,"").toLowerCase();
+  if(n && !/^(p|reel|reels|tv|stories|explore|accounts|share|s)$/.test(n) && /^[\w.]+$/.test(n)) return "@"+n; const b = String(d.blogerName||"").trim(); return b ? (/^@?[\w.]+$/.test(b) ? "@"+b.replace(/^@/,"").toLowerCase() : b) : "—"; }
 // 23.11.2026: «Напомнить» отправляет сообщение сразу с рабочего номера (не открывает WhatsApp). Если отправить нельзя — откроет WhatsApp с готовым текстом.
 function deskSendBtn(d, text, wa){ return `<button class="btn btn-sm desk-send" data-id="${d.id}" data-text="${escapeHtml(text)}" data-wa="${escapeHtml(wa)}">Напомнить в WhatsApp</button>`; }
 async function deskSendNow(b){ try{ const r = await withBusy(b, ()=> apiFetch('/api/coord/deal/'+b.dataset.id+'/send-now', {method:'POST', headers:jsonHeaders, body:JSON.stringify({text:b.dataset.text})})); toast("Отправлено ✓"); b.textContent = "Отправлено ✓"; b.disabled = true; }catch(e){ toast("Не отправилось: "+e.message+" — открываю WhatsApp", true); window.open(b.dataset.wa, "_blank", "noopener"); } }
