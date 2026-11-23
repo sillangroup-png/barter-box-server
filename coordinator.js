@@ -611,6 +611,51 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     res.json({ url: `${base}/api/chatapp/webhook/${k.secret}` });
   });
 
+
+  // ---------- «Оплачено — сообщите блогеру» (23.11.2026) ----------
+  // Нина ставит «оплачено» → у менеджера на Рабочем столе плашка. Менеджер/тимлид отправляет «Оплата прошла» одному или всем.
+  // Перед отправкой смотрим переписку: если блогер после оплаты уже сам написал про оплату — не пишем, показываем его сообщение.
+  const PAID_TEXT = "Здравствуйте! Оплата прошла, спасибо за сотрудничество 🙌";
+  const RE_PAIDMSG = /оплат|оплачен|пришл[аио]|получил|поступил|деньг|перевел|перевели|төлен|алдым|келді|спасибо|рахмет/i;
+  function paidWrote(d) {
+    const since = Date.parse(d.paidAt || 0) - 6 * H;
+    const n = waNumber(d.phone), ids = new Set([d.id]);
+    if (n) for (const x of getState().microInfluencerDeals || []) if (waNumber(x.phone) === n) ids.add(x.id);
+    return C().log.filter((l) => l.dir === "in" && ids.has(l.dealId) && Date.parse(l.at) >= since && RE_PAIDMSG.test(String(l.text || ""))).pop() || null;
+  }
+  function paidScope(req) {
+    const s = req.session || {}, me = personKey(s.name);
+    if (s.canExport && req.query.all === "1") return () => true;
+    const g = TEAM_GROUPS.find((x) => personKey(x.lead) === me);
+    const team = new Set([me].concat(g ? g.members.map(personKey) : []));
+    return (d) => team.has(personKey(d.responsible));
+  }
+  app.get("/api/coord/paid-pending", requireAuth, (req, res) => {
+    if (!staff(req, res)) return;
+    const inScope = paidScope(req), weekAgo = Date.now() - 21 * 24 * H;
+    const items = (getState().microInfluencerDeals || []).filter((d) => d.paymentStatus === "оплачено" && d.paidAt && Date.parse(d.paidAt) > weekAgo && !d.paidMsgSent && !d.paidSkip && inScope(d))
+      .map((d) => { const w = paidWrote(d); return { id: d.id, blogger: d.blogerName || "", product: d.product || "", manager: d.responsible || "", cost: Number(d.cost) || 0, paidAt: d.paidAt, phone: !!waNumber(d.phone), wrote: w ? { at: w.at, text: String(w.text).slice(0, 160) } : null }; });
+    res.json({ text: PAID_TEXT, items });
+  });
+  app.post("/api/coord/paid-notify", requireAuth, async (req, res) => {
+    if (!staff(req, res)) return;
+    const ids = (Array.isArray(req.body && req.body.ids) ? req.body.ids : []).map(Number).filter(Boolean).slice(0, 100);
+    const skip = !!(req.body && req.body.skip), out = { sent: 0, skipped: [], errors: [] };
+    const sentPhones = new Set();
+    for (const id of ids) {
+      const d = (getState().microInfluencerDeals || []).find((x) => x.id === id); if (!d) continue;
+      if (skip) { d.paidSkip = true; continue; }
+      const w = paidWrote(d);
+      if (w && !(req.body && req.body.force)) { out.skipped.push(`${d.blogerName}: уже писал(а) «${String(w.text).slice(0, 60)}»`); continue; }
+      const n = waNumber(d.phone);
+      if (!n) { out.errors.push(`${d.blogerName}: нет номера`); continue; }
+      if (sentPhones.has(n)) { d.paidMsgSent = new Date().toISOString(); continue; } // одному блогеру — одно сообщение
+      try { const r = await sendNow(d, PAID_TEXT); log(d.id, "out", `[оплата] ${r.via}: ${PAID_TEXT}`); d.paidMsgSent = new Date().toISOString(); sentPhones.add(n); out.sent++; }
+      catch (e) { out.errors.push(`${d.blogerName}: ${e.message}`); }
+    }
+    persist(); res.json(out);
+  });
+
   // ---------- «Входящие»: список, отметка «ответила» ----------
   const LEAD_NAMES = new Set(["Нина", "Сая"]);
   app.get("/api/inbox", requireAuth, (req, res) => {
