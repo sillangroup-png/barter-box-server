@@ -8998,13 +8998,13 @@ const PAY = { tab:"cash", st:"pending", mgr:"", sel:new Set(), open:{}, imp:null
 const PAY_LABEL = {pending:"К оплате", submitted:"Подано", paid:"Оплачено", rejected:"Отклонено", refunded:"Возврат"};
 const PAY_CLS = {pending:"s-w", submitted:"s-blue", paid:"s-ok", rejected:"s-m", refunded:"s-b"};
 const payMask = (s, keep)=>{ const v = String(s||""); return v.length > 8 ? v.slice(0,4)+" •••• "+v.slice(-(keep||4)) : (v || "—"); };
-crmPayLoad = async function(){ CRM.pay.loading = true; CRM.pay.err = null; crmRepaint();
+crmPayLoad = async function(){ CRM.pay.loading = true; CRM.pay.err = null; CRM.pay.who = myWho(); crmRepaint();
   try{ if(!CRM.meta) CRM.meta = await CrmApi.meta(); CRM.pay.data = crmIsNina() ? await CrmApi.payments("all") : await apiFetch("/api/crm/payments/mine"); }catch(e){ CRM.pay.err = e.message; }
   CRM.pay.loading = false; crmRepaint(); };
 function tplCrmPayments(){
   const nina = crmIsNina();
-  if(!CRM.pay.data && !CRM.pay.loading && !CRM.pay.err) setTimeout(crmPayLoad, 0);
-  const all = (CRM.pay.data && CRM.pay.data.items) || [], edit = nina && crmCutover();
+  if(!CRM.pay.loading && ((!CRM.pay.data && !CRM.pay.err) || CRM.pay.who!==myWho())) setTimeout(crmPayLoad, 0);
+  const all = (CRM.pay.data && CRM.pay.who===myWho() && CRM.pay.data.items) || [], edit = nina && crmCutover();
   const isIp = p=> !!p.isIp, cash = all.filter(p=> !isIp(p)), ip = all.filter(isIp);
   const base = PAY.tab==="ip" ? ip : cash;
   const n = s=> base.filter(p=> p.status===s), sum = a=> a.reduce((s,p)=> s+(Number(p.amount)||0), 0);
@@ -9690,15 +9690,18 @@ function wirePlanner(){
 }
 // ===== Заявки на доставку (прототип X10, 23.11.2026) =====
 const MYPAY = { data:null, loading:false }, MYDLV = { data:null, loading:false };
-async function myPayLoad(){ MYPAY.loading = true; try{ MYPAY.data = crmIsNina() ? await apiFetch("/api/crm/payments?status=pending") : await apiFetch("/api/crm/payments/mine"); }catch(e){ MYPAY.data = {counts:{}, items:[]}; } MYPAY.loading = false; if(UI.tab==="desk") renderDeskTab(); }
-async function myDlvLoad(){ MYDLV.loading = true; try{ MYDLV.data = await apiFetch("/api/delivery-requests"); }catch(e){ MYDLV.data = {items:[]}; } MYDLV.loading = false; if(UI.tab==="desk") renderDeskTab(); if(UI.tab==="deliveryReq") render(); }
+// 23.11.2026: цифры на Рабочем столе — перезагружаем при смене пользователя и раз в минуту (раньше оставались от прошлого входа).
+const myWho = ()=> String(UI.actorName||"")+"|"+String(UI.role||"")+"|"+(UI.canExport?1:0);
+const myStale = o=> !o.loading && (!o.data || o.who!==myWho() || Date.now()-(o.at||0) > 60000);
+async function myPayLoad(){ MYPAY.loading = true; MYPAY.who = myWho(); MYPAY.at = Date.now(); try{ MYPAY.data = crmIsNina() ? await apiFetch("/api/crm/payments?status=pending") : await apiFetch("/api/crm/payments/mine"); }catch(e){ MYPAY.data = {counts:{}, items:[]}; } MYPAY.loading = false; if(UI.tab==="desk") renderDeskTab(); }
+async function myDlvLoad(){ MYDLV.loading = true; MYDLV.who = myWho(); MYDLV.at = Date.now(); try{ MYDLV.data = await apiFetch("/api/delivery-requests"); }catch(e){ MYDLV.data = {items:[]}; } MYDLV.loading = false; if(UI.tab==="desk") renderDeskTab(); if(UI.tab==="deliveryReq") render(); }
 const DLV = { st:"new", city:"", mgr:"", sel:new Set() };
 const DLV_LABEL = {new:"Новая", sent:"Подано логисту", delivered:"Доставлено", failed:"Не доставлено"};
 const DLV_CLS = {new:"s-a", sent:"s-blue", delivered:"s-ok", failed:"s-b"};
 function dlvDefaultCost(city){ const c = String(city||"").toLowerCase(); return /алмат/.test(c) ? 1200 : /астан/.test(c) ? 2400 : c ? 2900 : 0; }
 function tplDeliveryReq(){
-  if(!MYDLV.data && !MYDLV.loading) setTimeout(myDlvLoad, 0);
-  const all = (MYDLV.data && MYDLV.data.items) || [], lead = !!(MYDLV.data && MYDLV.data.lead);
+  if(myStale(MYDLV)) setTimeout(myDlvLoad, 0);
+  const okD = MYDLV.data && MYDLV.who===myWho(); const all = (okD && MYDLV.data.items) || [], lead = !!(okD && MYDLV.data.lead);
   const cities = [...new Set(all.map(r=> r.city).filter(Boolean))].sort((a,b)=> a.localeCompare(b,"ru")), mgrs = [...new Set(all.map(r=> r.manager).filter(Boolean))].sort((a,b)=> a.localeCompare(b,"ru"));
   let items = all.filter(r=> DLV.st==="all" || r.status===DLV.st); if(DLV.city) items = items.filter(r=> r.city===DLV.city); if(DLV.mgr) items = items.filter(r=> r.manager===DLV.mgr);
   const n = s=> all.filter(r=> r.status===s).length, sel = items.filter(r=> DLV.sel.has(r.id));
@@ -9849,8 +9852,8 @@ function tplDesk(){
         <div class="mut" style="font-size:12px;margin:2px 0 6px">хороший CPV, давно не работали</div>
         ${ret.length ? ret.map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid #F8E9EF"><div style="min-width:0"><b>${escapeHtml(deskNick(r.d))}</b><div class="mut" style="font-size:11.5px">CPV ${r.cpv.toFixed(2)} ₸ · ${r.n} инт. · последняя ${ddmmStr(r.last)}</div></div><button class="btn btn-sm" onclick="deskRepeat(${r.d.id})">Повторить</button></div>`).join("") : `<div class="mut" style="font-size:12.5px">Пока некого</div>`}
       </div>
-      ${(()=>{ if(!MYPAY.data && !MYPAY.loading) setTimeout(myPayLoad, 0); if(!MYDLV.data && !MYDLV.loading) setTimeout(myDlvLoad, 0);
-        const pc = (MYPAY.data && MYPAY.data.counts) || {}, dl = (MYDLV.data && MYDLV.data.items) || [], dn = s=> dl.filter(r=> r.status===s).length;
+      ${(()=>{ if(myStale(MYPAY)) setTimeout(myPayLoad, 0); if(myStale(MYDLV)) setTimeout(myDlvLoad, 0); const fresh = o=> o.data && o.who===myWho();
+        const pc = (fresh(MYPAY) && MYPAY.data.counts) || {}, dl = (fresh(MYDLV) && MYDLV.data.items) || [], dn = s=> dl.filter(r=> r.status===s).length;
         const box = (t,n,s,bg,col,tab)=> `<a href="#" onclick="UI.tab='${tab}';render();return false" style="display:block;background:${bg};border-radius:10px;padding:8px 10px;text-decoration:none"><b style="font-size:18px;color:${col}">${n}</b><div style="font-size:11px;font-weight:700;color:${col}">${t}</div>${s?`<div style="font-size:10.5px;color:${col};opacity:.8">${s}</div>`:""}</a>`;
         return `<div class="panel" style="margin:0"><div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:15px">${crmIsNina()?"Оплаты":"Мои заявки на оплату"}</b><a href="#" onclick="UI.tab='crmPayments';render();return false" style="font-size:12px;font-weight:700">все ›</a></div>
           <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px">${box("к оплате",(pc.pending||{}).n||0,(pc.pending||{}).sum?fmtNum(pc.pending.sum)+" ₸":"","#FFF1D6","#9A6400","crmPayments")}${box("подано",(pc.submitted||{}).n||0,(pc.submitted||{}).sum?fmtNum(pc.submitted.sum)+" ₸":"","#E6EEFB","#2F5FB3","crmPayments")}${box("оплачено",(pc.paid||{}).n||0,"","#E2F6EC","#1E8C5C","crmPayments")}</div>
