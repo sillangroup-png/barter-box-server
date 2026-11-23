@@ -9551,7 +9551,7 @@ function tplTzBase(){
   const reqIds = new Set(reqs.map(r=> String(r.integrationId)));
   // Запросы: заявки в Blogery Audit (новая/в работе) + интеграции без ТЗ, которые ещё не вышли
   // 23.11.2026 (Нина): запрос — только персональный разбор блогера по кнопке; авто-заявки и «без ТЗ» не показываем.
-  const open = reqs.filter(r=> r.status!=="approved" && !/^авто/i.test(String(r.requestedBy||""))).map(r=> ({kind:"req", r, d: tzbDeal(r.integrationId)})).filter(x=> x.d); // 23.11.2026: запрос виден, даже если у интеграции уже есть ТЗ (например, второй — на блок сторис)
+  const open = reqs.filter(r=> r.status!=="approved" && !/^авто/i.test(String(r.requestedBy||""))).map(r=> ({kind:"req", r, d: tzbDeal(r.integrationId)})).filter(x=> x.d && (!String(x.d.tz||"").trim() || /персонал/i.test(String(x.d.tz||"")))); // 23.11.2026: если у интеграции выбрано базовое ТЗ — старый запрос не показываем; персональное — показываем (второе ТЗ, напр. на сторис)
   const noTz = deals.filter(d=> !String(d.tz||"").trim() && !microDealPublished(d) && String(d.plannedDate||"") >= today && !reqIds.has(String(d.id)) && !/отмен/i.test(String(d.problemStatus||""))).map(d=> ({kind:"none", d}));
   let queue = open.sort((a,b)=> String(a.d.plannedDate).localeCompare(String(b.d.plannedDate)));
   const qAll = queue.length, qMine = queue.filter(x=> mine(x.d)).length, qNew = queue.filter(x=> x.kind==="none" || x.r.status==="pending").length, qWork = queue.filter(x=> x.kind==="req" && x.r.status!=="pending").length;
@@ -9587,7 +9587,7 @@ function tplTzBase(){
       <div style="display:flex;gap:6px;flex-wrap:wrap">${chip("", "Все", qAll)}${chip("mine","Мои",qMine)}${chip("new","Новые",qNew)}${chip("work","В Blogery Audit",qWork)}</div></div>
     ${queue.length ? queue.slice(0,60).map(x=>{ const d = x.d, s = x.kind==="req" ? (stCls[x.r.status]||[x.r.status,"s-m"]) : ["ТЗ не выбрано","s-a"];
       return row(`<div>${nick(d)}</div><span>${escapeHtml(d.responsible||"—")}</span><span><span class="pv-st ${x.kind==="req"?"s-a":"s-m"}">${x.kind==="req"?"Персональное":"Из интеграции"}</span></span><span class="mut">${x.kind==="req" ? escapeHtml(x.r.notes ? x.r.notes.slice(0,80) : "запрос от "+(x.r.requestedBy||"—")) : (d.plannedDate ? "выход "+ddmmStr(d.plannedDate)+" — ТЗ ещё не выбрано" : "ТЗ ещё не выбрано")} ${x.kind==="req" && x.r.lastError ? `<span style="color:#C42B45">· ${escapeHtml(x.r.lastError)}</span>` : ""}</span>`,
-        `<span class="pv-st ${s[1]}">${escapeHtml(s[0])}</span>${x.kind==="none" && DataManager.state.automationFlow ? `<button class="btn btn-sm tzb-req" data-id="${d.id}">Персональное</button>` : ""}`); }).join("") + (queue.length>60 ? `<div class="mut" style="padding:10px 16px;font-size:12px">и ещё ${queue.length-60}</div>` : "")
+        `<span class="pv-st ${s[1]}">${escapeHtml(s[0])}</span>${x.kind==="none" && DataManager.state.automationFlow ? `<button class="btn btn-sm tzb-req" data-id="${d.id}">Персональное</button>` : ""}${x.kind==="req" && !UI.readOnly ? `<button class="btn btn-sm tzb-cancel" data-rid="${escapeHtml(x.r.id)}" title="Убрать запрос, если подан по ошибке">Удалить</button>` : ""}`); }).join("") + (queue.length>60 ? `<div class="mut" style="padding:10px 16px;font-size:12px">и ещё ${queue.length-60}</div>` : "")
       : `<div class="mut" style="padding:12px 16px">Запросов нет</div>`}
   </div>
   <div class="panel" style="padding:0;margin-bottom:14px;overflow:hidden">
@@ -9658,6 +9658,7 @@ function tplTzApproved(){
   </div>`;
 }
 function wireTzBase(){
+  document.querySelectorAll(".tzb-cancel").forEach(b=> b.onclick = async ()=>{ if(!confirm("Удалить запрос ТЗ? Используйте, если он подан по ошибке.")) return; try{ await withBusy(b, ()=> apiFetch("/api/automation/brief-request-cancel/"+encodeURIComponent(b.dataset.rid), {method:"POST", headers:jsonHeaders, body:"{}"})); toast("Запрос удалён"); TZB.data = null; render(); }catch(e){ toast(e.message, true); } });
   document.querySelectorAll(".tzt-open").forEach(b=> b.onclick = ()=> tzTextOpen(b.dataset.id, false));
   document.querySelectorAll(".tzt-pdf").forEach(b=> b.onclick = ()=> tzTextOpen(b.dataset.id, true));
   const ti = document.getElementById("tzt-import"), tf = document.getElementById("tzt-file");
