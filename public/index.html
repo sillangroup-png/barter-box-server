@@ -9506,7 +9506,7 @@ function wireDateProposals(after){
   document.querySelectorAll(".dp-keep").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch("/api/coord/events/"+b.dataset.id+"/read", {method:"POST"})); toast("Дата оставлена"); await DataManager.refresh(); after(); }catch(e){ toast(e.message, true); } });
 }
 // ===== База ТЗ по прототипу X14 (23.11.2026): запросы → на рассмотрении → утверждено → отправлено; ниже — справочник ТЗ с использованием и CPV =====
-const TZB = { data:null, loading:false, err:null, f:"base", prod:"", who:"" };
+const TZB = { data:null, loading:false, err:null, f:"all", prod:"", who:"" };
 async function tzbLoad(){ TZB.loading = true; try{ TZB.data = await apiFetch("/api/automation/brief-requests"); TZB.err = null; }catch(e){ TZB.err = e.message; TZB.data = {requests:[], sent:[]}; } TZB.loading = false; if(UI.tab==="tzBase") render(); }
 function tzbDeal(iid){ const s = String(iid||""); if(/^L/.test(s)) return null; return (DataManager.state.microInfluencerDeals||[]).find(d=> String(d.id)===s); }
 function tzbStats(){
@@ -9520,9 +9520,10 @@ function tplTzBase(){
   const reqs = (TZB.data && TZB.data.requests) || [], sent = (TZB.data && TZB.data.sent) || [];
   const reqIds = new Set(reqs.map(r=> String(r.integrationId)));
   // Запросы: заявки в Blogery Audit (новая/в работе) + интеграции без ТЗ, которые ещё не вышли
-  const open = reqs.filter(r=> r.status!=="approved").map(r=> ({kind:"req", r, d: tzbDeal(r.integrationId)})).filter(x=> x.d && !String(x.d.tz||"").trim());
+  // 23.11.2026 (Нина): запрос — только персональный разбор блогера по кнопке; авто-заявки и «без ТЗ» не показываем.
+  const open = reqs.filter(r=> r.status!=="approved" && !/^авто/i.test(String(r.requestedBy||""))).map(r=> ({kind:"req", r, d: tzbDeal(r.integrationId)})).filter(x=> x.d && !String(x.d.tz||"").trim());
   const noTz = deals.filter(d=> !String(d.tz||"").trim() && !microDealPublished(d) && String(d.plannedDate||"") >= today && !reqIds.has(String(d.id)) && !/отмен/i.test(String(d.problemStatus||""))).map(d=> ({kind:"none", d}));
-  let queue = open.concat(noTz).sort((a,b)=> String(a.d.plannedDate).localeCompare(String(b.d.plannedDate)));
+  let queue = open.sort((a,b)=> String(a.d.plannedDate).localeCompare(String(b.d.plannedDate)));
   const qAll = queue.length, qMine = queue.filter(x=> mine(x.d)).length, qNew = queue.filter(x=> x.kind==="none" || x.r.status==="pending").length, qWork = queue.filter(x=> x.kind==="req" && x.r.status!=="pending").length;
   if(TZB.who==="mine") queue = queue.filter(x=> mine(x.d)); else if(TZB.who==="new") queue = queue.filter(x=> x.kind==="none" || x.r.status==="pending"); else if(TZB.who==="work") queue = queue.filter(x=> x.kind==="req" && x.r.status!=="pending");
   // Утверждено — ждёт отправки блогеру
@@ -9536,7 +9537,8 @@ function tplTzBase(){
   for(const x of (TZLIB||[])) if(!x.tpl && !lib.some(y=> y.item===x.hook && y.pers)) lib.push({group:x.group, item:(x.hook||"Персональное")+(x.blogger?" · "+x.blogger:""), pers:true, n:0, cpv:null, lib:x});
   for(const r of lib) if(!r.lib && libBy.has(r.item)) r.lib = libBy.get(r.item);
   const prods = [...new Set(cat.filter(g=> !g.all).map(g=> g.group))];
-  let rows = lib.filter(x=> TZB.f==="all" ? true : TZB.f==="pers" ? x.pers : !x.pers); if(TZB.prod) rows = rows.filter(x=> x.group===TZB.prod);
+  const tzbStatus = x=> x.lib ? x.lib.status : "ok";
+  let rows = lib.filter(x=> !TZB.f || TZB.f==="all" || TZB.f==="base" || TZB.f==="pers" ? true : tzbStatus(x)===TZB.f); if(TZB.prod) rows = rows.filter(x=> x.group===TZB.prod);
   rows.sort((a,b)=> b.n - a.n);
   const stCls = {pending:["Новая","s-m"], received:["В Blogery Audit","s-blue"], approved:["Утверждено","s-ok"]};
   const chip = (k, t, n)=> `<button class="pv-chip ${TZB.who===k?"on":""} tzb-who" data-k="${k}">${t}${n!=null?` <span class="n">${n}</span>`:""}</button>`;
@@ -9550,12 +9552,12 @@ function tplTzBase(){
   <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:8px 0 14px;font-size:12px"><span class="pv-st s-m">Новая</span>→<span class="pv-st s-blue">Разбор / в работе</span>→<span class="pv-st s-w">На рассмотрении</span>→<span class="pv-st s-ok">Утверждено</span>→<span class="pv-st s-a">Отправлено</span><span class="mut">одинаковые статусы в Barter Box и Blogery Audit</span></div>
   ${TZB.err && DataManager.state.automationFlow ? `<div class="pv-note" style="margin-bottom:12px;color:#C42B45">Очередь Blogery Audit недоступна: ${escapeHtml(TZB.err)} — показываю интеграции без ТЗ</div>` : ""}
   <div class="panel" style="padding:0;margin-bottom:14px;overflow:hidden">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 16px"><div><b style="font-size:15px">Запросы · ${qAll}</b><div class="mut" style="font-size:12px;margin-top:2px">запрос создаётся сам, когда заводят интеграцию; персональное — кнопкой в карточке. Базовое можно выбрать сразу здесь</div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 16px"><div><b style="font-size:15px">Запросы · ${qAll}</b><div class="mut" style="font-size:12px;margin-top:2px">персональный разбор блогера и видео — менеджер запрашивает кнопкой «Запросить персональное ТЗ» в карточке</div></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">${chip("", "Все", qAll)}${chip("mine","Мои",qMine)}${chip("new","Новые",qNew)}${chip("work","В Blogery Audit",qWork)}</div></div>
     ${queue.length ? queue.slice(0,60).map(x=>{ const d = x.d, s = x.kind==="req" ? (stCls[x.r.status]||[x.r.status,"s-m"]) : ["ТЗ не выбрано","s-a"];
       return row(`<div>${nick(d)}</div><span>${escapeHtml(d.responsible||"—")}</span><span><span class="pv-st ${x.kind==="req"?"s-a":"s-m"}">${x.kind==="req"?"Персональное":"Из интеграции"}</span></span><span class="mut">${x.kind==="req" ? escapeHtml(x.r.notes ? x.r.notes.slice(0,80) : "запрос от "+(x.r.requestedBy||"—")) : (d.plannedDate ? "выход "+ddmmStr(d.plannedDate)+" — ТЗ ещё не выбрано" : "ТЗ ещё не выбрано")} ${x.kind==="req" && x.r.lastError ? `<span style="color:#C42B45">· ${escapeHtml(x.r.lastError)}</span>` : ""}</span>`,
         `<span class="pv-st ${s[1]}">${escapeHtml(s[0])}</span>${microTzCell(d).replace('class="micro-tz-select"','class="pv-inp tzb-take" data-deal="'+d.id+'"').replace("<option value=\"\">— ТЗ —</option>","<option value=\"\">Взять базовое…</option>")}${x.kind==="none" && DataManager.state.automationFlow ? `<button class="btn btn-sm tzb-req" data-id="${d.id}">Персональное</button>` : ""}`); }).join("") + (queue.length>60 ? `<div class="mut" style="padding:10px 16px;font-size:12px">и ещё ${queue.length-60}</div>` : "")
-      : `<div class="mut" style="padding:12px 16px">Запросов нет — у всех будущих интеграций ТЗ выбрано 👌</div>`}
+      : `<div class="mut" style="padding:12px 16px">Запросов нет</div>`}
   </div>
   <div class="panel" style="padding:0;margin-bottom:14px;overflow:hidden">
     <div style="padding:14px 16px"><b style="font-size:15px">На рассмотрении · ${review.length}</b> <span class="mut" style="font-size:12px">утверждено в Blogery Audit — проверьте и отправьте блогеру; после отправки уходит в WhatsApp само</span></div>
@@ -9571,12 +9573,12 @@ function tplTzBase(){
   </div>
   <div class="panel" style="padding:0;overflow:hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 16px">
-      <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="pv-chip tzb-f ${TZB.f==="base"?"on":""}" data-f="base">Базовые <span class="n">${lib.filter(x=>!x.pers).length}</span></button><button class="pv-chip tzb-f ${TZB.f==="pers"?"on":""}" data-f="pers">Персональные <span class="n">${lib.filter(x=>x.pers).length}</span></button><button class="pv-chip tzb-f ${TZB.f==="all"?"on":""}" data-f="all">Все <span class="n">${lib.length}</span></button></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${[["all","Все"],["ok","Утверждено"],["review","На рассмотрении"],["draft","Черновик"]].map(([k,t])=>`<button class="pv-chip tzb-f ${(TZB.f||"all")===k?"on":""}" data-f="${k}">${t} <span class="n">${k==="all"?lib.length:lib.filter(x=> tzbStatus(x)===k).length}</span></button>`).join("")}</div>
       <select class="pv-inp" id="tzb-prod"><option value="">Все товары</option>${prods.map(p=>`<option ${TZB.prod===p?"selected":""}>${escapeHtml(p)}</option>`).join("")}</select></div>
-    <table><thead><tr><th>ТЗ</th><th>Товар</th><th>Тип</th><th style="text-align:right">Использовано</th><th style="text-align:right">Средний CPV</th><th></th></tr></thead>
-    <tbody>${rows.length ? rows.filter(x=> !TZB.q || (x.item+" "+x.group).toLowerCase().includes(TZB.q.toLowerCase())).map(x=>`<tr><td><b>«${escapeHtml(x.item)}»</b></td><td>${escapeHtml(x.all?"любой товар":x.group)}</td><td><span class="pv-st ${x.pers?"s-a":"s-blue"}">${x.pers?"Персональное":"Базовое"}</span>${x.lib ? ` <span class="pv-st ${x.lib.status==="ok"?"s-ok":x.lib.status==="review"?"s-w":"s-m"}" title="${escapeHtml(x.lib.product||"")}">${x.lib.status==="ok"?"Утверждено":x.lib.status==="review"?"На рассмотрении":"Черновик"}</span>` : ""}</td><td style="text-align:right">${x.n||"—"}</td><td style="text-align:right">${x.cpv!=null?`<b style="color:${x.cpv<=1?"#1E9E6A":x.cpv<=2?"#9A6400":"#C42B45"}">${x.cpv.toFixed(2).replace(".",",")} ₸</b>`:"—"}</td>
-      <td style="text-align:right">${x.pers?"":`<button class="btn btn-sm tzb-give" data-g="${escapeHtml(x.group)}" data-i="${escapeHtml(x.item)}">Отправить блогеру…</button>`}</td></tr>`).join("") : `<tr><td colspan="6" class="empty">Нет ТЗ</td></tr>`}</tbody></table>
-    <div class="mut" style="padding:10px 16px;font-size:12px">Справочник ТЗ по товарам с итогом: сколько раз выбирали и какой средний CPV вышел (по вышедшим интеграциям). «Отправить блогеру…» — выбираете интеграцию, ТЗ записывается в неё.</div>
+    <table><thead><tr><th>ТЗ</th><th>Товар</th><th>Статус</th><th></th></tr></thead>
+    <tbody>${rows.length ? rows.filter(x=> !TZB.q || (x.item+" "+x.group).toLowerCase().includes(TZB.q.toLowerCase())).map(x=>{ const k = tzbStatus(x); return `<tr><td><b>«${escapeHtml(x.item)}»</b></td><td>${escapeHtml(x.all?"любой товар":x.group)}</td><td><span class="pv-st ${k==="ok"?"s-ok":k==="review"?"s-w":"s-m"}">${k==="ok"?"Утверждено":k==="review"?"На рассмотрении":"Черновик"}</span>${x.lib && x.lib.blogger ? ` <span class="mut" style="font-size:11.5px">${escapeHtml(x.lib.blogger)}</span>` : ""}</td>
+      <td style="text-align:right">${x.pers?"":`<button class="btn btn-sm tzb-give" data-g="${escapeHtml(x.group)}" data-i="${escapeHtml(x.item)}">Отправить блогеру…</button>`}</td></tr>`; }).join("") : `<tr><td colspan="4" class="empty">Нет ТЗ</td></tr>`}</tbody></table>
+    <div class="mut" style="padding:10px 16px;font-size:12px">Справочник ТЗ по товарам со статусом из Blogery Audit. «Отправить блогеру…» — выбираете интеграцию, ТЗ записывается в неё.</div>
   </div>
   ${crmIsLeadName() ? `<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;color:#C2306F">Редактировать справочник ТЗ (тимлиды)</summary><div style="margin-top:10px">${(UI.microTzCatalogOpen = true, tplMicroTzCatalog())}</div></details>` : ""}`;
 }
