@@ -3667,7 +3667,7 @@ function tabsForRole(){
   const base = UI.role==="marketer" ? MARKETER_TABS : MANAGER_TABS;
   if(UI.actorName==="Ольга") return base; // у Ольги интерфейс без изменений
   // Руководство (Мария, Сауле, Константин) — только обычные вкладки, без Рабочего стола, команд и оплат (прототип X9).
-  if(["Мария","Сауле","Константин"].includes(UI.actorName)) return [{id:"dashboard",label:"Дашборд"},{id:"publications",label:"Публикации"},{id:"influencerDeals",label:"Интеграции крупные"},{id:"microInfluencers",label:"Интеграции микро/средние"},{id:"microCalendar",label:"Планер блогеров"},{id:"report",label:"Сводный отчёт"}];
+  if(["Мария","Сауле","Константин"].includes(UI.actorName)) return [{id:"dashboard",label:"Дашборд"},{id:"publications",label:"Публикации"},{id:"influencerDeals",label:"Интеграции крупные"},{id:"microInfluencers",label:"Интеграции микро/средние"},{id:"control",label:"Контроль"},{id:"microCalendar",label:"Планер блогеров"},{id:"report",label:"Сводный отчёт"}];
   // Вкладки по прототипу: Дашборд · Рабочий стол · Блогеры · База ТЗ · Интеграции крупные · микро/средние · Планер.
   // Логистика (менеджер/логист) — свои вкладки после основных. Тимлидам — Товары, Публикации, Сводный; Нине — Оплаты.
   const lead = crmIsLeadName();
@@ -3675,7 +3675,7 @@ function tabsForRole(){
     ? [{id:"dashboard",label:"Дашборд"},{id:"desk",label:"Рабочий стол"},{id:"crmBloggers",label:"Блогеры"},{id:"tzBase",label:"База ТЗ"},{id:"influencerDeals",label:"Интеграции крупные"},{id:"microInfluencers",label:"Интеграции микро/средние"},{id:"microCalendar",label:"Планер блогеров"}]
     : [base[0],{id:"desk",label:"Рабочий стол"},{id:"crmBloggers",label:"Блогеры"},...base.slice(1)];
   // 23.11.2026: Товары (ШК и себестоимость) — только Нина и Сая; Оплаты и Доставки — у всех (менеджер видит только свои).
-  const extra = UI.role==="marketer" ? [...(crmIsLead() ? [{id:"crmProducts",label:"Товары"}] : []), ...(lead ? [{id:"publications",label:"Публикации"},{id:"report",label:"Сводный отчёт"}] : [])] : [];
+  const extra = UI.role==="marketer" ? [...(lead ? [{id:"control",label:"Контроль"}] : []), ...(crmIsLead() ? [{id:"crmProducts",label:"Товары"}] : []), ...(lead ? [{id:"publications",label:"Публикации"},{id:"report",label:"Сводный отчёт"}] : [])] : [];
   return [...main, ...extra, ...(UI.role==="marketer" ? [{id:"crmPayments", label:"Оплаты"}, {id:"deliveryReq", label:"Доставки"}] : [])];
 }
 function roleLabel(){
@@ -3766,12 +3766,60 @@ function renderDeskTab(){
   else if(UI.tab==="desk") main.innerHTML = tplDesk();
   else if(UI.tab==="tzBase") main.innerHTML = tplTzBase();
   else if(UI.tab==="deliveryReq") main.innerHTML = tplDeliveryReq();
+  else if(UI.tab==="control") main.innerHTML = tplControl();
   wireDeskTab();
   if(scrollPositions.length){
     main.querySelectorAll(".table-wrap").forEach((el,i)=>{ if(scrollPositions[i]) el.scrollLeft = scrollPositions[i]; });
   }
 }
 
+
+// ===== Контроль (23.11.2026): по каждому менеджеру за текущий месяц — что горит. Для Нины, Саи, тимлидов и руководства. =====
+const CTRL = { month:"" };
+function ctrlRows(){
+  const today = todayStr(), m = CTRL.month || today.slice(0,7);
+  const pub = d=> microDealPublished(d) || microPubDone(d);
+  const deals = (DataManager.state.microInfluencerDeals||[]).filter(d=> !/отмен/i.test(String(d.problemStatus||"")) && String(d.plannedDate||d.publishDate||"").slice(0,7)===m);
+  if(!INBOX.loading && (!INBOX.data || Date.now()-(INBOX.at||0) > 60000 || INBOX.who!=="ctrl")){ INBOX.loading = true; apiFetch("/api/inbox").then(r=>{ INBOX.data = r; }).catch(()=>{ INBOX.data = {items:[]}; }).finally(()=>{ INBOX.loading = false; INBOX.who = "ctrl"; INBOX.at = Date.now(); if(UI.tab==="control") renderDeskTab(); }); }
+  const ib = ((INBOX.data && INBOX.data.items) || []).filter(r=> r.waiting);
+  const byM = new Map();
+  const row = n=>{ if(!byM.has(n)) byM.set(n, {name:n, all:[], out:[], late:[], notz:[], nolink:[], nopay:[], noreply:[], noreply2:[]}); return byM.get(n); };
+  for(const d of deals){ const r = row(d.responsible||"—"), pd = String(d.plannedDate||"").slice(0,10); r.all.push(d);
+    if(pub(d)) r.out.push(d);
+    if(!pub(d) && pd && pd < today) r.late.push(d);
+    if(!pub(d) && !String(d.tz||"").trim()) r.notz.push(d);
+    if(pub(d) && !d.reelsLink && !d.tiktokVideoLink && !(Number(d.factReachStories)>0)) r.nolink.push(d);
+    if(pub(d) && (Number(d.cost)||0)>0 && d.paymentStatus==="не оплачено") r.nopay.push(d); }
+  const byId = new Map((DataManager.state.microInfluencerDeals||[]).map(d=> [d.id, d]));
+  for(const x of ib){ const d = byId.get(x.dealId); if(!d) continue; const r = row(x.manager||d.responsible||"—"); r.noreply.push(d); if(Date.now()-Date.parse(x.lastIn) > 2*3600000) r.noreply2.push(d); }
+  return [...byM.values()].map(r=> Object.assign(r, {score: r.late.length*3 + r.noreply2.length*3 + r.nopay.length + r.nolink.length + r.notz.length})).sort((a,b)=> b.score-a.score || b.all.length-a.all.length);
+}
+function tplControl(){
+  const rows = ctrlRows(), m = CTRL.month || todayStr().slice(0,7);
+  const months = crmMonths();
+  const cols = [["all","Интеграций",""],["out","Вышло",""],["late","Не вышли в срок","bad"],["noreply2","Без ответа > 2 ч","bad"],["noreply","Ждут ответа","warn"],["nopay","Вышло, оплата не подана","warn"],["nolink","Вышло, нет ссылки","warn"],["notz","Нет ТЗ","warn"]];
+  const tot = k=> rows.reduce((s,r)=> s+r[k].length, 0);
+  const cell = (r,k,kind)=>{ const n = r[k].length; const bg = !n ? "" : kind==="bad" ? "background:#FDE6EA;color:#C42B45;font-weight:800" : kind==="warn" ? "background:#FFF6E3;color:#9A6400;font-weight:700" : "";
+    return `<td style="text-align:center;${bg}">${n ? `<a href="#" class="ctrl-cell" data-m="${escapeHtml(r.name)}" data-k="${k}" style="color:inherit">${n}</a>` : `<span class="mut">0</span>`}</td>`; };
+  return `
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+    <div><h1 style="margin:0;font-size:22px;font-weight:800">Контроль</h1><div class="mut" style="margin-top:3px">что горит у каждого менеджера · обновляется само · нажмите на цифру — откроется список</div></div>
+    <select class="pv-inp" id="ctrl-month">${months.map(([v,t])=>`<option value="${v}" ${v===m?"selected":""}>${escapeHtml(t)}</option>`).join("")}</select>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px">
+    ${[["late","не вышли в срок","#C42B45"],["noreply2","без ответа больше 2 часов","#C42B45"],["nopay","вышли, оплата не подана","#9A6400"],["out","вышло за месяц","#1E8C5C"]].map(([k,t,c])=>`<div class="panel" style="margin:0"><b style="font-size:26px;color:${c}">${tot(k)}</b><div class="mut" style="font-size:12px">${t}</div></div>`).join("")}
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Менеджер</th>${cols.map(c=>`<th style="text-align:center">${c[1]}</th>`).join("")}</tr></thead>
+    <tbody>${rows.length ? rows.map(r=>`<tr><td><b>${escapeHtml(r.name)}</b></td>${cols.map(c=> cell(r,c[0],c[2])).join("")}</tr>`).join("") : `<tr><td colspan="9" class="empty">Интеграций за месяц нет</td></tr>`}</tbody>
+  </table></div>
+  <div class="mut" style="font-size:12px;margin-top:8px">«Ждут ответа» — последнее сообщение в WhatsApp от блогера (общий номер и ChatApp). Красное — то, что надо разобрать сегодня. Сделанное уходит само.</div>`;
+}
+function wireControl(){
+  const mo = document.getElementById("ctrl-month"); if(mo) mo.onchange = ()=>{ CTRL.month = mo.value; renderDeskTab(); };
+  const titles = {all:"Интеграции",out:"Вышло",late:"Не вышли в срок",noreply2:"Без ответа больше 2 часов",noreply:"Ждут ответа",nopay:"Вышло, оплата не подана",nolink:"Вышло, нет ссылки",notz:"Нет ТЗ"};
+  document.querySelectorAll(".ctrl-cell").forEach(a=> a.onclick = e=>{ e.preventDefault(); const r = ctrlRows().find(x=> x.name===a.dataset.m); if(r) modalDeskList(r.name+" · "+titles[a.dataset.k], r[a.dataset.k]); });
+}
 /* ---------- Дашборд менеджера ---------- */
 // Панель "Расходы на бартер" с фильтром по проекту: без выбора — общая сумма плюс разрез по
 // каждому проекту таблицей; с выбором конкретного проекта — три карточки только по нему.
@@ -6318,7 +6366,7 @@ function tplMicroInfluencers(){
               <td>${inlineEditSpan(escapeHtml(d.city||"—"), d.id, 'city', d.city||'', 'text')}</td>
               <td>${inlineEditSpan(fmtNum(d.cost||0)+" ₸", d.id, 'cost', d.cost||0, 'number')}</td>
               <td>${inlineEditSpan(fmtNum(d.productCost||0)+" ₸", d.id, 'productCost', d.productCost||0, 'number')}</td>
-              <td>${inlineEditSpan(escapeHtml(d.paymentStatus||"—"), d.id, 'paymentStatus', d.paymentStatus||'', 'select', MICRO_PAYMENT_STATUSES)}</td>
+              <td>${(UI.canExport ? inlineEditSpan(escapeHtml(d.paymentStatus||"—"), d.id, 'paymentStatus', d.paymentStatus||'', 'select', MICRO_PAYMENT_STATUSES) : escapeHtml(d.paymentStatus||"—"))}</td>
               <td>${inlineEditSpan(fmtNum(factReach), d.id, 'factReachTotal', factReach, 'number')}${socialViewsBadge(d,["factReachReels","factReachTT"])}${(()=>{ const hh = microViewsHistoryHtml(d); return hh ? `<br>${hh}` : ""; })()}${(d.factReachStories||0)>0 ? `<br><span style="font-size:10.5px;color:var(--ink-mute)">в т.ч. сторис ${fmtNum(d.factReachStories)}</span>` : ""}</td>
               <td>${microCpvCell(d, cpv)}</td>
               <td>
@@ -6340,8 +6388,8 @@ function tplMicroInfluencers(){
                 return units ? fmtNum(units) : `<span style="color:var(--ink-mute)" title="Нет цены товара по этому ШК — добавьте в «Динамика цен»">—</span>`;
               })()}</td><td title="Считается автоматически: вклад в продажи ÷ (сумма + стоимость товара)">${(r && r.romi!=null) ? r.romi.toFixed(2) : "—"}</td><td>${(r && r.romi!=null) ? `×${r.romi.toFixed(2)}` : "—"}</td>
               <td>${UI.collapsedColGroups.has("infl-auto") ? `<span style="color:var(--ink-mute);cursor:default" title="Свёрнуто — нажмите «+ Авто» в заголовке колонки, чтобы показать">⋯</span>` : autoContributionCell(d)}</td>
-              <td>${inlineEditSpan(escapeHtml(d.productStatus||"—"), d.id, 'productStatus', d.productStatus||'', 'select', MICRO_PRODUCT_STATUSES)}</td>
-              <td>${inlineEditSpan(escapeHtml(d.videoStatus||"—"), d.id, 'videoStatus', d.videoStatus||'', 'select', MICRO_VIDEO_STATUSES)}${d.videoStatus!=="опубликовано" && microDealPublished(d) ? `<br><span style="font-size:10.5px;color:var(--ok)" title="Сторис с охватом считается вышедшей, даже без ссылки">✓ сторис вышла</span>` : ""}</td>
+              <td>${(UI.canExport ? inlineEditSpan(escapeHtml(d.productStatus||"—"), d.id, 'productStatus', d.productStatus||'', 'select', MICRO_PRODUCT_STATUSES) : escapeHtml(d.productStatus||"—"))}</td>
+              <td>${(UI.canExport ? inlineEditSpan(escapeHtml(d.videoStatus||"—"), d.id, 'videoStatus', d.videoStatus||'', 'select', MICRO_VIDEO_STATUSES) : escapeHtml(d.videoStatus||"—"))}${d.videoStatus!=="опубликовано" && microDealPublished(d) ? `<br><span style="font-size:10.5px;color:var(--ok)" title="Сторис с охватом считается вышедшей, даже без ссылки">✓ сторис вышла</span>` : ""}</td>
               <td>${inlineEditSpan(escapeHtml(microVideoLang(d)||"—"), d.id, 'videoLang', microVideoLang(d), 'select', [""].concat(MICRO_VIDEO_LANGS))}</td>
               <td>${inlineEditSpan(escapeHtml(d.plannedDate||"—"), d.id, 'plannedDate', d.plannedDate||'', 'date')}${d.agreedDate ? `<div style="font-size:10.5px;color:var(--ink-mute)">видео ${ddmmStr(d.agreedDate)}</div>` : ""}</td>
               <td>${inlineEditSpan(escapeHtml(d.publishDate||"—"), d.id, 'publishDate', d.publishDate||'', 'date')}</td>
@@ -8364,7 +8412,7 @@ function modalMicroDeal(existing, prefill){
         ${lab("Reels", `<input id="mm-reels-link" class="pv-inp" placeholder="https://instagram.com/reel/…" value="${escapeHtml(d.reelsLink||'')}">`)}
         ${lab("TikTok", `<input id="mm-tt-link" class="pv-inp" placeholder="https://tiktok.com/…" value="${escapeHtml(d.tiktokVideoLink||'')}">`)}
         ${lab("Сторис — папка / файлы", `<input id="mm-stories-link" class="pv-inp" placeholder="https://drive.google.com/…" value="${escapeHtml(d.storiesLink||'')}">`)}
-        ${lab("Дата выкладки", `<input id="mm-publish-date" type="date" class="pv-inp" value="${d.publishDate||''}">`)}
+        ${UI.canExport ? lab("Дата выкладки", `<input id="mm-publish-date" type="date" class="pv-inp" value="${d.publishDate||''}">`, "ставится сама по ссылке") : `<input id="mm-publish-date" type="hidden" value="${d.publishDate||''}">`}
         ${lab("Сторис: просмотры", `<input id="mm-stories-reach" type="number" class="pv-inp" value="${d.factReachStories||0}">`)}
         ${lab("Сторис: клики по ссылке", `<input id="mm-stories-clicks" type="number" class="pv-inp" value="${d.storiesClicks||0}">`)}
       </div>
@@ -8388,9 +8436,11 @@ function modalMicroDeal(existing, prefill){
       ${pill("ИИН / реквизиты", (d.iin || (d.ipRequisites && d.ipRequisites.iin)) ? "есть" : "нет", "из профиля блогера или из переписки")}
       <details style="margin-top:10px;border-top:1px solid #F3DDE7;padding-top:8px"><summary style="cursor:pointer;font-size:12px;font-weight:700;color:#C2306F">Поправить вручную</summary>
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+          <div style="${UI.canExport?"display:flex;flex-direction:column;gap:8px":"display:none"}">
           ${lab("Статус товара", `<select id="mm-product-status" ${inpS}>${MICRO_PRODUCT_STATUSES.map(st=>`<option ${st===d.productStatus?'selected':''}>${st}</option>`).join("")}</select>`)}
           ${lab("Статус видео", `<select id="mm-video-status" ${inpS}>${MICRO_VIDEO_STATUSES.map(st=>`<option ${st===d.videoStatus?'selected':''}>${st}</option>`).join("")}</select>`)}
-          ${lab("Статус оплаты", `<select id="mm-payment-status" ${inpS}>${MICRO_PAYMENT_STATUSES.map(st=>`<option ${st===d.paymentStatus?'selected':''}>${st}</option>`).join("")}</select>`)}
+          ${lab("Статус оплаты", `<select id="mm-payment-status" ${inpS}>${MICRO_PAYMENT_STATUSES.map(st=>`<option ${st===d.paymentStatus?'selected':''}>${st}</option>`).join("")}</select>`)}</div>
+          ${UI.canExport?"":`<div class="mut" style="font-size:11.5px">Статусы ставятся сами: ссылка → «опубликовано», «Подать на оплату» → «к оплате», доставка → «доставлен». Поправить вручную может Нина или Сая.</div>`}
           ${lab("Категория товара", `<input id="mm-product-category" ${inpS} placeholder="сама по ШК" value="${escapeHtml(d.productCategory||'')}">`)}
           ${lab("Факт. охват Reels", `<input id="mm-fact-reach-reels" type="number" ${inpS} value="${d.factReachReels||0}">`)}
           ${lab("Факт. охват TikTok", `<input id="mm-fact-reach-tt" type="number" ${inpS} value="${d.factReachTT||0}">`)}
@@ -9215,12 +9265,18 @@ function modalMicroCard(d){
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${!UI.readOnly && pub && (Number(d.cost)||0)>0 && d.paymentStatus==="не оплачено" ? `<button class="btn btn-primary" id="mc-pay-go">Подать на оплату</button>` : ""}
         ${!UI.readOnly && !/доставлен/i.test(String(d.productStatus||"")) && d.productDelivery!=="has" ? `<button class="btn" id="mc-dlv">Заявка на доставку</button>` : ""}
-        ${!UI.readOnly ? `<button class="btn" id="mc-edit">Изменить</button>` : ""}
+        ${!UI.readOnly ? `<button class="btn btn-ghost" id="mc-edit" title="профиль блогера, товар, формат, ИИН и остальные поля">Все поля</button>` : ""}
         <button class="btn" onclick="closeModal()">Закрыть</button></div>
     </div>
     ${others.length ? `<div class="pv-note" style="margin-top:10px"><b>Ещё с этим блогером сейчас:</b> ${others.map(x=>`<a href="#" data-mc-open="${x.id}" style="font-weight:700">${escapeHtml(microFormatOf(x))}${x.product?" · "+escapeHtml(x.product):""} · ${x.plannedDate?"план "+ddmmStr(x.plannedDate):"без даты"} · ${escapeHtml(x.paymentStatus||"не оплачено")}</a>`).join(" &nbsp;·&nbsp; ")} <span class="mut">— отдельные интеграции, у каждой своя дата и оплата</span></div>` : ""}
     <div style="margin-top:10px">${deskDateProposalsHtml(d.id)}</div>
-    ${!UI.readOnly && !pub ? `<div style="margin-top:10px;background:#fff;border:1px solid #F3DDE7;border-radius:12px;padding:8px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b style="font-size:13px">Дата выхода</b><input type="date" id="mc-pdate" class="pv-inp" value="${escapeHtml(String(d.plannedDate||"").slice(0,10))}" style="width:160px"><span class="mut" style="font-size:12px">меняется сразу — без «Изменить»</span></div>` : ""}
+    ${!UI.readOnly ? `<div style="margin-top:10px;background:#fff;border:1px solid #F3DDE7;border-radius:12px;padding:10px 14px;display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
+      ${!pub ? `<label style="display:flex;flex-direction:column;gap:3px"><span class="pv-lbl">Дата выхода</span><input type="date" id="mc-pdate" class="pv-inp" value="${escapeHtml(String(d.plannedDate||"").slice(0,10))}" style="width:150px"></label>` : ""}
+      <label style="display:flex;flex-direction:column;gap:3px"><span class="pv-lbl">Сумма, ₸</span><input type="number" class="pv-inp mc-f" data-f="cost" data-num="1" value="${Number(d.cost)||""}" style="width:110px"></label>
+      <label style="display:flex;flex-direction:column;gap:3px"><span class="pv-lbl">Телефон (WhatsApp)</span><input class="pv-inp mc-f" data-f="phone" value="${escapeHtml(d.phone||"")}" style="width:150px"></label>
+      <label style="display:flex;flex-direction:column;gap:3px"><span class="pv-lbl">Ведёт</span><select class="pv-inp mc-f" data-f="responsible" style="width:130px">${microManagerNames(d.responsible).map(n=>`<option ${n===d.responsible?"selected":""}>${escapeHtml(n)}</option>`).join("")}</select></label>
+      <label style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:200px"><span class="pv-lbl">Комментарий</span><input class="pv-inp mc-f" data-f="notes" value="${escapeHtml(d.notes||"")}" placeholder="что важно по этой интеграции"></label>
+      <span class="mut" style="font-size:11.5px;padding-bottom:6px">сохраняется сразу</span></div>` : ""}
     ${false && !d.agreedDate && !d.datesChecked && !pub && /^\d{4}-\d{2}-\d{2}/.test(d.plannedDate||"") ? `<div style="margin-top:10px;background:#FFF6E3;border:1px solid #F6E2B8;border-radius:12px;padding:10px 14px;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap"><span><b>Проверьте дату ${ddmmStr(d.plannedDate)}</b> — это день выхода или день, когда блогер присылает видео?</span><span style="display:flex;gap:6px"><button class="btn btn-sm mc-dc" data-k="pub">Это выход (видео ${ddmmStr(addDaysYMD(d.plannedDate,-2))})</button><button class="btn btn-sm mc-dc" data-k="vid">Это видео (выход ${ddmmStr(addDaysYMD(d.plannedDate,2))})</button></span></div>` : ""}
     ${microDealProgressHtml(d)}
     <div style="display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;margin-top:12px;align-items:start">
@@ -9242,12 +9298,13 @@ function modalMicroCard(d){
       </div>
       <div style="display:flex;flex-direction:column;gap:14px">
         ${card("WhatsApp", `<div id="mc-chat" style="display:flex;flex-direction:column;gap:8px;max-height:380px;overflow:auto;font-size:12.5px"><div class="mut">Загружаю переписку…</div></div>
+          ${d.phone && !UI.readOnly ? `<div style="display:flex;gap:6px;margin-top:8px"><textarea id="mc-msg" class="pv-inp" rows="2" style="flex:1;height:auto;padding:6px 9px" placeholder="Ответить блогеру…"></textarea><button class="btn btn-sm btn-primary" id="mc-msg-send" style="align-self:stretch">Отправить</button></div>` : ""}
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
             ${d.phone ? `${!pub ? `<button class="btn btn-sm" id="mc-vtoday">Сегодня ждём видео</button><button class="btn btn-sm" id="mc-remind">Напомнить о видео</button>` : ""}
             <a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(wa("Здравствуйте! Пришлите, пожалуйста, ссылку на опубликованное видео 🙏"))}">Попросить ссылку</a>
             ${d.paymentStatus==="оплачено" ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(wa("Здравствуйте! Оплата прошла, спасибо за сотрудничество 🙌"))}">Оплата прошла</a>` : ""}
             ${ip && pub ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(wa("Здравствуйте! Публикация вышла, спасибо 🙌 Пришлите, пожалуйста, АВР и ЭСФ по договору."))}">Запросить АВР и ЭСФ</a>` : ""}
-            <a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(wa(""))}">Открыть чат</a>` : `<span class="pv-st s-b">Нет телефона — добавьте в «Изменить»</span>`}
+            <a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(wa(""))}">Открыть чат</a>` : `<span class="pv-st s-b">Нет телефона — впишите его выше</span>`}
           </div>`, `<span class="pv-st s-m" id="mc-chat-mode">…</span>`)}
         ${card("Раньше с этим блогером", past.length ? `<table style="font-size:12px"><thead><tr><th>Когда</th><th>Товар</th><th>Вёл</th><th>ТЗ</th><th style="text-align:right">Охват</th><th style="text-align:right">CPV</th></tr></thead><tbody>${past.slice(0,12).map(x=>`<tr data-mc-open="${x.id}" style="cursor:pointer"><td>${ddmmStr(x.publishDate||x.plannedDate)}</td><td style="max-width:110px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(x.product||"—")}</td><td>${escapeHtml(x.responsible||"—")}</td><td style="max-width:80px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(x.tz||"—")}</td><td style="text-align:right">${microDealFactReach(x)?fmtNum(microDealFactReach(x)):"—"}</td><td style="text-align:right">${cpvOf(x)}</td></tr>`).join("")}</tbody></table>` : `<div class="mut" style="font-size:12.5px">Первая интеграция с блогером</div>`, `<span class="mut" style="font-size:11.5px">все менеджеры · все месяцы</span>`)}
       </div>
@@ -9265,19 +9322,23 @@ function modalMicroCard(d){
     inp.onkeydown = e=>{ if(e.key==="Enter") go(); }; inp.onblur = go; });
   bindVideoStageButtons(()=> microCardRefresh(d.id));
   wireDateProposals(()=>{ render(); microCardRefresh(d.id); });
+  document.querySelectorAll(".mc-f").forEach(el=> el.onchange = ()=>{ const f = el.dataset.f, v = el.dataset.num ? (parseInt(el.value,10)||0) : el.value.trim(); if(String(v) === String(d[f]==null?"":d[f])) return; save({[f]: v}, "Сохранено"); });
   const pdt = document.getElementById("mc-pdate"); if(pdt) pdt.onchange = ()=>{ const v = pdt.value; if(v && v!==String(d.plannedDate||"").slice(0,10)) save({plannedDate:v}, "Дата выхода: "+ddmmStr(v)); };
   document.querySelectorAll(".mc-dc").forEach(b=> b.onclick = ()=> save(Object.assign({datesChecked:true}, b.dataset.k==="pub" ? {agreedDate: addDaysYMD(d.plannedDate,-2)} : {agreedDate: d.plannedDate, plannedDate: addDaysYMD(d.plannedDate,2)}), "Даты сохранены"));
   wireMicroPay(d.id);
   const vt = document.getElementById("mc-vtoday"); if(vt) vt.onclick = async ()=>{ const txt = "Добрый день! Сегодня ожидаем видео на согласование."; try{ await withBusy(vt, ()=> apiFetch('/api/coord/deal/'+d.id+'/send-now',{method:'POST', headers:jsonHeaders, body:JSON.stringify({kind:"video_today"})})); toast("Отправлено: "+txt); loadChat(); }catch(e){ toast("Не отправилось: "+e.message, true); const l = wa(txt); if(l) window.open(l, "_blank", "noopener"); } };
+  const ms = document.getElementById("mc-msg-send"); if(ms) ms.onclick = async ()=>{ const ta = document.getElementById("mc-msg"), txt = ta.value.trim(); if(!txt) return;
+    try{ await withBusy(ms, ()=> apiFetch('/api/coord/deal/'+d.id+'/send-now',{method:'POST', headers:jsonHeaders, body:JSON.stringify({text:txt})})); ta.value = ""; toast("Отправлено"); loadChat(); if(INBOX.data) INBOX.at = 0; }
+    catch(e){ toast("Не отправилось: "+e.message+" — открываю WhatsApp", true); const l = wa(txt); if(l) window.open(l, "_blank", "noopener"); } };
   const rm = document.getElementById("mc-remind"); if(rm) rm.onclick = async ()=>{ try{ await withBusy(rm, ()=> apiFetch('/api/coord/deal/'+d.id+'/send-now',{method:'POST'})); toast("Напоминание отправлено"); loadChat(); }catch(e){ const l = wa("Здравствуйте! Напоминаю про видео для MIXIT — когда сможете прислать?"); if(l) window.open(l, "_blank", "noopener"); } };
   const loadChat = async ()=>{ const box = document.getElementById("mc-chat"), mode = document.getElementById("mc-chat-mode"); if(!box) return;
     try{ const r = await apiFetch('/api/coord/deal/'+d.id+'/chat');
-      mode.textContent = r.pilot ? "рабочий номер" : "вне рабочего номера"; mode.className = "pv-st " + (r.pilot ? "s-ok" : "s-m");
+      const has = (r.log||[]).some(m=> m.dir==="in" || m.dir==="out"); mode.textContent = has ? "переписка в Barter Box" : "сообщений нет"; mode.className = "pv-st " + (has ? "s-ok" : "s-m");
       const msgs = (r.log||[]).filter(m=> m.dir!=="sys" || /ошибк|не отправ/i.test(m.text));
       box.innerHTML = msgs.length ? msgs.map(m=>{ const out = m.dir==="out", bot = out && !/^(wazzup|bitrix)?:?\s*\[?ТЕСТ/i.test(m.text) && /^(wazzup|bitrix):/i.test(m.text);
         const t = String(m.text||"").replace(/^(wazzup|bitrix):\s*/i,"");
         return `<div style="align-self:${out?"flex-end":"flex-start"};max-width:88%;background:${m.dir==="sys"?"#FDE6EA":out?(bot?"#FFF4DC":"#FCE4EF"):"#F4EEF1"};border-radius:12px;padding:8px 11px"><div style="white-space:pre-wrap">${escapeHtml(t)}</div><div class="mut" style="font-size:10.5px;margin-top:3px">${out?(bot?"бот":"мы"):m.dir==="sys"?"система":"блогер"} · ${new Date(m.at).toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}${m.dealId!==d.id?" · по другой интеграции":""}</div></div>`; }).join("")
-        : `<div class="mut">${r.pilot ? "Переписки по этой интеграции ещё нет." : "Этот номер не подключён к рабочему WhatsApp (Wazzup) — переписка идёт в телефоне менеджера. Кнопки ниже открывают WhatsApp с готовым текстом."}</div>`;
+        : `<div class="mut">Сообщений пока нет. Сюда приходит переписка с общего номера и с номера ChatApp — и ответы блогера, и ваши.</div>`;
       box.scrollTop = box.scrollHeight;
     }catch(e){ box.innerHTML = `<div class="mut">Переписка недоступна: ${escapeHtml(e.message)}</div>`; mode.textContent = "—"; } };
   loadChat();
@@ -9500,6 +9561,7 @@ function deskSendBtn(d, text, wa){ return `<button class="btn btn-sm desk-send" 
 async function deskSendNow(b){ try{ const r = await withBusy(b, ()=> apiFetch('/api/coord/deal/'+b.dataset.id+'/send-now', {method:'POST', headers:jsonHeaders, body:JSON.stringify({text:b.dataset.text})})); toast("Отправлено ✓"); b.textContent = "Отправлено ✓"; b.disabled = true; }catch(e){ toast("Не отправилось: "+e.message+" — открываю WhatsApp", true); window.open(b.dataset.wa, "_blank", "noopener"); } }
 function deskAction(x){
   const d = x.d, wa = x.wa && waLink(d.phone, x.wa);
+  if(x.act==="reply") return `<span class="mut" style="font-size:11px">${x.ib.via==="chatapp"?"ChatApp":"общий номер"}</span><button class="btn btn-sm btn-primary" onclick="openMicroById(${d.id})">Открыть переписку</button><button class="btn btn-sm desk-ib-done" data-phone="${escapeHtml(x.ib.phone)}">Ответила</button>`;
   if(x.act==="late") return `${wa ? deskSendBtn(d, x.wa, wa) : `<span class="mut" style="font-size:11.5px">нет телефона</span>`}<input class="pv-inp desk-link" data-id="${d.id}" placeholder="вышло? вставьте ссылку" style="width:190px">`;
   if(x.act==="wa") return wa ? deskSendBtn(d, x.wa, wa) : `<button class="btn btn-sm" onclick="openMicroById(${d.id})">Нет телефона — открыть</button>`;
   if(x.act==="tz") return microTzCell(d).replace('class="micro-tz-select"','class="micro-tz-select pv-inp desk-tz"');
@@ -9771,11 +9833,19 @@ function wirePlanner(){
     try{ const r = await withBusy(b, ()=> apiFetch("/api/coord/send-now-many", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids})})); toast(`Отправлено: ${r.sent} · пропущено: ${r.skipped}`); }catch(e){ toast(e.message, true); } });
 }
 // ===== Заявки на доставку (прототип X10, 23.11.2026) =====
-const MYPAY = { data:null, loading:false }, MYDLV = { data:null, loading:false };
+const MYPAY = { data:null, loading:false }, MYDLV = { data:null, loading:false }, INBOX = { data:null, loading:false };
 // 23.11.2026: цифры на Рабочем столе — перезагружаем при смене пользователя и раз в минуту (раньше оставались от прошлого входа).
 const myWho = ()=> String(UI.actorName||"")+"|"+String(UI.role||"")+"|"+(UI.canExport?1:0);
 const myStale = o=> !o.loading && (!o.data || o.who!==myWho() || Date.now()-(o.at||0) > 60000);
 async function myPayLoad(){ MYPAY.loading = true; MYPAY.who = myWho(); MYPAY.at = Date.now(); try{ MYPAY.data = crmIsNina() ? await apiFetch("/api/crm/payments?status=pending") : await apiFetch("/api/crm/payments/mine"); }catch(e){ MYPAY.data = {counts:{}, items:[]}; } MYPAY.loading = false; if(UI.tab==="desk") renderDeskTab(); }
+// 23.11.2026 «Ждут ответа»: сообщения блогеров с общего номера и ChatApp, на которые ещё не ответили.
+async function inboxLoad(){ INBOX.loading = true; INBOX.who = myWho()+"|"+(UI.deskAll?1:0); INBOX.at = Date.now(); try{ INBOX.data = await apiFetch("/api/inbox"+(crmIsLeadName() && !UI.deskAll ? "?mine=1" : "")); }catch(e){ INBOX.data = {items:[]}; } INBOX.loading = false; if(UI.tab==="desk") renderDeskTab(); }
+function inboxWaiting(){ if(!INBOX.loading && (!INBOX.data || INBOX.who!==myWho()+"|"+(UI.deskAll?1:0) || Date.now()-(INBOX.at||0) > 60000)) setTimeout(inboxLoad, 0);
+  const byId = new Map((DataManager.state.microInfluencerDeals||[]).map(d=> [d.id, d]));
+  return ((INBOX.data && INBOX.data.items) || []).filter(r=> r.waiting && byId.has(r.dealId)).map(r=>{ const h = Math.max(0, Math.round((Date.now()-Date.parse(r.lastIn))/3600000));
+    const txt = String(r.lastInText||"").replace(/https?:\/\/\S+/g, "ссылка").slice(0, 70);
+    return {d: byId.get(r.dealId), ib: r, act:"reply", cls: h>=2 ? "s-b" : "s-w", tag: (h ? "ждёт "+h+" ч" : "только что")+(txt ? " · «"+txt+"»" : "")}; });
+}
 async function myDlvLoad(){ MYDLV.loading = true; MYDLV.who = myWho(); MYDLV.at = Date.now(); try{ MYDLV.data = await apiFetch("/api/delivery-requests"); }catch(e){ MYDLV.data = {items:[]}; } MYDLV.loading = false; if(UI.tab==="desk") renderDeskTab(); if(UI.tab==="deliveryReq") render(); }
 const DLV = { st:"new", city:"", mgr:"", sel:new Set() };
 const DLV_LABEL = {new:"Новая", sent:"Подано логисту", delivered:"Доставлено", failed:"Не доставлено"};
@@ -9881,9 +9951,10 @@ function tplDesk(){
   _bIdx = null;
   const name = UI.actorName || "—";
   const items = attentionItems();
-  const urgent = items.filter(x=> x.sev>=2).concat(items.filter(x=>x.sev<2)).slice(0,3);
+  const urgent = []; // 23.11.2026: «Срочно сегодня» дублировал разделы ниже — убран
   const S = deskSections();
-  const secs = [["late","Должны были выйти"],["today","Выход сегодня"],["tz","ТЗ"],["pay","Оплаты и документы"],["links","Ссылки"],["wait","Скоро выход"]];
+  S.reply = inboxWaiting();
+  const secs = [["reply","Ждут ответа"],["late","Должны были выйти"],["today","Выход сегодня"],["tz","ТЗ"],["pay","Оплаты и документы"],["links","Ссылки"],["wait","Скоро выход"]];
   if(!UI.deskSec || !S[UI.deskSec]) UI.deskSec = (secs.find(([k])=> S[k].length)||secs[0])[0];
   const cur = S[UI.deskSec] || [];
   const p = deskPlan(), gaps = deskGaps(), retAll = deskReturnList(), ret = retAll.slice(0,3), place = deskTeamPlace();
@@ -9898,8 +9969,7 @@ function tplDesk(){
   <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:14px">
     <div><h1 style="margin:0;font-size:22px;font-weight:800">Рабочий стол</h1><div class="mut" style="margin-top:3px">${escapeHtml(name)} · ${dateStr}</div>${crmIsLeadName() ? `<div style="display:flex;gap:6px;margin-top:8px"><button class="pv-chip ${UI.deskAll?"":"on"}" onclick="UI.deskAll=false;renderDeskTab()">Мои</button><button class="pv-chip ${UI.deskAll?"on":""}" onclick="UI.deskAll=true;renderDeskTab()">Все менеджеры</button></div>` : ""}</div>
     <div style="display:flex;gap:8px;align-items:center"><input class="pv-inp" placeholder="Найти блогера…   Ctrl+K" style="width:240px" onfocus="this.blur();modalQuickSearch()">
-      <button class="btn" onclick="UI.tab='microInfluencers';render();toast('Загрузка нескольких — кнопка «Импорт» над таблицей')">Добавить несколько</button>
-      <button class="btn btn-primary" onclick="UI.tab='microInfluencers';render();modalMicroDeal(null,{responsible:UI.actorName||''})">+ Интеграция</button></div>
+      <button class="btn btn-primary" onclick="modalMicroDeal(null,{responsible:UI.actorName||''})">+ Интеграция</button></div>
   </div>
   <div style="display:grid;grid-template-columns:minmax(0,1fr) 316px;gap:16px;align-items:start">
     <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
@@ -9955,6 +10025,7 @@ function tplDesk(){
 function wireDesk(){
   wireDateProposals(()=> renderDeskTab());
   document.querySelectorAll(".desk-send").forEach(b=> b.onclick = ()=> deskSendNow(b));
+  document.querySelectorAll(".desk-ib-done").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch("/api/inbox/"+encodeURIComponent(b.dataset.phone)+"/done", {method:"POST"})); const r = ((INBOX.data&&INBOX.data.items)||[]).find(x=> x.phone===b.dataset.phone); if(r) r.waiting = false; renderDeskTab(); }catch(e){ toast(e.message, true); } });
   const rAll = document.getElementById("desk-remind-all"); if(rAll) rAll.onclick = async ()=>{ const ra = rAll; const ids = ra.dataset.ids.split(",").filter(Boolean).map(Number); if(!ids.length){ toast("Ни у кого нет номера WhatsApp", true); return; } if(!confirm("Отправить напоминание в WhatsApp "+ids.length+" блогерам?")) return;
     try{ const r = await withBusy(ra, ()=> apiFetch("/api/coord/send-now-many", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids})})); toast(`Отправлено: ${r.sent||0} · пропущено: ${r.skipped||0}${r.skipped?" (номер не в рабочем WhatsApp — напомните кнопкой в строке)":""}`); }catch(e){ toast(e.message, true); } };
   const gaps = deskGaps();
@@ -9980,6 +10051,7 @@ function wireDeskTab(){
   if(UI.tab==="deliveryReq"){ wireDeliveryReq(); return; }
   if(UI.tab==="crmProducts"){ wireCrmProducts(); return; }
   if(UI.tab==="desk"){ wireDesk(); return; }
+  if(UI.tab==="control"){ wireControl(); return; }
   if(UI.tab==="tzBase"){ wireTzBase(); return; }
   if(UI.tab==="dashboard" && UI.role==="marketer"){
     wireSimpleStats();
