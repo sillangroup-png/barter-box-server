@@ -1082,7 +1082,7 @@ function wireInlineEdit(container, onSave){
 // Выгрузки (CSV/Excel) — только у Нины и Саи (флаг приходит с сервера из подписанной сессии).
 // Пустые шаблоны для импорта качать может любой.
 function exportAllowed(filename){ return !!UI.canExport || /template/i.test(String(filename||"")) || /^barter-box-(micro-influencers|influencer-deals)-export/.test(String(filename||"")); } // 23.11.2026: таблицы интеграций — менеджеры тоже (свои строки)
-const exportMine = d=> !!UI.canExport || !UI.actorName || d.responsible===UI.actorName;
+const exportMine = d=> true; // 23.11.2026 (Нина): менеджеры выгружают все интеграции, но без ИИН
 function downloadFile(filename, content, mime){
   if(!exportAllowed(filename)){ toast("Выгрузка доступна только Нине и Сае", true); return; }
   const blob = new Blob([content], {type: mime||"text/plain;charset=utf-8"});
@@ -8427,7 +8427,15 @@ function modalMicroDeal(existing, prefill){
   // ШК — чипами
   const bcChips = ()=>{ const bc = document.getElementById("mm-barcode"); const codes = bc.value.split(/[,;\s]+/).map(c=>c.trim()).filter(Boolean);
     document.getElementById("mm-bc-chips").innerHTML = codes.map(c=>`<span class="pv-st s-a" style="height:26px;gap:6px">${escapeHtml((skuName(c) ? skuName(c)+" · " : "") + c)} <a href="#" data-bc="${escapeHtml(c)}" style="color:#C2306F">✕</a></span>`).join("");
-    document.querySelectorAll("[data-bc]").forEach(a=> a.onclick = e=>{ e.preventDefault(); bc.value = codes.filter(x=> x!==a.dataset.bc).join(","); bcChips(); }); };
+    document.querySelectorAll("[data-bc]").forEach(a=> a.onclick = e=>{ e.preventDefault(); bc.value = codes.filter(x=> x!==a.dataset.bc).join(","); bcChips(); });
+    mmAutoCost(codes); };
+  // 23.11.2026: себестоимость подставляется из «Товаров» (файл условной себестоимости) по выбранным ШК — пока менеджер не ввёл свою.
+  const pcEl = document.getElementById("mm-product-cost");
+  if(pcEl) pcEl.addEventListener("input", e=>{ if(e.isTrusted) pcEl.dataset.manual = "1"; });
+  function mmAutoCost(codes){ if(!pcEl || pcEl.dataset.manual==="1") return; if(!PROD.list){ if(!PROD.loading) prodLoad().then(()=> mmAutoCost(codes)); return; }
+    const dlv = (document.getElementById("mm-delivery")||{}).value; if(dlv==="has") return;
+    let sum = 0, found = 0; for(const c of codes){ const p = PROD.list.find(x=> String(x.article||"").trim()===c || String(x.sku||"").trim()===c); if(p && Number(p.cost)>0){ sum += Number(p.cost); found++; } }
+    if(found && (!Number(pcEl.value) || pcEl.dataset.auto==="1")){ pcEl.value = Math.round(sum); pcEl.dataset.auto = "1"; pcEl.dispatchEvent(new Event("input")); } }
   bcChips();
   { const dh = ()=>{ const ag = document.getElementById("mm-agreed-date").value, pl = document.getElementById("mm-planned-date").value;
       document.getElementById("mm-dates-hint").textContent = pl ? "Если дата пройдёт без ссылки — интеграция попадёт на Рабочий стол в «Должны были выйти» с кнопкой напоминания." : "Укажите дату выхода."; if(false) document.getElementById("mm-dates-hint").textContent = ag || pl ? `${ag ? ddmmStr(ag) + " — ждём видео (напомнить в WhatsApp с Рабочего стола)" : ""}${ag && pl ? ", " : ""}${pl ? ddmmStr(pl) + " — выход" : ""}. В планере у менеджеров видны обе даты, у руководства — только «Выйдет».` : "Укажите, когда блогер пришлёт видео — дата выхода поставится сама."; };
@@ -10651,7 +10659,7 @@ function wireDeskTab(){
           d.instagramAccount||"", d.followers||0, d.er||0, d.avgReach||0,
           d.tiktokAccount||"", d.followersTT||0, d.erTT||0, d.avgReachTT||0,
           d.cost||0, d.productCost||0,
-          d.paymentStatus||"", d.paymentMethod||"", d.iin||"", d.conditions||"",
+          d.paymentStatus||"", d.paymentMethod||"", UI.canExport ? (d.iin||"") : "", d.conditions||"",
           d.product||"", d.barcode||"", d.productCategory||"",
           d.productStatus||"", d.videoStatus||"",
           d.reelsLink||"", d.factReachReels||0, d.tiktokVideoLink||"", d.factReachTT||0,
