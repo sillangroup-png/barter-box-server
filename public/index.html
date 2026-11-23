@@ -3804,7 +3804,7 @@ function tplControl(){
   return `
   <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:12px">
     <div><h1 style="margin:0;font-size:22px;font-weight:800">Контроль</h1><div class="mut" style="margin-top:3px">что горит у каждого менеджера · обновляется само · нажмите на цифру — откроется список</div></div>
-    <select class="pv-inp" id="ctrl-month">${months.map(([v,t])=>`<option value="${v}" ${v===m?"selected":""}>${escapeHtml(t)}</option>`).join("")}</select>
+    <div style="display:flex;gap:8px;align-items:center">${UI.canExport ? `<button class="btn btn-sm" id="ctrl-chatapp">Подключить ChatApp</button>` : ""}<select class="pv-inp" id="ctrl-month">${months.map(([v,t])=>`<option value="${v}" ${v===m?"selected":""}>${escapeHtml(t)}</option>`).join("")}</select></div>
   </div>
   <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px">
     ${[["late","не вышли в срок","#C42B45"],["noreply2","без ответа больше 2 часов","#C42B45"],["nopay","вышли, оплата не подана","#9A6400"],["out","вышло за месяц","#1E8C5C"]].map(([k,t,c])=>`<div class="panel" style="margin:0"><b style="font-size:26px;color:${c}">${tot(k)}</b><div class="mut" style="font-size:12px">${t}</div></div>`).join("")}
@@ -3816,6 +3816,8 @@ function tplControl(){
   <div class="mut" style="font-size:12px;margin-top:8px">«Ждут ответа» — последнее сообщение в WhatsApp от блогера (общий номер и ChatApp). Красное — то, что надо разобрать сегодня. Сделанное уходит само.</div>`;
 }
 function wireControl(){
+  const ca = document.getElementById("ctrl-chatapp"); if(ca) ca.onclick = async ()=>{ try{ const r = await apiFetch("/api/chatapp/webhook-url");
+    openModal(`<h3>Входящие из ChatApp</h3><div style="font-size:13px;line-height:1.6">1. Откройте кабинет ChatApp → настройки линии WhatsApp → «Webhook» (вебхук сообщений).<br>2. Вставьте этот адрес и сохраните:</div><input class="pv-inp" style="width:100%;margin:10px 0" readonly value="${escapeHtml(r.url)}" onclick="this.select()"><div class="mut" style="font-size:12px">После этого ответы блогеров на номер ChatApp появятся в карточке интеграции и в «Ждут ответа». Адрес секретный — не пересылайте его.</div><div class="modal-actions"><button class="btn btn-primary" onclick="navigator.clipboard&&navigator.clipboard.writeText('${escapeHtml(r.url)}');toast('Скопировано')">Скопировать</button><button class="btn" onclick="closeModal()">Закрыть</button></div>`); }catch(e){ toast(e.message, true); } };
   const mo = document.getElementById("ctrl-month"); if(mo) mo.onchange = ()=>{ CTRL.month = mo.value; renderDeskTab(); };
   const titles = {all:"Интеграции",out:"Вышло",late:"Не вышли в срок",noreply2:"Без ответа больше 2 часов",noreply:"Ждут ответа",nopay:"Вышло, оплата не подана",nolink:"Вышло, нет ссылки",notz:"Нет ТЗ"};
   document.querySelectorAll(".ctrl-cell").forEach(a=> a.onclick = e=>{ e.preventDefault(); const r = ctrlRows().find(x=> x.name===a.dataset.m); if(r) modalDeskList(r.name+" · "+titles[a.dataset.k], r[a.dataset.k]); });
@@ -9561,10 +9563,61 @@ function rawNick(d){ const n = String(d.instagramAccount||"").split(/[?#]/)[0].r
 // 23.11.2026: «Напомнить» отправляет сообщение сразу с рабочего номера (не открывает WhatsApp). Если отправить нельзя — откроет WhatsApp с готовым текстом.
 function deskSendBtn(d, text, wa){ return `<button class="btn btn-sm desk-send" data-id="${d.id}" data-text="${escapeHtml(text)}" data-wa="${escapeHtml(wa)}">Напомнить в WhatsApp</button>`; }
 async function deskSendNow(b){ try{ const r = await withBusy(b, ()=> apiFetch('/api/coord/deal/'+b.dataset.id+'/send-now', {method:'POST', headers:jsonHeaders, body:JSON.stringify({text:b.dataset.text})})); toast("Отправлено ✓"); b.textContent = "Отправлено ✓"; b.disabled = true; }catch(e){ toast("Не отправилось: "+e.message+" — открываю WhatsApp", true); window.open(b.dataset.wa, "_blank", "noopener"); } }
+
+// ===== Чаты WhatsApp внутри Barter Box (23.11.2026): слева диалоги, справа переписка, пишем прямо отсюда =====
+const CHATS = { phone:"", timer:null };
+function modalChats(phone){
+  CHATS.phone = phone || CHATS.phone || "";
+  openModal(`<div style="display:grid;grid-template-columns:300px minmax(0,1fr);height:min(78vh,760px);margin:-8px">
+    <div style="border-right:1px solid #F3DDE7;display:flex;flex-direction:column;min-height:0">
+      <div style="padding:10px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #F3DDE7"><b style="font-size:16px">Чаты</b><button class="btn btn-sm" onclick="closeModal()">Закрыть</button></div>
+      <input id="ch-q" class="pv-inp" placeholder="Поиск по нику…" style="margin:8px 10px;width:calc(100% - 20px)">
+      <div id="ch-list" style="overflow:auto;flex:1"><div class="mut" style="padding:12px">Загружаю…</div></div>
+    </div>
+    <div style="display:flex;flex-direction:column;min-height:0;background:#FBF6F8">
+      <div id="ch-head" style="padding:10px 14px;border-bottom:1px solid #F3DDE7;min-height:44px;display:flex;justify-content:space-between;align-items:center;gap:8px"><span class="mut">Выберите диалог слева</span></div>
+      <div id="ch-msgs" style="flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:8px;font-size:13px"></div>
+      <div style="padding:10px;border-top:1px solid #F3DDE7;display:flex;gap:8px;background:#fff"><textarea id="ch-in" class="pv-inp" rows="2" style="flex:1;height:auto;padding:8px 10px;resize:none" placeholder="Сообщение… Enter — отправить, Shift+Enter — новая строка" disabled></textarea><button class="btn btn-primary" id="ch-send" disabled>Отправить</button></div>
+    </div></div>`);
+  { const ms = document.querySelectorAll(".modal-back .modal"), m = ms[ms.length-1]; if(m){ m.classList.add("modal-wide"); m.style.setProperty("max-width","1100px","important"); m.style.width="min(1100px,96vw)"; } }
+  const list = document.getElementById("ch-list"), q = document.getElementById("ch-q"), msgs = document.getElementById("ch-msgs"), inp = document.getElementById("ch-in"), send = document.getElementById("ch-send"), head = document.getElementById("ch-head");
+  let items = [], lastSig = "";
+  const ago = iso=>{ if(!iso) return ""; const m = Math.round((Date.now()-Date.parse(iso))/60000); return m<1?"сейчас":m<60?m+" мин":m<1440?Math.round(m/60)+" ч":new Date(iso).toLocaleDateString("ru-RU",{day:"2-digit",month:"2-digit"}); };
+  const deal = id=> (DataManager.state.microInfluencerDeals||[]).find(x=> x.id===id);
+  const paintList = ()=>{ const f = q.value.trim().toLowerCase().replace("@","");
+    const rows = items.filter(r=> !f || String(r.blogger||"").toLowerCase().includes(f) || String(r.product||"").toLowerCase().includes(f));
+    list.innerHTML = rows.length ? rows.map(r=>`<div class="ch-row" data-p="${escapeHtml(r.phone)}" style="padding:10px 12px;border-bottom:1px solid #F8E9EF;cursor:pointer;${r.phone===CHATS.phone?"background:#FCE4EF":""}">
+      <div style="display:flex;justify-content:space-between;gap:6px"><b style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.blogger||r.phone)}</b><span class="mut" style="font-size:11px;white-space:nowrap">${ago(r.lastIn>r.lastOut?r.lastIn:r.lastOut)}</span></div>
+      <div style="display:flex;justify-content:space-between;gap:6px;margin-top:2px"><span class="mut" style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.lastInText||r.product||"")}</span>${r.waiting?`<span style="background:#D6337E;color:#fff;border-radius:9px;font-size:10.5px;padding:1px 7px;white-space:nowrap">ждёт</span>`:""}</div>
+      ${crmIsLeadName()&&r.manager?`<div class="mut" style="font-size:11px">${escapeHtml(r.manager)}</div>`:""}</div>`).join("") : `<div class="mut" style="padding:12px">Диалогов пока нет. Новые сообщения блогеров появятся здесь сами.</div>`;
+    list.querySelectorAll(".ch-row").forEach(el=> el.onclick = ()=>{ CHATS.phone = el.dataset.p; lastSig = ""; paintList(); loadMsgs(); }); };
+  const loadList = async ()=>{ try{ const r = await apiFetch("/api/inbox"+(crmIsLeadName() && !UI.deskAll ? "?mine=1" : "")); items = r.items||[]; INBOX.data = r; INBOX.at = Date.now(); }catch(e){} paintList(); };
+  const loadMsgs = async ()=>{ const r0 = items.find(x=> x.phone===CHATS.phone); if(!r0){ return; } const d = deal(r0.dealId);
+    head.innerHTML = `<div><b>${escapeHtml(r0.blogger||r0.phone)}</b> <span class="mut" style="font-size:12px">· ${escapeHtml((d&&d.product)||r0.product||"")} · ${r0.via==="chatapp"?"номер ChatApp":"общий номер"}</span></div><button class="btn btn-sm" onclick="openMicroById(${r0.dealId})">Карточка интеграции</button>`;
+    inp.disabled = false; send.disabled = false;
+    try{ const r = await apiFetch('/api/coord/deal/'+r0.dealId+'/chat'); const list2 = (r.log||[]).filter(m=> m.dir!=="sys" || /ошибк|не отправ|ИИ/i.test(m.text));
+      const sig = list2.length+"|"+(list2.length?list2[list2.length-1].at:""); if(sig===lastSig) return; lastSig = sig;
+      const atBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 60;
+      msgs.innerHTML = list2.length ? list2.map(m=>{ const out = m.dir==="out", sys = m.dir==="sys"; const t = String(m.text||"").replace(/^(wazzup|bitrix):\s*/i,"").replace(/^\[вручную\]\s*/,"").replace(/^(через [^:]+|мы \([^)]*\)):\s*/,"");
+        const html = escapeHtml(t).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+        return `<div style="align-self:${sys?"center":out?"flex-end":"flex-start"};max-width:75%;background:${sys?"#FFF6E3":out?"#DCF8C6":"#fff"};border:1px solid ${out?"#C9EBB2":"#F1E1E8"};border-radius:12px;padding:7px 11px;${sys?"font-size:11.5px":""}"><div style="white-space:pre-wrap;word-break:break-word">${html}</div><div class="mut" style="font-size:10.5px;margin-top:3px;text-align:right">${new Date(m.at).toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}</div></div>`; }).join("")
+        : `<div class="mut" style="margin:auto">Сообщений пока нет</div>`;
+      if(atBottom || !msgs.dataset.p || msgs.dataset.p!==CHATS.phone){ msgs.scrollTop = msgs.scrollHeight; } msgs.dataset.p = CHATS.phone;
+    }catch(e){ msgs.innerHTML = `<div class="mut">Переписка недоступна: ${escapeHtml(e.message)}</div>`; } };
+  const doSend = async ()=>{ const txt = inp.value.trim(); const r0 = items.find(x=> x.phone===CHATS.phone); if(!txt || !r0) return;
+    try{ await withBusy(send, ()=> apiFetch('/api/coord/deal/'+r0.dealId+'/send-now',{method:'POST', headers:jsonHeaders, body:JSON.stringify({text:txt})})); inp.value = ""; r0.waiting = false; lastSig = ""; loadMsgs(); paintList(); }
+    catch(e){ toast("Не отправилось: "+e.message, true); } };
+  send.onclick = doSend;
+  inp.onkeydown = e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); doSend(); } };
+  q.oninput = paintList;
+  clearInterval(CHATS.timer);
+  CHATS.timer = setInterval(()=>{ if(!document.getElementById("ch-list")){ clearInterval(CHATS.timer); if(UI.tab==="desk") renderDeskTab(); return; } loadList().then(loadMsgs); }, 8000);
+  loadList().then(loadMsgs);
+}
 function deskAction(x){
   const d = x.d, wa = x.wa && waLink(d.phone, x.wa);
   if(x.act==="suggest") return d.linkSuggest.map((s,i)=>`<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(s.url)}" title="${escapeHtml(s.caption||"")}">${s.platform==="tt"?"TikTok":"Reels"} ${escapeHtml(ddmmStr(s.day)||"")}</a><button class="btn btn-sm btn-primary desk-sug-ok" data-id="${d.id}" data-url="${escapeHtml(s.url)}">Это оно</button>`).join("") + `<button class="btn btn-sm desk-sug-no" data-id="${d.id}">Не то</button>`;
-  if(x.act==="reply") return `<span class="mut" style="font-size:11px">${x.ib.via==="chatapp"?"ChatApp":"общий номер"}</span><button class="btn btn-sm btn-primary" onclick="openMicroById(${d.id})">Открыть переписку</button><button class="btn btn-sm desk-ib-done" data-phone="${escapeHtml(x.ib.phone)}">Ответила</button>`;
+  if(x.act==="reply") return `<span class="mut" style="font-size:11px">${x.ib.via==="chatapp"?"ChatApp":"общий номер"}</span><button class="btn btn-sm btn-primary" onclick="modalChats('${escapeHtml(x.ib.phone)}')">Ответить</button><button class="btn btn-sm desk-ib-done" data-phone="${escapeHtml(x.ib.phone)}">Ответила</button>`;
   if(x.act==="late") return `${wa ? deskSendBtn(d, x.wa, wa) : `<span class="mut" style="font-size:11.5px">нет телефона</span>`}<input class="pv-inp desk-link" data-id="${d.id}" placeholder="вышло? вставьте ссылку" style="width:190px">`;
   if(x.act==="wa") return wa ? deskSendBtn(d, x.wa, wa) : `<button class="btn btn-sm" onclick="openMicroById(${d.id})">Нет телефона — открыть</button>`;
   if(x.act==="tz") return microTzCell(d).replace('class="micro-tz-select"','class="micro-tz-select pv-inp desk-tz"');
@@ -9972,6 +10025,7 @@ function tplDesk(){
   <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:14px">
     <div><h1 style="margin:0;font-size:22px;font-weight:800">Рабочий стол</h1><div class="mut" style="margin-top:3px">${escapeHtml(name)} · ${dateStr}</div>${crmIsLeadName() ? `<div style="display:flex;gap:6px;margin-top:8px"><button class="pv-chip ${UI.deskAll?"":"on"}" onclick="UI.deskAll=false;renderDeskTab()">Мои</button><button class="pv-chip ${UI.deskAll?"on":""}" onclick="UI.deskAll=true;renderDeskTab()">Все менеджеры</button></div>` : ""}</div>
     <div style="display:flex;gap:8px;align-items:center"><input class="pv-inp" placeholder="Найти блогера…   Ctrl+K" style="width:240px" onfocus="this.blur();modalQuickSearch()">
+      <button class="btn" onclick="modalChats()">Чаты WhatsApp${S.reply.length?` <span class="n" style="background:#D6337E;color:#fff;border-radius:9px;padding:0 7px;margin-left:4px">${S.reply.length}</span>`:""}</button>
       <button class="btn btn-primary" onclick="modalMicroDeal(null,{responsible:UI.actorName||''})">+ Интеграция</button></div>
   </div>
   <div style="display:grid;grid-template-columns:minmax(0,1fr) 316px;gap:16px;align-items:start">
