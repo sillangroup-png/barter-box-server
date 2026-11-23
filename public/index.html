@@ -6055,8 +6055,8 @@ function tplMicroInfluencers(){
   // занести в таблицу плановую дату будущей публикации и сразу увидеть её сгруппированной по
   // нужному месяцу, как в графике/календаре, не дожидаясь факта.
   if(mf.month){
-    // 23.11.2026: интеграции без даты показываем в любом месяце — иначе их «не видно», будто удалены.
-    deals = deals.filter(d=> !microDealDate(d) || microDealDate(d).slice(0,7)===mf.month);
+    // 23.11.2026 (Нина): в месяце — только интеграции этого месяца. Без даты — в «Все месяцы» и на Рабочем столе («Нет даты выхода»).
+    deals = deals.filter(d=> microDealDate(d).slice(0,7)===mf.month);
   }
   if(mf.dateFrom){
     deals = deals.filter(d=> microDealDate(d) >= mf.dateFrom);
