@@ -18,7 +18,7 @@ function createClient({getState,persist,fetchImpl=fetch,env=process.env}){
  // там сервер разбирает блогера и подбирает идеи под товар, тимлид делает ТЗ. Старые интеграции не трогаем —
  // считаем только те, что заведены после включения (отметка по номеру).
  function igHandle(v){let s=String(v||'').trim().toLowerCase();if(s.includes('instagram.com/'))s=s.split('instagram.com/')[1].split(/[/?#]/)[0];if(s.includes('tiktok.com/'))s=s.split('tiktok.com/')[1].split(/[/?#]/)[0];s=s.replace(/^@/,'');return /^[a-z0-9._]{2,30}$/.test(s)?s:'';}
- function autoRequests(){if(env.AUTO_TZ_REQUEST!=='1')return;const st=getState();const af=st.automationFlow;if(!af)return;
+ function autoRequests(){/* 23.11.2026 (Нина): заявка — только персональный разбор по кнопке менеджера. Авто-заявки выключены; ещё не отправленные — отменяем. */for(const r of store())if(r.status==='pending'&&/^авто/i.test(String(r.requestedBy||''))){r.status='cancelled';r.cancelledAt=new Date().toISOString();persist();}return;if(env.AUTO_TZ_REQUEST!=='1')return;const st=getState();const af=st.automationFlow;if(!af)return;
   const maxId=a=>(a||[]).reduce((m,d)=>Math.max(m,Number(d.id)||0),0);
   if(!af.autoTz){af.autoTz={microFrom:maxId(st.microInfluencerDeals),largeFrom:maxId(st.influencerDeals),at:new Date().toISOString()};persist();return;}
   const has=iid=>store().some(r=>String(r.integrationId)===iid&&r.status!=='cancelled');let n=0;
