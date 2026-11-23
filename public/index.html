@@ -9528,6 +9528,10 @@ function wireDateProposals(after){
 }
 // ===== База ТЗ по прототипу X14 (23.11.2026): запросы → на рассмотрении → утверждено → отправлено; ниже — справочник ТЗ с использованием и CPV =====
 const TZB = { data:null, loading:false, err:null, f:"all", prod:"", who:"" };
+// 23.11.2026 (Нина): ТЗ из коннектора Claude приходят «на проверке» — сначала «Утвердить» (Нина, Сая, Сауле), потом «Отправить блогеру»
+const TZB_LEADS = ["Нина","Сая","Сауле"];
+const tzbFrom = v=>{ const m = String(v.approvedBy||"").match(/Claude\s*·\s*(.+)$/i); return m ? "от "+m[1].trim()+" через Claude, ждёт проверки" : String(v.approvedBy||""); };
+const tzbNeedsLead = v=> /^(на проверке|Claude)/i.test(String(v&&v.approvedBy||"")) && !(v&&v.leadApprovedBy);
 async function tzbLoad(){ TZB.loading = true; try{ TZB.data = await apiFetch("/api/automation/brief-requests"); TZB.err = null; }catch(e){ TZB.err = e.message; TZB.data = {requests:[], sent:[]}; } TZB.loading = false; if(UI.tab==="tzBase") render(); }
 function tzbDeal(iid){ const s = String(iid||""); if(/^L/.test(s)) return null; return (DataManager.state.microInfluencerDeals||[]).find(d=> String(d.id)===s); }
 function tzbStats(){
@@ -9581,9 +9585,9 @@ function tplTzBase(){
       : `<div class="mut" style="padding:12px 16px">Запросов нет</div>`}
   </div>
   <div class="panel" style="padding:0;margin-bottom:14px;overflow:hidden">
-    <div style="padding:14px 16px"><b style="font-size:15px">На рассмотрении · ${review.length}</b> <span class="mut" style="font-size:12px">утверждено в Blogery Audit — проверьте и отправьте блогеру; после отправки уходит в WhatsApp само</span></div>
-    ${review.length ? review.map(({d,v})=> row(`<div>${nick(d)}</div><span>${escapeHtml(d.responsible||"—")}</span><span><span class="pv-st s-a">Персональное</span></span><span class="mut">«${escapeHtml(v.title||"ТЗ")}»${v.approvedBy?` · утвердил(а) ${escapeHtml(v.approvedBy)}`:""}</span>`,
-        `${v.files && v.files.pdf ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(v.files.pdf)}">Открыть</a>` : ""}<button class="btn btn-sm btn-primary tzb-send" data-id="${d.id}" data-v="${escapeHtml(v.versionId)}">Отправить блогеру</button>`)).join("")
+    <div style="padding:14px 16px"><b style="font-size:15px">На рассмотрении · ${review.length}</b> <span class="mut" style="font-size:12px">ТЗ от Claude сначала утверждают Нина, Сая или Сауле, потом «Отправить блогеру» — уходит в WhatsApp само</span></div>
+    ${review.length ? review.map(({d,v})=> row(`<div>${nick(d)}</div><span>${escapeHtml(d.responsible||"—")}</span><span><span class="pv-st s-a">Персональное</span></span><span class="mut">«${escapeHtml(v.title||"ТЗ")}»${tzbNeedsLead(v)?` · <span style="color:#B7791F;font-weight:700">${escapeHtml(tzbFrom(v))}</span>`:v.leadApprovedBy?` · утвердил(а) ${escapeHtml(v.leadApprovedBy)}`:v.approvedBy?` · утвердил(а) ${escapeHtml(v.approvedBy)}`:""}</span>`,
+        `${v.files && v.files.pdf ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(v.files.pdf)}">Открыть</a>` : ""}${tzbNeedsLead(v) ? (TZB_LEADS.includes(UI.actorName) ? `<button class="btn btn-sm btn-primary tzb-approve" data-id="${d.id}" data-v="${escapeHtml(v.versionId)}">Утвердить</button>` : `<span class="pv-st s-w">ждёт тимлида</span>`) : `<button class="btn btn-sm btn-primary tzb-send" data-id="${d.id}" data-v="${escapeHtml(v.versionId)}">Отправить блогеру</button>`}`)).join("")
       : `<div class="mut" style="padding:0 16px 14px">Пусто</div>`}
   </div>
   <div class="panel" style="padding:0;margin-bottom:14px;overflow:hidden">
@@ -9605,6 +9609,7 @@ function wireTzBase(){
     try{ await Api.updateMicroDeal(id, {tz:it, tzGroup:g}); Object.assign(d, {tz:it, tzGroup:g}); render(); undoBar("ТЗ «"+it+"» → "+deskNick(d), async ()=>{ await Api.updateMicroDeal(id, back); Object.assign(d, back); render(); }); }catch(e){ toast(e.message, true); } };
   document.querySelectorAll(".tzb-take").forEach(s=> s.onchange = ()=>{ const [g,it] = s.value.split("\u0001"); if(it) setTz(+s.dataset.deal, g, it); });
   document.querySelectorAll(".tzb-req").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch('/api/automation/brief-request/'+b.dataset.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:""})})); toast("Запрос персонального ТЗ создан"); tzbLoad(); }catch(e){ toast(e.message,true); } });
+  document.querySelectorAll(".tzb-approve").forEach(b=> b.onclick = async ()=>{ try{ const r = await withBusy(b, ()=> apiFetch('/api/automation/brief-approve/'+b.dataset.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({versionId:b.dataset.v})})); const d = (DataManager.state.microInfluencerDeals||[]).find(x=> String(x.id)===String(b.dataset.id)); const v = d && (d.flowBriefHistory||[]).find(x=> x.versionId===b.dataset.v); if(v) Object.assign(v, {leadApprovedBy:r.leadApprovedBy, leadApprovedAt:r.leadApprovedAt}); toast("ТЗ утверждено — теперь можно отправить блогеру"); render(); }catch(e){ toast(e.message,true); } });
   document.querySelectorAll(".tzb-send").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch('/api/automation/brief-send/'+b.dataset.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({versionId:b.dataset.v})})); toast("ТЗ ушло в очередь WhatsApp"); tzbLoad(); }catch(e){ toast(e.message,true); } });
   document.querySelectorAll(".tzb-give").forEach(b=> b.onclick = ()=>{ const g = b.dataset.g, it = b.dataset.i, today = todayStr();
     const cands = (DataManager.state.microInfluencerDeals||[]).filter(d=> !microDealPublished(d) && String(d.plannedDate||"") >= addDaysYMD(today,-3) && (crmIsLeadName() || d.responsible===UI.actorName)).sort((a,b)=> (String(a.tz||"")?1:0)-(String(b.tz||"")?1:0) || String(a.plannedDate).localeCompare(String(b.plannedDate)));
