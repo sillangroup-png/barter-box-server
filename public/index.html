@@ -9248,7 +9248,7 @@ function deskKey(d){ const k = bloggerIndex().key.get(d.id); return k || rawNick
 function dealsOfBlogger(d){ const ix = bloggerIndex(), k = ix.key.get(d.id); return k ? ix.groups.get(k) : [d]; }
 // 23.11.2026: ИП берём ещё и из заявок на оплату (Blogger CRM): если блогеру платили как ИП — помечаем везде.
 const IPB = { set:null, loading:false };
-function ipFromPayments(d){ if(!IPB.set){ if(!IPB.loading && UI.role && UI.role!=="driver"){ IPB.loading = true; apiFetch("/api/crm/ip-bloggers").then(r=>{ const s = new Set(); for(const [ig,nm] of (r.items||[])){ const n = rawNick({instagramAccount:ig, blogerName:nm}); if(n && n!=="—") s.add(n.toLowerCase()); } IPB.set = s; _bIdx = null; if(UI.tab==="desk") renderDeskTab(); }).catch(()=>{ IPB.set = new Set(); }); } return false; }
+function ipFromPayments(d){ if(!IPB.set){ if(!IPB.loading && UI.role && UI.role!=="driver" && UI.authToken && Date.now()-(IPB.failAt||0) > 30000){ IPB.loading = true; apiFetch("/api/crm/ip-bloggers").then(r=>{ const s = new Set(); for(const [ig,nm] of (r.items||[])){ const n = rawNick({instagramAccount:ig, blogerName:nm}); if(n && n!=="—") s.add(n.toLowerCase()); } IPB.set = s; _bIdx = null; if(UI.tab==="desk") renderDeskTab(); }).catch(()=>{ IPB.loading = false; IPB.failAt = Date.now(); }); } return false; }
   return IPB.set.has(String(deskNick(d)).toLowerCase()); }
 function bloggerIsIp(d){ return dealsOfBlogger(d).some(x=> microIsIp(x)) || ipFromPayments(d); }
 function openMicroById(id){ const d = (DataManager.state.microInfluencerDeals||[]).find(x=>x.id===id); if(!d) return; closeModal(); modalMicroCard(d); }
