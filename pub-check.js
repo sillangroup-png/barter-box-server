@@ -12,6 +12,7 @@
 const IG_ACTOR = process.env.APIFY_IG_ACTOR || 'apify~instagram-scraper';
 const TT_ACTOR = process.env.APIFY_TT_ACTOR || 'clockworks~tiktok-scraper';
 const H = 3600 * 1000;
+const { classifyVideo } = require('./video-review.js');
 const almatyNow = () => new Date(Date.now() + 5 * H);
 const ymd = (d) => d.toISOString().slice(0, 10);
 const almatyDay = (iso) => { const t = Date.parse(iso); return Number.isFinite(t) ? ymd(new Date(t + 5 * H)) : ''; };
@@ -96,11 +97,72 @@ function mount(app, { getState, persist, requireAuth }) {
     } finally { running = false; }
   }
 
+
+  // ---------- ТЗ и язык по ВЫЛОЖЕННОМУ видео (23.11.2026) ----------
+  // Для вышедших интеграций текущего месяца со ссылкой, где ТЗ или язык пустые: берём сам ролик (Instagram/TikTok через Apify),
+  // ИИ определяет язык и похожее базовое ТЗ. ТЗ ставим только при совпадении от 70% и только в пустое поле. Каждую ссылку — один раз.
+  function tzCandidates(d) {
+    let lib = null; try { lib = require('./tz-library.json'); } catch (e) { return []; }
+    const texts = new Map((getState().tzTexts || []).map((t) => [String(t.id), t]));
+    const items = lib.items || [];
+    const prod = String(d.product || '').toLowerCase();
+    const groups = Object.entries(lib.groups || {}).filter(([g, re]) => { if (!prod) return true; try { return (re && new RegExp(re, 'i').test(prod)) || prod.includes(g.toLowerCase()); } catch (e) { return prod.includes(g.toLowerCase()); } }).map(([g]) => g);
+    const pool = groups.length ? items.filter((x) => groups.includes(x[1])) : items;
+    return pool.slice(0, 60).map((x) => { const t = texts.get(String(x[0])) || {}; return { id: String(x[0]), group: x[1], title: x[2], hook: String(t.hook || '').slice(0, 160), angle: String(t.angle || '').slice(0, 160) }; });
+  }
+  let classifying = false;
+  async function classifyPublished({ limit = 40, log = console.log } = {}) {
+    if (classifying) return { error: 'уже идёт' };
+    const token = process.env.APIFY_TOKEN; if (!token) return { error: 'APIFY_TOKEN не задан' };
+    if (!process.env.GEMINI_API_KEY) return { error: 'GEMINI_API_KEY не задан' };
+    classifying = true; const out = { checked: 0, tz: 0, lang: 0, errors: [] };
+    try {
+      const m = ymd(almatyNow()).slice(0, 7);
+      const link = (d) => d.reelsLink || d.tiktokVideoLink || '';
+      const deals = (getState().microInfluencerDeals || []).filter((d) => link(d) && /^https?:/.test(link(d)) && (!String(d.tz || '').trim() || !d.videoLang)
+        && String(d.publishDate || d.plannedDate || '').slice(0, 7) === m && d.tzAutoTried !== link(d)).slice(0, limit);
+      if (!deals.length) return out;
+      const igDeals = deals.filter((d) => /instagram\.com/i.test(d.reelsLink || '')), ttDeals = deals.filter((d) => !/instagram\.com/i.test(d.reelsLink || '') && /tiktok\.com/i.test(link(d)));
+      const vid = new Map(); // dealId → прямая ссылка на видео
+      const code = (u) => (String(u).match(/instagram\.com\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i) || [])[1];
+      for (let i = 0; i < igDeals.length; i += 20) {
+        const part = igDeals.slice(i, i + 20);
+        try { const items = await runActor(IG_ACTOR, { directUrls: part.map((d) => d.reelsLink), resultsType: 'posts', resultsLimit: 1, addParentData: false }, token);
+          for (const it of items) { const c = it.shortCode || code(it.url); const d = part.find((x) => code(x.reelsLink) === c); if (d && it.videoUrl) vid.set(d.id, it.videoUrl); }
+        } catch (e) { out.errors.push('Instagram: ' + e.message.slice(0, 120)); }
+      }
+      for (let i = 0; i < ttDeals.length; i += 20) {
+        const part = ttDeals.slice(i, i + 20);
+        try { const items = await runActor(TT_ACTOR, { postURLs: part.map(link), resultsPerPage: 1, shouldDownloadVideos: true, shouldDownloadCovers: false, shouldDownloadAvatars: false, shouldDownloadSubtitles: false, shouldDownloadSlideshowImages: false }, token);
+          for (const it of items) { const u = (it.mediaUrls || [])[0] || (it.videoMeta && it.videoMeta.downloadAddr); const id = String(it.id || ''); const d = part.find((x) => id && link(x).includes(id)) || (items.length === 1 && part.length === 1 ? part[0] : null); if (d && u) vid.set(d.id, u); }
+        } catch (e) { out.errors.push('TikTok: ' + e.message.slice(0, 120)); }
+      }
+      for (const d of deals) {
+        const u = vid.get(d.id); d.tzAutoTried = link(d); out.checked++;
+        if (!u) continue;
+        try {
+          const r = await classifyVideo(u, tzCandidates(d)); const ch = [];
+          if (!d.videoLang && r.lang) { d.videoLang = r.lang; out.lang++; ch.push('язык ' + r.lang); }
+          if (!String(d.tz || '').trim() && r.tz && r.confidence >= 0.7) { d.tz = r.tz.title; d.tzGroup = r.tz.group; d.tzAuto = { id: r.tz.id, confidence: r.confidence, at: new Date().toISOString(), from: 'published' }; out.tz++; ch.push('ТЗ ' + r.tz.title + ' (' + Math.round(r.confidence * 100) + '%)'); }
+          else if (r.tz) d.tzAutoGuess = { title: r.tz.title, group: r.tz.group, confidence: r.confidence }; // ниже 70% — не ставим, только подсказка
+          if (ch.length) log(`По выложенному видео ${d.blogerName}: ${ch.join(', ')}`);
+        } catch (e) { out.errors.push(String(d.blogerName) + ': ' + e.message.slice(0, 100)); }
+        persist();
+      }
+      getState().tzAutoRun = Object.assign({}, out, { at: new Date().toISOString() }); persist();
+      return out;
+    } finally { classifying = false; }
+  }
+  app.post('/api/pub-check/classify', requireAuth, async (req, res) => {
+    if (!(req.session && req.session.canExport)) return res.status(403).json({ error: 'Только Нина и Сая' });
+    res.json({ ok: true, started: true }); classifyPublished().catch((e) => console.error('tz-auto:', e.message));
+  });
+
   // Каждые 5 минут: если в Алматы 23:55 или позже и сегодня ещё не проверяли — проверяем.
   setInterval(() => {
     if (!enabled()) return;
     const n = almatyNow(), day = ymd(n), st = getState();
-    if (n.getUTCHours() === 23 && n.getUTCMinutes() >= 55 && (!st.pubCheck || st.pubCheck.day !== day)) run(day).catch((e) => console.error('pub-check:', e.message));
+    if (n.getUTCHours() === 23 && n.getUTCMinutes() >= 55 && (!st.pubCheck || st.pubCheck.day !== day)) run(day).then(() => classifyPublished()).catch((e) => console.error('pub-check:', e.message));
   }, 5 * 60 * 1000).unref();
 
   // Ручной запуск для проверки (Нина/Сая): POST /api/pub-check/run {day?}
@@ -122,6 +184,6 @@ function mount(app, { getState, persist, requireAuth }) {
     }
     delete d.linkSuggest; persist(); res.json({ ok: true });
   });
-  return { run };
+  return { run, classifyPublished };
 }
 module.exports = { mount, igNick, ttNick, scorePost };
