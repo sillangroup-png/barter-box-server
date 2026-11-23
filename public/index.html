@@ -3783,9 +3783,10 @@ function ctrlRows(){
   if(!INBOX.loading && (!INBOX.data || Date.now()-(INBOX.at||0) > 60000 || INBOX.who!=="ctrl")){ INBOX.loading = true; apiFetch("/api/inbox").then(r=>{ INBOX.data = r; }).catch(()=>{ INBOX.data = {items:[]}; }).finally(()=>{ INBOX.loading = false; INBOX.who = "ctrl"; INBOX.at = Date.now(); if(UI.tab==="control") renderDeskTab(); }); }
   const ib = ((INBOX.data && INBOX.data.items) || []).filter(r=> r.waiting);
   const byM = new Map();
-  const row = n=>{ if(!byM.has(n)) byM.set(n, {name:n, all:[], out:[], late:[], notz:[], nolink:[], nopay:[], noreply:[], noreply2:[]}); return byM.get(n); };
+  const row = n=>{ if(!byM.has(n)) byM.set(n, {name:n, all:[], out:[], late:[], moved:[], notz:[], nolink:[], nopay:[], noreply:[], noreply2:[]}); return byM.get(n); };
   for(const d of deals){ const r = row(d.responsible||"—"), pd = String(d.plannedDate||"").slice(0,10); r.all.push(d);
     if(pub(d)) r.out.push(d);
+    if(Array.isArray(d.planHistory) && d.planHistory.length) r.moved.push(d);
     if(!pub(d) && pd && pd < today) r.late.push(d);
     if(!pub(d) && !String(d.tz||"").trim()) r.notz.push(d);
     if(pub(d) && !d.reelsLink && !d.tiktokVideoLink && !(Number(d.factReachStories)>0)) r.nolink.push(d);
@@ -3797,7 +3798,7 @@ function ctrlRows(){
 function tplControl(){
   const rows = ctrlRows(), m = CTRL.month || todayStr().slice(0,7);
   const months = crmMonths();
-  const cols = [["all","Интеграций",""],["out","Вышло",""],["late","Не вышли в срок","bad"],["noreply2","Без ответа > 2 ч","bad"],["noreply","Ждут ответа","warn"],["nopay","Вышло, оплата не подана","warn"],["nolink","Вышло, нет ссылки","warn"],["notz","Нет ТЗ","warn"]];
+  const cols = [["all","Интеграций",""],["out","Вышло",""],["late","Не вышли в срок","bad"],["moved","Переносили дату","warn"],["noreply2","Без ответа > 2 ч","bad"],["noreply","Ждут ответа","warn"],["nopay","Вышло, оплата не подана","warn"],["nolink","Вышло, нет ссылки","warn"],["notz","Нет ТЗ","warn"]];
   const tot = k=> rows.reduce((s,r)=> s+r[k].length, 0);
   const cell = (r,k,kind)=>{ const n = r[k].length; const bg = !n ? "" : kind==="bad" ? "background:#FDE6EA;color:#C42B45;font-weight:800" : kind==="warn" ? "background:#FFF6E3;color:#9A6400;font-weight:700" : "";
     return `<td style="text-align:center;${bg}">${n ? `<a href="#" class="ctrl-cell" data-m="${escapeHtml(r.name)}" data-k="${k}" style="color:inherit">${n}</a>` : `<span class="mut">0</span>`}</td>`; };
@@ -3811,7 +3812,7 @@ function tplControl(){
   </div>
   <div class="table-wrap"><table>
     <thead><tr><th>Менеджер</th>${cols.map(c=>`<th style="text-align:center">${c[1]}</th>`).join("")}</tr></thead>
-    <tbody>${rows.length ? rows.map(r=>`<tr><td><b>${escapeHtml(r.name)}</b></td>${cols.map(c=> cell(r,c[0],c[2])).join("")}</tr>`).join("") : `<tr><td colspan="9" class="empty">Интеграций за месяц нет</td></tr>`}</tbody>
+    <tbody>${rows.length ? rows.map(r=>`<tr><td><b>${escapeHtml(r.name)}</b></td>${cols.map(c=> cell(r,c[0],c[2])).join("")}</tr>`).join("") : `<tr><td colspan="10" class="empty">Интеграций за месяц нет</td></tr>`}</tbody>
   </table></div>
   <div class="mut" style="font-size:12px;margin-top:8px">«Ждут ответа» — последнее сообщение в WhatsApp от блогера (общий номер и ChatApp). Красное — то, что надо разобрать сегодня. Сделанное уходит само.</div>`;
 }
@@ -3820,7 +3821,7 @@ function wireControl(){
   const ca = document.getElementById("ctrl-chatapp"); if(ca) ca.onclick = async ()=>{ try{ const r = await apiFetch("/api/chatapp/webhook-url");
     openModal(`<h3>Входящие из ChatApp</h3><div style="font-size:13px;line-height:1.6">1. Откройте кабинет ChatApp → настройки линии WhatsApp → «Webhook» (вебхук сообщений).<br>2. Вставьте этот адрес и сохраните:</div><input class="pv-inp" style="width:100%;margin:10px 0" readonly value="${escapeHtml(r.url)}" onclick="this.select()"><div class="mut" style="font-size:12px">После этого ответы блогеров на номер ChatApp появятся в карточке интеграции и в «Ждут ответа». Адрес секретный — не пересылайте его.</div><div class="modal-actions"><button class="btn btn-primary" onclick="navigator.clipboard&&navigator.clipboard.writeText('${escapeHtml(r.url)}');toast('Скопировано')">Скопировать</button><button class="btn" onclick="closeModal()">Закрыть</button></div>`); }catch(e){ toast(e.message, true); } };
   const mo = document.getElementById("ctrl-month"); if(mo) mo.onchange = ()=>{ CTRL.month = mo.value; renderDeskTab(); };
-  const titles = {all:"Интеграции",out:"Вышло",late:"Не вышли в срок",noreply2:"Без ответа больше 2 часов",noreply:"Ждут ответа",nopay:"Вышло, оплата не подана",nolink:"Вышло, нет ссылки",notz:"Нет ТЗ"};
+  const titles = {all:"Интеграции",out:"Вышло",late:"Не вышли в срок",moved:"Переносили плановую дату",noreply2:"Без ответа больше 2 часов",noreply:"Ждут ответа",nopay:"Вышло, оплата не подана",nolink:"Вышло, нет ссылки",notz:"Нет ТЗ"};
   document.querySelectorAll(".ctrl-cell").forEach(a=> a.onclick = e=>{ e.preventDefault(); const r = ctrlRows().find(x=> x.name===a.dataset.m); if(r) modalDeskList(r.name+" · "+titles[a.dataset.k], r[a.dataset.k]); });
 }
 /* ---------- Дашборд менеджера ---------- */
@@ -6344,7 +6345,7 @@ function tplMicroInfluencers(){
           ${sortableTh("Сумма","cost",mf.sort)}${sortableTh("Стоимость товара","productCost",mf.sort)}<th>Статус оплаты</th>${sortableTh("Факт.охват","reach",mf.sort)}${sortableTh("CPV","cpv",mf.sort)}
           ${sortableTh("Вклад в продажи (план/факт)","sales",mf.sort)}<th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th>${sortableTh("ROAS, ×","romi",mf.sort)}
         <th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (сумма оплаты + стоимость переданного товара). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th><th title="Вклад по заказам Kaspi: продажи товара сверх обычного уровня в дни выхода. Обычный уровень — среднее за дни до выхода при той же цене, без других блогеров этого товара (если цена была другой — дни после). Окно — с дня выхода, пока продажи не вернутся к обычным: у мелких до 7 дней, у крупных — только день выхода и следующий. Плюс шлейф: 50% подъёма продаж над уровнем до кампании (с поправкой на общий фон магазина — товары без блогеров; в дни скидок шлейфа нет), не попавшего в пики, делится по охвату (по корню: охват в 4 раза больше — доля в 2 раза больше) с затуханием (мелкие — до 7 дней, вдвое за 2 дня; крупные — только день выхода и следующий, сторис висят 24 ч). Скидка вычитается по прошлым сменам цены. Если в те же дни выходили другие блогеры этого товара — прирост делится по охвату (крупные и мелкие делят день, только если у меньшей стороны охват от 20% другой; иначе весь день — большей). Всплеска нет — 0. «—» — если обычный уровень определить не из чего. Ручной вклад менеджера главнее.">${UI.collapsedColGroups.has("infl-auto") ? `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">+ Авто</span>` : `<span class="colgroup-toggle-btn" data-group="infl-auto" style="cursor:pointer;text-decoration:underline dotted">− Авто (Kaspi)</span>`}</th>
-          <th>Статус товара</th><th>Статус видео</th><th title="На каком языке видео: ru / kz (в т.ч. смешанный рус+каз) / под музыку (без речи)">Язык видео</th><th>Плановая дата</th><th>Дата выкладки</th><th title="Формат (Reels + TikTok / Сторис / Reels + Сторис / Сторис + Reels + TikTok), ссылка на Reels; у сторис — охват и клики вручную (ссылки нет)">Ссылка / сторис</th><th class="sticky-right"></th>
+          <th>Статус товара</th><th>Статус видео</th><th title="На каком языке видео: ru / kz (в т.ч. смешанный рус+каз) / под музыку (без речи)">Язык видео</th><th>Плановая дата</th><th>Дата выхода</th><th title="Формат (Reels + TikTok / Сторис / Reels + Сторис / Сторис + Reels + TikTok), ссылка на Reels; у сторис — охват и клики вручную (ссылки нет)">Ссылка / сторис</th><th class="sticky-right"></th>
         </tr></thead>
         <tbody>
           ${pageDeals.map((d,i)=>{
@@ -7286,7 +7287,7 @@ const AUDIT_ENTITY_LABEL = {micro:"Микро", large:"Крупные", order:"�
 const AUDIT_FIELD_LABEL = {
   paymentStatus:"Статус оплаты", paymentMethod:"Способ оплаты", videoStatus:"Статус видео", videoLang:"Язык видео", productStatus:"Статус товара", status:"Статус",
   cost:"Сумма", productCost:"Стоимость товара", responsible:"Ответственный", blogerName:"Блогер", blogerLogin:"Блогер", product:"Товар", barcode:"ШК",
-  plannedDate:"Плановая дата", publishDate:"Дата выкладки", publishedDate:"Дата выхода", reelsLink:"Ссылка Reels", tiktokVideoLink:"Ссылка TikTok",
+  plannedDate:"Плановая дата", publishDate:"Дата выхода (факт)", publishedDate:"Дата выхода", reelsLink:"Ссылка Reels", tiktokVideoLink:"Ссылка TikTok",
   factReachReels:"Охват Reels", factReachTT:"Охват TikTok", factReachStories:"Охват сторис", storiesClicks:"Клики сторис", storiesLink:"Ссылка на сторис",
   contentFormat:"Формат", notes:"Комментарий", conditions:"Условия", city:"Город", address:"Адрес", phone:"Телефон", tz:"ТЗ", tzGroup:"ТЗ (товар)",
   problemReason:"Проблема", problemReason2:"Проблема 2", problemStatus:"Статус проблемы", problemNote:"Комментарий проблемы", cpvNote:"Комментарий CPV",
@@ -8401,7 +8402,7 @@ function modalMicroDeal(existing, prefill){
       <div class="mut" style="font-size:12px">Несколько видео или блогеров сразу — кнопка «Импорт» над таблицей интеграций</div>
       <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:end">
         <input id="mm-agreed-date" type="hidden" value="${d.agreedDate||''}">
-        ${lab("Дата выхода", `<input id="mm-planned-date" type="date" class="pv-inp" value="${d.plannedDate||''}">`, "когда блогер публикует")}
+        ${lab("Плановая дата", `<input id="mm-planned-date" type="date" class="pv-inp" value="${d.plannedDate||''}">`, "о какой дате договорились с блогером")}
         <div class="mut" id="mm-dates-hint" style="font-size:12px;padding-bottom:6px"></div>
       </div>`)}
     ${sec(6, "ТЗ", `
@@ -8410,12 +8411,12 @@ function modalMicroDeal(existing, prefill){
       </div>`)}
     ${sec(7, "Комментарий", `<textarea id="mm-notes" rows="2" class="pv-inp" style="height:auto;padding:8px 10px;width:100%" placeholder="Что важно — например «только казахский, без цены в кадре»">${escapeHtml(d.notes||"")}</textarea>`)}
     ${isEdit ? sec(8, "Вышло — ссылки", `
-      <div class="mut" style="font-size:12px">По ссылке статус станет «опубликовано», дата выкладки — сегодня (можно поправить)</div>
+      <div class="mut" style="font-size:12px">По ссылке статус станет «опубликовано», дата выхода — сегодня</div>
       <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">
         ${lab("Reels", `<input id="mm-reels-link" class="pv-inp" placeholder="https://instagram.com/reel/…" value="${escapeHtml(d.reelsLink||'')}">`)}
         ${lab("TikTok", `<input id="mm-tt-link" class="pv-inp" placeholder="https://tiktok.com/…" value="${escapeHtml(d.tiktokVideoLink||'')}">`)}
         ${lab("Сторис — папка / файлы", `<input id="mm-stories-link" class="pv-inp" placeholder="https://drive.google.com/…" value="${escapeHtml(d.storiesLink||'')}">`)}
-        ${UI.canExport ? lab("Дата выкладки", `<input id="mm-publish-date" type="date" class="pv-inp" value="${d.publishDate||''}">`, "ставится сама по ссылке") : `<input id="mm-publish-date" type="hidden" value="${d.publishDate||''}">`}
+        ${UI.canExport ? lab("Дата выхода (факт)", `<input id="mm-publish-date" type="date" class="pv-inp" value="${d.publishDate||''}">`, "ставится сама по ссылке") : `<input id="mm-publish-date" type="hidden" value="${d.publishDate||''}">`}
         ${lab("Сторис: просмотры", `<input id="mm-stories-reach" type="number" class="pv-inp" value="${d.factReachStories||0}">`)}
         ${lab("Сторис: клики по ссылке", `<input id="mm-stories-clicks" type="number" class="pv-inp" value="${d.storiesClicks||0}">`)}
       </div>
@@ -8432,7 +8433,7 @@ function modalMicroDeal(existing, prefill){
       ${pill("Статус товара", d.productStatus || "новая", "из доставок: заказан → доставлено. Вручную — только самовыкуп")}
       ${pill("Проблема", d.problemStatus || "—", "молчит после напоминания, дата прошла, оплачено а видео нет — подскажет Рабочий стол")}
       ${pill("Статус видео", d.videoStatus || "ждём", "вставили ссылку → «опубликовано»")}
-      ${pill("Дата выкладки", d.publishDate ? ddmmStr(d.publishDate) : "—", "ставится в день, когда добавили ссылку")}
+      ${pill("Дата выхода", d.publishDate ? ddmmStr(d.publishDate) : "—", "фактическая — ставится сама, когда появилась ссылка")}
       ${pill("Статус оплаты", d.paymentStatus || "не подано", "из «Оплат»: к оплате → оплачено")}
       ${pill("Факт. охваты", microDealFactReach(d) ? fmtNum(microDealFactReach(d)) : "—", "собираются по ссылкам, руками не вводятся")}
       ${pill("Категория товара", productCategoryOf(d) === "Не указана" ? "—" : productCategoryOf(d), "по ШК")}
@@ -9264,7 +9265,7 @@ function modalMicroCard(d){
   openModal(`
     <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
       <div><h3 style="margin:0;font-size:20px;font-weight:800">${escapeHtml(deskNick(d))} <span style="font-weight:700;font-size:15px">${escapeHtml(d.product||"товар не выбран")}</span></h3>
-        <div class="mut" style="font-size:12.5px;margin-top:3px">${escapeHtml(microFormatOf(d))} · ведёт ${escapeHtml(d.responsible||"—")}${d.city?" · "+escapeHtml(d.city):""}${lang?" · видео "+lang:""}${d.cost?" · "+fmtNum(d.cost)+" ₸":""} · ${ip?"ИП":"ИИН / Kaspi"}${d.plannedDate?" · выход "+ddmmStr(d.plannedDate):""}</div></div>
+        <div class="mut" style="font-size:12.5px;margin-top:3px">${escapeHtml(microFormatOf(d))} · ведёт ${escapeHtml(d.responsible||"—")}${d.city?" · "+escapeHtml(d.city):""}${lang?" · видео "+lang:""}${d.cost?" · "+fmtNum(d.cost)+" ₸":""} · ${ip?"ИП":"ИИН / Kaspi"}${d.plannedDate?" · план "+ddmmStr(d.plannedDate):""}${d.publishDate?" · вышло "+ddmmStr(d.publishDate):""}</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${!UI.readOnly && pub && (Number(d.cost)||0)>0 && d.paymentStatus==="не оплачено" ? `<button class="btn btn-primary" id="mc-pay-go">Подать на оплату</button>` : ""}
         ${!UI.readOnly && !/доставлен/i.test(String(d.productStatus||"")) && d.productDelivery!=="has" ? `<button class="btn" id="mc-dlv">Заявка на доставку</button>` : ""}
@@ -9274,13 +9275,14 @@ function modalMicroCard(d){
     ${others.length ? `<div class="pv-note" style="margin-top:10px"><b>Ещё с этим блогером сейчас:</b> ${others.map(x=>`<a href="#" data-mc-open="${x.id}" style="font-weight:700">${escapeHtml(microFormatOf(x))}${x.product?" · "+escapeHtml(x.product):""} · ${x.plannedDate?"план "+ddmmStr(x.plannedDate):"без даты"} · ${escapeHtml(x.paymentStatus||"не оплачено")}</a>`).join(" &nbsp;·&nbsp; ")} <span class="mut">— отдельные интеграции, у каждой своя дата и оплата</span></div>` : ""}
     <div style="margin-top:10px">${deskDateProposalsHtml(d.id)}</div>
     ${!UI.readOnly ? `<div style="margin-top:10px;background:#fff;border:1px solid #F3DDE7;border-radius:12px;padding:10px 14px;display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
-      ${!pub ? `<label style="display:flex;flex-direction:column;gap:3px"><span class="pv-lbl">Дата выхода</span><input type="date" id="mc-pdate" class="pv-inp" value="${escapeHtml(String(d.plannedDate||"").slice(0,10))}" style="width:150px"></label>` : ""}
+      ${!pub ? `<label style="display:flex;flex-direction:column;gap:3px"><span class="pv-lbl">Плановая дата</span><input type="date" id="mc-pdate" class="pv-inp" value="${escapeHtml(String(d.plannedDate||"").slice(0,10))}" style="width:150px"></label>` : ""}
       <label style="display:flex;flex-direction:column;gap:3px"><span class="pv-lbl">Сумма, ₸</span><input type="number" class="pv-inp mc-f" data-f="cost" data-num="1" value="${Number(d.cost)||""}" style="width:110px"></label>
       <label style="display:flex;flex-direction:column;gap:3px"><span class="pv-lbl">Телефон (WhatsApp)</span><input class="pv-inp mc-f" data-f="phone" value="${escapeHtml(d.phone||"")}" style="width:150px"></label>
       <label style="display:flex;flex-direction:column;gap:3px"><span class="pv-lbl">Ведёт</span><select class="pv-inp mc-f" data-f="responsible" style="width:130px">${microManagerNames(d.responsible).map(n=>`<option ${n===d.responsible?"selected":""}>${escapeHtml(n)}</option>`).join("")}</select></label>
       <label style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:200px"><span class="pv-lbl">Комментарий</span><input class="pv-inp mc-f" data-f="notes" value="${escapeHtml(d.notes||"")}" placeholder="что важно по этой интеграции"></label>
       <span class="mut" style="font-size:11.5px;padding-bottom:6px">сохраняется сразу</span></div>` : ""}
     ${false && !d.agreedDate && !d.datesChecked && !pub && /^\d{4}-\d{2}-\d{2}/.test(d.plannedDate||"") ? `<div style="margin-top:10px;background:#FFF6E3;border:1px solid #F6E2B8;border-radius:12px;padding:10px 14px;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap"><span><b>Проверьте дату ${ddmmStr(d.plannedDate)}</b> — это день выхода или день, когда блогер присылает видео?</span><span style="display:flex;gap:6px"><button class="btn btn-sm mc-dc" data-k="pub">Это выход (видео ${ddmmStr(addDaysYMD(d.plannedDate,-2))})</button><button class="btn btn-sm mc-dc" data-k="vid">Это видео (выход ${ddmmStr(addDaysYMD(d.plannedDate,2))})</button></span></div>` : ""}
+    ${crmIsLeadName() && Array.isArray(d.planHistory) && d.planHistory.length ? `<div style="margin-top:10px;background:#FFF6E3;border:1px solid #F6E2B8;border-radius:12px;padding:8px 14px;font-size:12.5px"><b>Переносы плановой даты: ${d.planHistory.length}</b> <span class="mut">(видят тимлиды)</span> — ${d.planHistory.map(h=> `${ddmmStr(h.from)} → ${ddmmStr(h.to)} <span class="mut">(${new Date(h.at).toLocaleDateString("ru-RU",{day:"2-digit",month:"2-digit"})}${h.by?", "+escapeHtml(h.by):""})</span>`).join(" · ")}</div>` : ""}
     ${microDealProgressHtml(d)}
     <div style="display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;margin-top:12px;align-items:start">
       <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
@@ -9296,7 +9298,7 @@ function modalMicroCard(d){
             <label style="display:flex;flex-direction:column;gap:4px"><span class="pv-lbl">TikTok</span><input class="pv-inp mc-link" data-f="tiktokVideoLink" value="${escapeHtml(d.tiktokVideoLink||"")}" placeholder="вставьте и Enter"></label>
             <label style="display:flex;flex-direction:column;gap:4px"><span class="pv-lbl">Сторис — папка</span><input class="pv-inp mc-link" data-f="storiesLink" value="${escapeHtml(d.storiesLink||"")}" placeholder="Google Диск"></label></div>
           ${d.linkAuto ? `<div class="pv-note" style="margin-top:8px">Ссылку нашла система сама${d.linkAuto.confirmedBy?" · подтвердила "+escapeHtml(d.linkAuto.confirmedBy):""} — проверьте, что это тот ролик.</div>` : ""}
-          <div class="mut" style="font-size:11.5px;margin-top:6px">По ссылке статус станет «опубликовано», дата выкладки — сегодня${d.publishDate?" · сейчас "+ddmmStr(d.publishDate):""}. Охват — ${microDealFactReach(d) ? fmtNum(microDealFactReach(d)) : "соберётся по ссылке"}.</div>`)}
+          <div class="mut" style="font-size:11.5px;margin-top:6px">По ссылке статус станет «опубликовано», дата выхода — сегодня${d.publishDate?" · вышло "+ddmmStr(d.publishDate):""}. Охват — ${microDealFactReach(d) ? fmtNum(microDealFactReach(d)) : "соберётся по ссылке"}.</div>`)}
         ${UI.readOnly ? "" : card("Оплата", `<input type="hidden" id="mm-payment-method" value="${escapeHtml(d.paymentMethod||"")}">${microPayHtml(d, true).replace('margin:4px 0 12px','margin:0')}
           ${ip ? `<div class="pv-note" style="margin-top:8px">${(()=>{ const ipDeals = all.filter(x=> microIsIp(x) || ip), left = ipDeals.filter(x=> !microDealPublished(x)); return left.length ? `ИП: АВР и ЭСФ запросим, когда выйдут все видео по договору — осталось ${left.length}.` : (ipDeals.every(x=>x.avrReceived) ? "АВР и ЭСФ получены." : "Все видео вышли — запросите у блогера АВР и ЭСФ."); })()}</div>` : ""}`, `<span class="pv-st ${d.paymentStatus==="оплачено"?"s-ok":d.paymentStatus==="к оплате"?"s-a":"s-w"}">${escapeHtml(d.paymentStatus||"не оплачено")}</span>`)}
       </div>
