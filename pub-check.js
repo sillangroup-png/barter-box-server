@@ -144,7 +144,7 @@ function mount(app, { getState, persist, requireAuth }) {
           const r = await classifyVideo(u, tzCandidates(d)); const ch = [];
           if (!d.videoLang && r.lang) { d.videoLang = r.lang; out.lang++; ch.push('язык ' + r.lang); }
           if (!String(d.tz || '').trim() && r.tz && r.confidence >= 0.7) { d.tz = r.tz.title; d.tzGroup = r.tz.group; d.tzAuto = { id: r.tz.id, confidence: r.confidence, at: new Date().toISOString(), from: 'published' }; out.tz++; ch.push('ТЗ ' + r.tz.title + ' (' + Math.round(r.confidence * 100) + '%)'); }
-          else if (r.tz) d.tzAutoGuess = { title: r.tz.title, group: r.tz.group, confidence: r.confidence }; // ниже 70% — не ставим, только подсказка
+          else if (!String(d.tz || '').trim()) d.tzAutoGuess = r.tz ? { title: r.tz.title, group: r.tz.group, confidence: r.confidence } : { none: true }; // ниже 70% — не ставим, спросим менеджера «это персональное?»
           if (ch.length) log(`По выложенному видео ${d.blogerName}: ${ch.join(', ')}`);
         } catch (e) { out.errors.push(String(d.blogerName) + ': ' + e.message.slice(0, 100)); }
         persist();
