@@ -9907,6 +9907,30 @@ function inboxWaiting(){ if(!INBOX.loading && (!INBOX.data || INBOX.who!==myWho(
     const txt = String(r.lastInText||"").replace(/https?:\/\/\S+/g, "ссылка").slice(0, 70);
     return {d: byId.get(r.dealId), ib: r, act:"reply", cls: h>=2 ? "s-b" : "s-w", tag: (h ? "ждёт "+h+" ч" : "только что")+(txt ? " · «"+txt+"»" : "")}; });
 }
+// 23.11.2026 «Оплачено — сообщите блогеру»: Нина поставила «оплачено» → плашка у менеджера (у тимлида — по своим менеджерам).
+const PAIDQ = { data:null, loading:false };
+async function paidLoad(){ PAIDQ.loading = true; PAIDQ.who = myWho()+"|"+(UI.deskAll?1:0); PAIDQ.at = Date.now(); try{ PAIDQ.data = await apiFetch("/api/coord/paid-pending"+(UI.deskAll && UI.canExport ? "?all=1" : "")); }catch(e){ PAIDQ.data = {items:[]}; } PAIDQ.loading = false; if(UI.tab==="desk") renderDeskTab(); }
+function paidBannerHtml(){
+  if(!PAIDQ.loading && (!PAIDQ.data || PAIDQ.who!==myWho()+"|"+(UI.deskAll?1:0) || Date.now()-(PAIDQ.at||0) > 60000)) setTimeout(paidLoad, 0);
+  const items = (PAIDQ.data && PAIDQ.data.items) || []; if(!items.length || UI.readOnly) return "";
+  const can = items.filter(x=> x.phone && !x.wrote);
+  return `<div style="background:#E2F6EC;border:1px solid #BFE6CF;border-radius:14px;padding:12px 16px">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap"><b style="font-size:15px;color:#1E6B47">Оплачено — сообщите блогерам: ${items.length}</b>
+      ${can.length ? `<button class="btn btn-sm btn-primary" id="paid-all" data-ids="${can.map(x=>x.id).join(",")}">Отправить всем «Оплата прошла» (${can.length})</button>` : ""}</div>
+    <div class="mut" style="font-size:12px;margin:3px 0 6px">Текст: «${escapeHtml((PAIDQ.data&&PAIDQ.data.text)||"")}». Кто сам уже написал про оплату — не отправляем.</div>
+    ${items.map(x=>`<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;padding:6px 0;border-top:1px solid #CFEBDB;font-size:13px">
+      <span><a href="#" onclick="openMicroById(${x.id});return false" style="font-weight:800;color:#2B2228">${escapeHtml(x.blogger)}</a> · ${escapeHtml(x.product||"")}${x.cost?" · "+fmtNum(x.cost)+" ₸":""}${crmIsLeadName()&&x.manager?` · <span class="mut">${escapeHtml(x.manager)}</span>`:""}
+        ${x.wrote ? `<br><span style="color:#9A6400;font-size:12px">Блогер уже написал: «${escapeHtml(x.wrote.text)}» — сообщение не нужно</span>` : !x.phone ? `<br><span class="mut" style="font-size:12px">нет номера WhatsApp</span>` : ""}</span>
+      <span style="display:flex;gap:6px;white-space:nowrap">${x.phone && !x.wrote ? `<button class="btn btn-sm paid-one" data-id="${x.id}">Отправить</button>` : ""}<button class="btn btn-sm paid-skip" data-id="${x.id}">${x.wrote?"Ок, убрать":"Не нужно"}</button></span></div>`).join("")}
+  </div>`;
+}
+function wirePaidBanner(){
+  const send = async (ids, btn, skip)=>{ try{ const r = await withBusy(btn, ()=> apiFetch("/api/coord/paid-notify", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids, skip:!!skip})}));
+      if(!skip) toast(`Отправлено: ${r.sent}${r.skipped.length?" · пропущено (уже писали): "+r.skipped.length:""}${r.errors.length?" · ошибки: "+r.errors.join("; "):""}`, !!r.errors.length); paidLoad(); }catch(e){ toast(e.message, true); } };
+  const all = document.getElementById("paid-all"); if(all) all.onclick = ()=>{ const ids = all.dataset.ids.split(",").map(Number); if(confirm("Отправить «Оплата прошла» "+ids.length+" блогерам?")) send(ids, all); };
+  document.querySelectorAll(".paid-one").forEach(b=> b.onclick = ()=> send([+b.dataset.id], b));
+  document.querySelectorAll(".paid-skip").forEach(b=> b.onclick = ()=> send([+b.dataset.id], b, true));
+}
 async function myDlvLoad(){ MYDLV.loading = true; MYDLV.who = myWho(); MYDLV.at = Date.now(); try{ MYDLV.data = await apiFetch("/api/delivery-requests"); }catch(e){ MYDLV.data = {items:[]}; } MYDLV.loading = false; if(UI.tab==="desk") renderDeskTab(); if(UI.tab==="deliveryReq") render(); }
 const DLV = { st:"new", city:"", mgr:"", sel:new Set() };
 const DLV_LABEL = {new:"Новая", sent:"Подано логисту", delivered:"Доставлено", failed:"Не доставлено"};
@@ -10036,6 +10060,7 @@ function tplDesk(){
   <div style="display:grid;grid-template-columns:minmax(0,1fr) 316px;gap:16px;align-items:start">
     <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
       ${deskDateProposalsHtml()}
+      ${paidBannerHtml()}
       ${urgent.length ? `<div><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px"><b style="font-size:15px">Срочно сегодня</b><span class="mut" style="font-size:12px">не больше трёх — самое горящее</span></div>
         <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">${urgent.map(x=>`<div style="background:#fff;border:1px solid #F3C7D7;border-radius:12px;padding:12px 14px">
           <div style="font-size:11px;font-weight:800;color:${col(x.sev)};text-transform:uppercase;letter-spacing:.02em">${escapeHtml(x.what)}</div>
@@ -10087,6 +10112,7 @@ function tplDesk(){
 function wireDesk(){
   wireDateProposals(()=> renderDeskTab());
   document.querySelectorAll(".desk-send").forEach(b=> b.onclick = ()=> deskSendNow(b));
+  wirePaidBanner();
   document.querySelectorAll(".desk-sug-ok,.desk-sug-no").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch("/api/pub-check/confirm/"+b.dataset.id, {method:"POST", headers:jsonHeaders, body:JSON.stringify({url:b.dataset.url||""})})); await DataManager.refresh(); toast(b.dataset.url ? "Ссылка сохранена" : "Убрано"); renderDeskTab(); }catch(e){ toast(e.message, true); } });
   document.querySelectorAll(".desk-ib-done").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch("/api/inbox/"+encodeURIComponent(b.dataset.phone)+"/done", {method:"POST"})); const r = ((INBOX.data&&INBOX.data.items)||[]).find(x=> x.phone===b.dataset.phone); if(r) r.waiting = false; renderDeskTab(); }catch(e){ toast(e.message, true); } });
   const rAll = document.getElementById("desk-remind-all"); if(rAll) rAll.onclick = async ()=>{ const ra = rAll; const ids = ra.dataset.ids.split(",").filter(Boolean).map(Number); if(!ids.length){ toast("Ни у кого нет номера WhatsApp", true); return; } if(!confirm("Отправить напоминание в WhatsApp "+ids.length+" блогерам?")) return;
