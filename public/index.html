@@ -3804,7 +3804,7 @@ function tplControl(){
   return `
   <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:12px">
     <div><h1 style="margin:0;font-size:22px;font-weight:800">Контроль</h1><div class="mut" style="margin-top:3px">что горит у каждого менеджера · обновляется само · нажмите на цифру — откроется список</div></div>
-    <div style="display:flex;gap:8px;align-items:center">${UI.canExport ? `<button class="btn btn-sm" id="ctrl-chatapp">Подключить ChatApp</button>` : ""}<select class="pv-inp" id="ctrl-month">${months.map(([v,t])=>`<option value="${v}" ${v===m?"selected":""}>${escapeHtml(t)}</option>`).join("")}</select></div>
+    <div style="display:flex;gap:8px;align-items:center">${UI.canExport ? `<button class="btn btn-sm" id="ctrl-tzauto" title="ИИ смотрит вышедшие ролики месяца без ТЗ или языка и проставляет (ТЗ — от 70% совпадения)">ТЗ и язык по вышедшим</button><button class="btn btn-sm" id="ctrl-chatapp">Подключить ChatApp</button>` : ""}<select class="pv-inp" id="ctrl-month">${months.map(([v,t])=>`<option value="${v}" ${v===m?"selected":""}>${escapeHtml(t)}</option>`).join("")}</select></div>
   </div>
   <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px">
     ${[["late","не вышли в срок","#C42B45"],["noreply2","без ответа больше 2 часов","#C42B45"],["nopay","вышли, оплата не подана","#9A6400"],["out","вышло за месяц","#1E8C5C"]].map(([k,t,c])=>`<div class="panel" style="margin:0"><b style="font-size:26px;color:${c}">${tot(k)}</b><div class="mut" style="font-size:12px">${t}</div></div>`).join("")}
@@ -3816,6 +3816,7 @@ function tplControl(){
   <div class="mut" style="font-size:12px;margin-top:8px">«Ждут ответа» — последнее сообщение в WhatsApp от блогера (общий номер и ChatApp). Красное — то, что надо разобрать сегодня. Сделанное уходит само.</div>`;
 }
 function wireControl(){
+  const tza = document.getElementById("ctrl-tzauto"); if(tza) tza.onclick = async ()=>{ try{ await withBusy(tza, ()=> apiFetch("/api/pub-check/classify", {method:"POST"})); toast("Запущено: ИИ смотрит вышедшие ролики — займёт 10–30 минут, ТЗ и язык появятся в интеграциях сами"); }catch(e){ toast(e.message, true); } };
   const ca = document.getElementById("ctrl-chatapp"); if(ca) ca.onclick = async ()=>{ try{ const r = await apiFetch("/api/chatapp/webhook-url");
     openModal(`<h3>Входящие из ChatApp</h3><div style="font-size:13px;line-height:1.6">1. Откройте кабинет ChatApp → настройки линии WhatsApp → «Webhook» (вебхук сообщений).<br>2. Вставьте этот адрес и сохраните:</div><input class="pv-inp" style="width:100%;margin:10px 0" readonly value="${escapeHtml(r.url)}" onclick="this.select()"><div class="mut" style="font-size:12px">После этого ответы блогеров на номер ChatApp появятся в карточке интеграции и в «Ждут ответа». Адрес секретный — не пересылайте его.</div><div class="modal-actions"><button class="btn btn-primary" onclick="navigator.clipboard&&navigator.clipboard.writeText('${escapeHtml(r.url)}');toast('Скопировано')">Скопировать</button><button class="btn" onclick="closeModal()">Закрыть</button></div>`); }catch(e){ toast(e.message, true); } };
   const mo = document.getElementById("ctrl-month"); if(mo) mo.onchange = ()=>{ CTRL.month = mo.value; renderDeskTab(); };
