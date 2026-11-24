@@ -8312,10 +8312,116 @@ function microDealProgressHtml(d){
   return `<div style="margin:10px 0 4px;background:#fff;border:1px solid #F3DDE7;border-radius:12px;padding:10px 14px"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline"><div><span class="pv-lbl">Что дальше</span> <b style="margin-left:6px">${escapeHtml(next)}</b></div><span class="mut" style="font-size:12px">${escapeHtml(microFormatOf(d))} · ведёт ${escapeHtml(d.responsible||"—")}${d.city?" · "+escapeHtml(d.city):""}${d.cost?" · "+fmtNum(d.cost)+" ₸":""}</span></div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${steps.map(([ok,t])=>`<span class="pv-st ${ok?"s-ok":"s-m"}">${ok?"✓ ":""}${escapeHtml(t)}</span>`).join("")}</div></div>`;
 }
+
+// ===== Компактная форма интеграции (24.11.2026, Нина): как «Изменить интеграцию · крупные» — поля в две колонки, без разделов.
+// Внизу — «Подать на оплату», «Подать на доставку», «Подать ТЗ». Всё редкое — в «Все поля».
+function modalMicroQuick(d0){
+  const isEdit = !!(d0 && d0.id), d = d0 || {responsible: microDefaultResponsible(), coopType:"Платная интеграция"};
+  const v = x=> escapeHtml(x==null ? "" : String(x));
+  const f = (label, html, wide)=> `<label style="display:flex;flex-direction:column;gap:4px${wide?";grid-column:1/-1":""}"><span class="pv-lbl" style="text-transform:none;letter-spacing:0;font-size:12px">${label}</span>${html}</label>`;
+  const sel = (id, opts, cur)=> `<select id="${id}" class="pv-inp">${opts.map(o=>{ const [val,t] = Array.isArray(o)?o:[o,o]; return `<option value="${escapeHtml(val)}" ${String(val)===String(cur||"")?"selected":""}>${escapeHtml(t)}</option>`; }).join("")}</select>`;
+  const coop = d.coopType || microCoopTypeOf(d) || "Платная интеграция";
+  const fmt = microFormatOf(d);
+  const tzSel = microTzCell(Object.assign({}, d, {id: d.id||0})).replace('class="micro-tz-select"','id="mq-tz" class="pv-inp"').replace(/style="max-width:190px;font-size:12px"/,'');
+  const pm = d.paymentMethod || (isEdit && bloggerIsIp(d) ? "ИП" : "Наличные");
+  openModal(`
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <h3 style="margin:0;font-size:18px;font-weight:800">${isEdit ? "Интеграция · "+escapeHtml(deskNick(d)) : "Новая интеграция"}</h3>
+      ${isEdit ? `<div style="display:flex;gap:6px"><button class="btn btn-sm" id="mq-card">Переписка и видео</button>${d.phone?`<button class="btn btn-sm" onclick="modalChats('${escapeHtml(String(d.phone).replace(/\D/g,""))}')">Чат WhatsApp</button>`:""}</div>` : ""}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px">
+      ${f("Ник блогера (Instagram)", `<input id="mq-name" class="pv-inp" value="${v(d.blogerName||"")}" placeholder="@nick">`)}
+      ${f("Ведёт", sel("mq-resp", microManagerNames(d.responsible), d.responsible))}
+      ${f("Телефон (WhatsApp)", `<input id="mq-phone" class="pv-inp" value="${v(d.phone)}" placeholder="+7…">`)}
+      ${f("Тип", sel("mq-coop", MICRO_COOP_TYPES, coop))}
+      ${f("Товар (название или ШК)", `<input id="mq-prod" class="pv-inp" list="mq-prod-list" value="${v(d.product)}" placeholder="начните вводить"><datalist id="mq-prod-list">${microSkuAll().map(x=>`<option value="${escapeHtml(x.name+" — "+x.code)}"></option>`).join("")}</datalist>`)}
+      ${f("Штрихкод (ШК)", `<input id="mq-bc" class="pv-inp" value="${v(d.barcode)}">`)}
+      ${f("Формат", sel("mq-fmt", MICRO_FORMATS, fmt))}
+      ${f("Язык видео", sel("mq-lang", [["","— определит ИИ —"],["ru","Русский"],["kz","Казахский"],["под музыку","Под музыку"]], microVideoLang(d)))}
+      ${f("Плановая дата", `<input id="mq-plan" type="date" class="pv-inp" value="${v(String(d.plannedDate||"").slice(0,10))}">`)}
+      ${f("Дата выхода (факт)", `<input id="mq-pub" type="date" class="pv-inp" value="${v(String(d.publishDate||"").slice(0,10))}">`)}
+      ${f("Сумма блогеру, ₸", `<input id="mq-cost" type="number" class="pv-inp" value="${Number(d.cost)||0}">`)}
+      ${f("Себестоимость товара, ₸", `<input id="mq-pcost" type="number" class="pv-inp" value="${Number(d.productCost)||0}">`)}
+      ${f("Как платим", sel("mq-pm", [["Наличные","ИИН / Kaspi"],["ИП","ИП"]], /^ип/i.test(pm)?"ИП":"Наличные"))}
+      ${f("ТЗ", tzSel)}
+      ${f("Ссылка Reels", `<input id="mq-reels" class="pv-inp" value="${v(d.reelsLink)}" placeholder="https://instagram.com/reel/…">`)}
+      ${f("Ссылка TikTok", `<input id="mq-tt" class="pv-inp" value="${v(d.tiktokVideoLink)}" placeholder="https://tiktok.com/…">`)}
+      ${f("Сторис: просмотры", `<input id="mq-st-reach" type="number" class="pv-inp" value="${Number(d.factReachStories)||0}">`)}
+      ${f("Сторис: клики", `<input id="mq-st-clicks" type="number" class="pv-inp" value="${Number(d.storiesClicks)||0}">`)}
+      ${f("Статус видео", sel("mq-vs", MICRO_VIDEO_STATUSES, d.videoStatus||"не опубликовано"))}
+      ${f("Статус товара", sel("mq-ps", MICRO_PRODUCT_STATUSES, d.productStatus||"товар заказан"))}
+      ${f("Статус оплаты", sel("mq-pay", MICRO_PAYMENT_STATUSES, d.paymentStatus||"не оплачено"))}
+      ${f("Охват (собирается по ссылкам)", `<input class="pv-inp" disabled value="${fmtNum(microDealFactReach(d)||0)}">`)}
+      ${f("Комментарий", `<textarea id="mq-notes" class="pv-inp" rows="2" style="height:auto;padding:8px 10px">${v(d.notes)}</textarea>`, true)}
+    </div>
+    <div class="modal-actions" style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${isEdit && !UI.readOnly ? `<button class="btn" id="mq-paybtn" style="background:#FFF3C8;border-color:#F1D97A">💳 Подать на оплату</button><button class="btn" id="mq-dlvbtn">📦 Подать на доставку</button><button class="btn" id="mq-tzbtn">📝 Подать ТЗ</button>` : ""}</div>
+      <div style="display:flex;gap:6px">${isEdit?`<button class="btn btn-ghost" id="mq-full">Все поля</button>`:""}<button class="btn" onclick="closeModal()">Отмена</button><button class="btn btn-primary" id="mq-save">Сохранить</button></div>
+    </div>`);
+  { const ms = document.querySelectorAll(".modal-back .modal"), m = ms[ms.length-1]; if(m){ m.style.setProperty("max-width","760px","important"); m.style.width="min(760px,96vw)"; } }
+  const $ = id=> document.getElementById(id);
+  // товар из списка → название + ШК + себестоимость
+  $("mq-prod").onchange = ()=>{ const val = $("mq-prod").value.trim(); const hit = microSkuAll().find(x=> val===x.name+" — "+x.code || val===x.code); if(hit){ $("mq-prod").value = hit.name; $("mq-bc").value = hit.code; const setCost = ()=>{ const pr = (PROD.list||[]).find(p=> String(p.article||"").trim()===hit.code || String(p.sku||"").trim()===hit.code); if(pr && !(Number($("mq-pcost").value)>0) && Number(pr.cost)>0) $("mq-pcost").value = Math.round(pr.cost); };
+    if(PROD.list) setCost(); else if(!PROD.loading) prodLoad().then(setCost); } };
+  const read = ()=>{ const tzv = ($("mq-tz")||{}).value || ""; const [g,it] = tzv.split("\u0001");
+    const pub = $("mq-pub").value, reels = $("mq-reels").value.trim(), tt = $("mq-tt").value.trim();
+    return { blogerName: $("mq-name").value.trim(), responsible: $("mq-resp").value, phone: $("mq-phone").value.trim(), coopType: $("mq-coop").value,
+      product: $("mq-prod").value.trim(), barcode: $("mq-bc").value.trim(), contentFormat: $("mq-fmt").value==="Reels + TikTok" ? "" : $("mq-fmt").value,
+      videoLang: $("mq-lang").value, plannedDate: $("mq-plan").value, publishDate: pub && pub > todayStr() ? "" : pub,
+      cost: parseInt($("mq-cost").value,10)||0, productCost: parseFloat($("mq-pcost").value)||0, paymentMethod: $("mq-pm").value,
+      tz: it || (tzv ? tzv : ""), tzGroup: it ? g : (tzv ? tzv : ""),
+      reelsLink: reels, tiktokVideoLink: tt, factReachStories: parseInt($("mq-st-reach").value,10)||0, storiesClicks: parseInt($("mq-st-clicks").value,10)||0,
+      videoStatus: (reels || tt || (pub && pub <= todayStr())) ? "опубликовано" : $("mq-vs").value, productStatus: $("mq-ps").value, paymentStatus: $("mq-pay").value, notes: $("mq-notes").value.trim() }; };
+  const atOpen = read();
+  const saveNow = async (btn)=>{ const cur = read(); if(!cur.blogerName){ toast("Укажите блогера", true); return false; }
+    if(cur.instagramAccount===undefined && !isEdit && /^@?[\w.]+$/.test(cur.blogerName)) cur.instagramAccount = normalizeInstagramUrl(cur.blogerName);
+    const ch = isEdit ? changedFields(cur, atOpen) : cur;
+    if(isEdit && !Object.keys(ch).length) return true;
+    try{ const r = await withBusy(btn, ()=> isEdit ? Api.updateMicroDeal(d.id, ch) : Api.createMicroDeal(cur)); Object.assign(d, ch); if(!isEdit && r && r.id) d.id = r.id; return true; }catch(e){ toast(e.message, true); return false; } };
+  $("mq-save").onclick = async ()=>{ if(await saveNow($("mq-save"))){ closeModal(); toast(isEdit?"Сохранено":"Интеграция добавлена"); await DataManager.refresh(); render(); } };
+  const reopen = ()=> (DataManager.state.microInfluencerDeals||[]).find(x=> x.id===d.id) || d;
+  const go = async (btn, fn)=>{ if(!(await saveNow(btn))) return; closeModal(); await DataManager.refresh(); fn(reopen()); };
+  if($("mq-card")) $("mq-card").onclick = ()=> go($("mq-card"), x=> modalMicroCard(x));
+  if($("mq-full")) $("mq-full").onclick = ()=> go($("mq-full"), x=> modalMicroDeal(x, {__form:true}));
+  if($("mq-dlvbtn")) $("mq-dlvbtn").onclick = ()=> go($("mq-dlvbtn"), x=> modalDeliveryRequest(x));
+  if($("mq-paybtn")) $("mq-paybtn").onclick = ()=> go($("mq-paybtn"), x=> modalMicroPayQuick(x));
+  if($("mq-tzbtn")) $("mq-tzbtn").onclick = ()=> go($("mq-tzbtn"), x=> modalMicroTzQuick(x));
+}
+// «Подать на оплату» отдельным окном (как в Blogger CRM): сумма, получатель, для ИП — реквизиты и счёт.
+function modalMicroPayQuick(d){
+  const pm = d.paymentMethod || (bloggerIsIp(d) ? "ИП" : "Наличные");
+  openModal(`<h3 style="margin:0 0 10px">Подать на оплату — ${escapeHtml(deskNick(d))}</h3>
+    <input type="hidden" id="mm-payment-method" value="${escapeHtml(pm)}">
+    <div class="mut" style="font-size:12.5px;margin-bottom:8px">Как платим: <b>${/^ип/i.test(pm)?"ИП":"ИИН / Kaspi"}</b> · сумма по интеграции ${fmtNum(Number(d.cost)||0)} ₸</div>
+    ${/^ип/i.test(pm) ? microIpDocsHtml(d, true) : ""}
+    ${microPayHtml(d, true)}
+    <div class="modal-actions"><button class="btn" id="mqp-back">← Назад</button><button class="btn" onclick="closeModal()">Закрыть</button></div>`);
+  { const ms = document.querySelectorAll(".modal-back .modal"), m = ms[ms.length-1]; if(m){ m.style.setProperty("max-width","720px","important"); m.style.width="min(720px,96vw)"; } }
+  wireMicroPay(d.id); if(/^ип/i.test(pm)){ wireMicroIpParse(); wireMicroIpDocs(d.id); }
+  document.getElementById("mqp-back").onclick = ()=>{ closeModal(); modalMicroQuick((DataManager.state.microInfluencerDeals||[]).find(x=> x.id===d.id) || d); };
+}
+// «Подать ТЗ»: запрос персонального ТЗ в Blogery Audit (товар и формат — как на скрине Blogger CRM).
+function modalMicroTzQuick(d){
+  openModal(`<h3 style="margin:0 0 10px">Подать ТЗ — ${escapeHtml(deskNick(d))}</h3>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <label style="display:flex;flex-direction:column;gap:4px"><span class="pv-lbl">Товар</span><input id="mqt-prod" class="pv-inp" value="${escapeHtml(d.product||"")}"></label>
+      <label style="display:flex;flex-direction:column;gap:4px"><span class="pv-lbl">Формат</span><select id="mqt-fmt" class="pv-inp">${["Reels","TikTok","Reels + TikTok","Сторис"].map(x=>`<option ${x===(microFormatOf(d)==="Сторис"?"Сторис":"Reels")?"selected":""}>${x}</option>`).join("")}</select></label>
+      <label style="display:flex;flex-direction:column;gap:4px"><span class="pv-lbl">Пожелания (необязательно)</span><textarea id="mqt-notes" class="pv-inp" rows="3" style="height:auto;padding:8px 10px">${escapeHtml(d.notes||"")}</textarea></label>
+    </div>
+    <div class="modal-actions"><button class="btn" id="mqt-back">← Назад</button><button class="btn btn-primary" id="mqt-go">Создать ТЗ</button></div>`);
+  { const ms = document.querySelectorAll(".modal-back .modal"), m = ms[ms.length-1]; if(m){ m.style.setProperty("max-width","480px","important"); m.style.width="min(480px,96vw)"; } }
+  document.getElementById("mqt-back").onclick = ()=>{ closeModal(); modalMicroQuick(d); };
+  document.getElementById("mqt-go").onclick = async ()=>{ const b = document.getElementById("mqt-go"); const prod = document.getElementById("mqt-prod").value.trim(), fm = document.getElementById("mqt-fmt").value, nt = document.getElementById("mqt-notes").value.trim();
+    try{ if(prod && prod!==d.product) await Api.updateMicroDeal(d.id, {product:prod});
+      const r = await withBusy(b, ()=> apiFetch('/api/automation/brief-request/'+d.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:["Формат: "+fm, nt].filter(Boolean).join("\n")})}));
+      closeModal(); toast("Запрос ТЗ создан — смотрите «База ТЗ»"); if(r && r.url) window.open(r.url,'_blank','noopener'); await DataManager.refresh(); render(); }catch(e){ toast(e.message, true); } };
+}
 function modalMicroDeal(existing, prefill){
   // 24.11.2026 (Нина, жалобы менеджеров): снова открываем полную форму интеграции — всё в одном окне, шире экрана.
   // Карточка с перепиской и видео — кнопкой «Переписка и видео» вверху формы.
   if(existing && prefill && prefill.__card) return modalMicroCard(existing);
+  if(existing && !(prefill && prefill.__form)) return modalMicroQuick(existing);
+  if(!existing && prefill && Object.keys(prefill).every(k=> k==="responsible")) return modalMicroQuick(null);
   const isEdit = !!existing;
   let flowGoodsDirty = false;
   let flowGoodsInput = [];
