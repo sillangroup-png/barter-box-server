@@ -1658,7 +1658,7 @@ app.patch("/api/micro-influencer-deals/:id", requireAuth, (req,res)=>{
     body.cpvNoteBy = body.cpvNote ? ((req.session && req.session.name) || d.responsible || "") : "";
   }
   delete body.socialViewsAuto; delete body.reachAutoSet; delete body.viewsHistory; // просмотры по ссылке (Apify) и их историю ведёт только сервер
-  if(body.paymentStatus==="оплачено" && d.paymentStatus!=="оплачено"){ body.paidAt = new Date().toISOString(); body.paidBy = (req.session && req.session.name) || ""; body.paidMsgSent = null; body.paidSkip = false; }
+  if(body.paymentStatus==="оплачено" && d.paymentStatus!=="оплачено"){ body.paidAt = new Date().toISOString(); body.paidBy = (req.session && req.session.name) || ""; body.paidMsgSent = null; body.paidSkip = false; body.paidMsgNote = null; body.paidMsgErr = null; body.paidMsgTries = 0; body.paidMsgAuto = false; }
   delete body.planHistory; // 23.11.2026: история переносов плановой даты — ведёт только сервер (видят тимлиды)
   { const from = String(d.plannedDate||"").slice(0,10), to = "plannedDate" in body ? String(body.plannedDate||"").slice(0,10) : from;
     if(from && to !== from){ d.planHistory = (Array.isArray(d.planHistory) ? d.planHistory : []).concat([{ at:new Date().toISOString(), from, to, by:(req.session && req.session.name) || "" }]).slice(-30); } }

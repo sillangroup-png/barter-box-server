@@ -651,11 +651,47 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const team = new Set([me].concat(g ? g.members.map(personKey) : []));
     return (d) => team.has(personKey(d.responsible));
   }
+  // 24.11.2026 Нина: «оплачено» (в Blogger CRM или здесь) → «Оплата прошла» уходит блогеру сам, без кнопки.
+  // Только для оплат, поставленных после запуска (по старым — не рассылаем). Ночью (22:00–9:00 Алматы) ждём утра.
+  // Блогер уже сам написал про оплату / нет номера / 3 ошибки → не шлём, остаётся плашка у менеджера. PAID_AUTO=0 — выключить.
+  const paidAutoOn = () => process.env.PAID_AUTO !== "0";
+  const paidAutoQueued = (d) => { const c = C(); return paidAutoOn() && c.paidAutoSince && Date.parse(d.paidAt || 0) >= Date.parse(c.paidAutoSince) && !d.paidMsgNote && (d.paidMsgTries || 0) < 3; };
+  let paidAutoBusy = false;
+  async function paidAutoSweep() {
+    if (!paidAutoOn() || paidAutoBusy) return;
+    const c = C();
+    if (!c.paidAutoSince) { c.paidAutoSince = new Date().toISOString(); persist(); return; }
+    const h = almatyHour(); if (h < 9 || h >= 22) return;
+    const since = Date.parse(c.paidAutoSince), all = getState().microInfluencerDeals || [];
+    const due = all.filter((d) => d.paymentStatus === "оплачено" && d.paidAt && Date.parse(d.paidAt) >= since && !d.paidMsgSent && !d.paidSkip && !d.paidMsgNote && (d.paidMsgTries || 0) < 3);
+    if (!due.length) return;
+    paidAutoBusy = true;
+    try {
+      for (const d of due.slice(0, 40)) {
+        const n = waNumber(d.phone);
+        if (!n) { d.paidMsgNote = "нет номера WhatsApp — сообщите вручную"; persist(); continue; }
+        if (d.paidMsgEver && Date.now() - Date.parse(d.paidMsgEver) < 3 * 24 * H) { d.paidMsgSent = d.paidMsgEver; d.paidMsgAuto = true; persist(); continue; } // статус переключали туда-обратно
+        const sib = all.find((x) => x !== d && waNumber(x.phone) === n && x.paidMsgSent && Date.now() - Date.parse(x.paidMsgSent) < 6 * H);
+        if (sib) { d.paidMsgSent = sib.paidMsgSent; d.paidMsgAuto = true; persist(); continue; } // одному блогеру — одно сообщение
+        const w = paidWrote(d);
+        if (w) { d.paidMsgNote = `блогер уже написал: «${String(w.text).slice(0, 80)}»`; persist(); continue; }
+        try {
+          const t = paidText(); const r = await sendNow(d, t);
+          log(d.id, "out", `[оплата, авто] ${r.via}: ${t}`);
+          d.paidMsgSent = d.paidMsgEver = new Date().toISOString(); d.paidMsgAuto = true; d.paidMsgErr = null;
+        } catch (e) { d.paidMsgTries = e.permanent ? 3 : (d.paidMsgTries || 0) + 1; d.paidMsgErr = String(e.message || e).slice(0, 200); }
+        persist();
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    } finally { paidAutoBusy = false; }
+  }
+  setInterval(() => { paidAutoSweep().catch((e) => console.error("Оплата → блогеру:", e.message)); }, 60 * 1000);
+  setTimeout(() => { paidAutoSweep().catch(() => {}); }, 25000);
   app.get("/api/coord/paid-pending", requireAuth, (req, res) => {
     if (!staff(req, res)) return;
     const inScope = paidScope(req), weekAgo = Date.now() - 21 * 24 * H;
-    const items = (getState().microInfluencerDeals || []).filter((d) => d.paymentStatus === "оплачено" && d.paidAt && Date.parse(d.paidAt) > weekAgo && !d.paidMsgSent && !d.paidSkip && inScope(d))
-      .map((d) => { const w = paidWrote(d); return { id: d.id, blogger: d.blogerName || "", product: d.product || "", manager: d.responsible || "", cost: Number(d.cost) || 0, paidAt: d.paidAt, phone: !!waNumber(d.phone), wrote: w ? { at: w.at, text: String(w.text).slice(0, 160) } : null }; });
+    const items = (getState().microInfluencerDeals || []).filter((d) => d.paymentStatus === "оплачено" && d.paidAt && Date.parse(d.paidAt) > weekAgo && !d.paidMsgSent && !d.paidSkip && !paidAutoQueued(d) && inScope(d))
+      .map((d) => { const w = paidWrote(d); return { id: d.id, blogger: d.blogerName || "", product: d.product || "", manager: d.responsible || "", cost: Number(d.cost) || 0, paidAt: d.paidAt, phone: !!waNumber(d.phone), err: d.paidMsgErr || "", wrote: w ? { at: w.at, text: String(w.text).slice(0, 160) } : null }; });
     res.json({ text: paidText(), items });
   });
   app.post("/api/coord/paid-notify", requireAuth, async (req, res) => {
@@ -671,7 +707,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       const n = waNumber(d.phone);
       if (!n) { out.errors.push(`${d.blogerName}: нет номера`); continue; }
       if (sentPhones.has(n)) { d.paidMsgSent = new Date().toISOString(); continue; } // одному блогеру — одно сообщение
-      try { const t = paidText(); const r = await sendNow(d, t); log(d.id, "out", `[оплата] ${r.via}: ${t}`); d.paidMsgSent = new Date().toISOString(); sentPhones.add(n); out.sent++; }
+      try { const t = paidText(); const r = await sendNow(d, t); log(d.id, "out", `[оплата] ${r.via}: ${t}`); d.paidMsgSent = d.paidMsgEver = new Date().toISOString(); d.paidMsgErr = null; sentPhones.add(n); out.sent++; }
       catch (e) { out.errors.push(`${d.blogerName}: ${e.message}`); }
     }
     persist(); res.json(out);

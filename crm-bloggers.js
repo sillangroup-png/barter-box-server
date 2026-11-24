@@ -41,7 +41,7 @@ function declineCode(status, reason) {
 function mount(app, { getState, requireAuth, kostPool, persist, env = process.env }) {
   // 23.11.2026: статус оплаты в интеграции ставится сам — подали заявку → «к оплате», Нина отметила → «оплачено».
   const PAY_TO_DEAL = { pending: 'к оплате', submitted: 'к оплате', approved: 'к оплате', paid: 'оплачено' };
-  const syncDealPay = (dealId, s) => { const v = PAY_TO_DEAL[s]; if (!dealId || !v) return; const d = ((getState() || {}).microInfluencerDeals || []).find((x) => String(x.id) === String(dealId)); if (d && d.paymentStatus !== v) { d.paymentStatus = v; if (v === 'оплачено') { d.paidAt = new Date().toISOString(); d.paidMsgSent = null; d.paidSkip = false; } if (persist) persist(); } };
+  const syncDealPay = (dealId, s) => { const v = PAY_TO_DEAL[s]; if (!dealId || !v) return; const d = ((getState() || {}).microInfluencerDeals || []).find((x) => String(x.id) === String(dealId)); if (d && d.paymentStatus !== v) { d.paymentStatus = v; if (v === 'оплачено') { d.paidAt = new Date().toISOString(); d.paidMsgSent = null; d.paidSkip = false; d.paidMsgNote = null; d.paidMsgErr = null; d.paidMsgTries = 0; d.paidMsgAuto = false; } if (persist) persist(); } };
   const URL = env.BB_DB_URL || '';
   const pool = URL ? new Pool({ connectionString: URL, ssl: { rejectUnauthorized: false }, max: 4, idleTimeoutMillis: 30000, connectionTimeoutMillis: 10000 }) : null;
   const need = (res) => { if (!pool) { res.status(503).json({ error: 'База не подключена (BB_DB_URL)' }); return false; } return true; };
