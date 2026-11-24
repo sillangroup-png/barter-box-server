@@ -8678,7 +8678,10 @@ function modalPayNew(ctx){
       <label style="display:flex;gap:8px;align-items:center;margin:10px 0 2px;padding:8px 12px;border-radius:10px;cursor:pointer;background:${ip?"#E2F6EC":"#F7F3F5"};border:1px solid ${ip?"#BFE6CF":"#EDE3E8"};font-weight:800;font-size:13px"><input type="checkbox" id="pn-ip" ${ip?"checked":""}> Оплата по ИП <span class="mut" style="font-weight:500;font-size:12px">— ${ip?"нужен счёт на оплату":"иначе Kaspi / ИИН"}</span></label>
       <div class="form-row" style="grid-template-columns:repeat(2,minmax(0,1fr))">
         <div class="field"><label>${ip?"Получатель (ИП)":"ФИО получателя"} *</label><input id="pn-rec" value="${escapeHtml(v("rec", (last&&last.recipient) || ""))}" placeholder="${ip?"ИП «…»":"Иванов Иван Иванович"}"></div>
-        ${ip ? `<div class="field"><label>Счёт на оплату *</label><input id="pn-file" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg"></div>`
+        ${ip ? `<div class="field"><label>Счёт на оплату *</label><input id="pn-file" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg"></div>
+                <div class="field"><label>Видео, шт <span class="mut" style="font-weight:400">· в Битрикс</span></label><input id="pn-vcnt" type="number" min="0" value="${escapeHtml(String(v("vcnt", S.sel ? S.sel.size||1 : 1)))}"></div>
+                <div class="field"><label>Сторис, шт</label><input id="pn-scnt" type="number" min="0" value="${escapeHtml(String(v("scnt", 0)))}"></div>
+                <div class="field"><label>За какой месяц</label><select id="pn-month">${[-1,0,1].map(k=>{ const dt = new Date(); dt.setDate(1); dt.setMonth(dt.getMonth()+k); const t = dt.toLocaleDateString("ru-RU",{month:"long", year:"numeric"}).replace(" г.",""); return `<option ${v("month", k===0?t:"")===t?"selected":""}>${t}</option>`; }).join("")}</select></div>`
              : `<div class="field"><label>ФИО при пополнении (для банка)</label><input id="pn-bank" value="${escapeHtml(v("bank",""))}" placeholder="как в приложении банка, если отличается"></div>
                 <div class="field"><label>ИИН</label><input id="pn-iin" maxlength="12" value="${escapeHtml(v("iin", (last&&last.iin) || ""))}"></div>
                 <div class="field"><label>Номер Kaspi</label><input id="pn-kaspi" value="${escapeHtml(v("kaspi", (last&&last.kaspi) || (S.hist&&S.hist.blogger&&S.hist.blogger.whatsapp) || ""))}" placeholder="+7 7xx xxx xx xx"></div>`}
@@ -8693,7 +8696,7 @@ function modalPayNew(ctx){
         : `<div style="font-size:12.5px;color:#9A6400">У блогера нет неоплаченных интеграций в Barter Box. Сначала заведите интеграцию — к ней привяжется оплата. <button type="button" class="btn btn-sm" id="pn-newdeal">+ Интеграция</button></div>`}
       <div id="pn-msg" style="font-size:12.5px;margin-top:8px"></div>
       <div class="modal-actions"><button class="btn" onclick="closeModal()">Отмена</button><button class="btn btn-primary" id="pn-send" ${open.length?"":"disabled"}>Подать заявку</button></div>`;
-    const keep = ()=>{ S.f = {}; [["rec","pn-rec"],["bank","pn-bank"],["iin","pn-iin"],["kaspi","pn-kaspi"],["amount","pn-amount"],["stage","pn-stage"],["video","pn-video"],["goods","pn-goods"],["notes","pn-notes"]].forEach(([k,id])=>{ const el = $(id); if(el) S.f[k] = el.value; }); };
+    const keep = ()=>{ S.f = {}; [["vcnt","pn-vcnt"],["scnt","pn-scnt"],["month","pn-month"],["rec","pn-rec"],["bank","pn-bank"],["iin","pn-iin"],["kaspi","pn-kaspi"],["amount","pn-amount"],["stage","pn-stage"],["video","pn-video"],["goods","pn-goods"],["notes","pn-notes"]].forEach(([k,id])=>{ const el = $(id); if(el) S.f[k] = el.value; }); };
     const total = ()=>{ const a = (Number($("pn-video").value)||0) + (Number($("pn-goods").value)||0); if(a) $("pn-amount").value = a; };
     const bySel = ()=>{ const s = [...document.querySelectorAll(".pn-deal:checked")].reduce((x,c)=> x+(Number(c.dataset.cost)||0), 0); if(s){ $("pn-video").value = s; total(); } };
     if(!(S.f && S.f.amount)) bySel();
@@ -8717,7 +8720,16 @@ function modalPayNew(ctx){
         const form = new FormData(); if(f) form.append("invoice", f);
         form.append("payload", JSON.stringify({integrationIds: ids, amountKzt: amount, recipientName: rec, settlement: S.ip ? "ip" : "cash", stage: $("pn-stage").value, invoiceConfirmed: !!S.ip, notes}));
         await apiFetch("/api/automation/payment-request", {method:"POST", body: form});
-        closeModal(); toast("Заявка на оплату подана — она в «Оплатах»"); MYPAY.at = 0; if(CRM.pay) CRM.pay.data = null; DataManager.refresh().then(()=> render()).catch(()=>{});
+        // 24.11.2026: ИП со счётом → карточка «Согласование оплаты» в Битриксе (поля по шаблону, счёт файлом)
+        let bxMsg = "", bxBad = false;
+        if(S.ip && f){ msg("Заявка в CRM подана · создаю согласование в Битриксе…");
+          const sel = ids.map(id=> (DataManager.state.microInfluencerDeals||[]).find(x=> String(x.id)===id)).filter(Boolean);
+          const plat = [sel.some(d=> d.instagramAccount) || !sel.some(d=> d.tiktokAccount) ? "Instagram" : "", sel.some(d=> d.tiktokAccount && String(microFormatOf(d)||"").match(/tiktok/i)) ? "TikTok" : ""].filter(Boolean).join(" ");
+          const bf = new FormData(); bf.append("invoice", f); bf.append("nick", S.nick); bf.append("amount", amount); bf.append("videos", ($("pn-vcnt")||{}).value||""); bf.append("stories", ($("pn-scnt")||{}).value||""); bf.append("month", ($("pn-month")||{}).value||"");
+          bf.append("platform", plat); bf.append("dealIds", ids.join(",")); bf.append("notes", $("pn-notes").value.trim()); bf.append("manager", (sel[0] && sel[0].responsible) || UI.actorName || ""); bf.append("contract", (sel.find(d=> d.contractNumber)||{}).contractNumber || "");
+          try{ const br = await apiFetch("/api/bitrix/pay-request", {method:"POST", body: bf}); bxMsg = " · Битрикс: согласование № "+(br.itemId||"")+" создано"+(br.missed && br.missed.length ? " (не заполнено: "+br.missed.join(", ")+")" : ""); }
+          catch(be){ bxMsg = " · в Битрикс не ушло: "+be.message; bxBad = true; } }
+        closeModal(); toast("Заявка на оплату подана — она в «Оплатах»"+bxMsg, bxBad); MYPAY.at = 0; if(CRM.pay) CRM.pay.data = null; DataManager.refresh().then(()=> render()).catch(()=>{});
       }catch(e){ msg("⚠ "+e.message, true); btn.disabled = false; }
     };
   };
