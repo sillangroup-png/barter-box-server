@@ -25,21 +25,24 @@ function mount(app, { getState, requireAuth, persist }) {
   app.post('/api/delivery-requests', requireAuth, (req, res) => {
     if (!isStaff(req)) return res.status(403).json({ error: 'Нет доступа' });
     const b = req.body || {}; const st = getState();
-    const deal = (st.microInfluencerDeals || []).find((d) => d.id === +b.dealId);
-    if (!deal) return res.status(404).json({ error: 'Интеграция не найдена' });
+    // 24.11.2026 Нина: доставку можно подать и без интеграции (отправляют несколько товаров, а снимают на один / интеграции ещё нет).
+    const deal = b.dealId ? (st.microInfluencerDeals || []).find((d) => d.id === +b.dealId) : null;
+    if (b.dealId && !deal) return res.status(404).json({ error: 'Интеграция не найдена' });
+    if (!deal && !String(b.blogger || '').replace('@', '').trim()) return res.status(400).json({ error: 'Укажите блогера' });
     const items = (Array.isArray(b.items) ? b.items : []).map((x) => ({ name: String(x.name || '').slice(0, 200), code: String(x.code || '').slice(0, 60), qty: Math.max(1, parseInt(x.qty, 10) || 1), cost: num(x.cost) })).filter((x) => x.name || x.code);
     if (!items.length) return res.status(400).json({ error: 'Добавьте, что отправляем' });
     if (!String(b.address || '').trim()) return res.status(400).json({ error: 'Укажите адрес' });
     if (!String(b.phone || '').trim()) return res.status(400).json({ error: 'Укажите телефон блогера' });
     const productCost = items.reduce((s, x) => s + x.cost * x.qty, 0);
     const all = list(); const id = (all.reduce((m, r) => Math.max(m, r.id), 0) || 0) + 1;
-    const r = { id, dealId: deal.id, createdAt: new Date().toISOString(), createdBy: req.session.name || '', manager: deal.responsible || req.session.name || '',
-      blogger: String(b.blogger || deal.instagramAccount || deal.blogerName || '').slice(0, 120), phone: String(b.phone).slice(0, 40), city: String(b.city || deal.city || '').slice(0, 80),
+    const dd = deal || {};
+    const r = { id, dealId: deal ? deal.id : null, createdAt: new Date().toISOString(), createdBy: req.session.name || '', manager: dd.responsible || req.session.name || '',
+      blogger: String(b.blogger || dd.instagramAccount || dd.blogerName || '').slice(0, 120), phone: String(b.phone).slice(0, 40), city: String(b.city || dd.city || '').slice(0, 80),
       address: String(b.address).slice(0, 300), items, productCost, deliveryCost: num(b.deliveryCost), note: String(b.note || '').slice(0, 500), status: 'new', history: [{ at: new Date().toISOString(), by: req.session.name, status: 'new' }] };
     all.push(r);
     // в интеграцию: себестоимость набора, «отправим», товар заказан; адрес/телефон — если были пустые
-    deal.productCost = productCost; deal.productDelivery = 'ship'; deal.productStatus = 'товар заказан';
-    if (!deal.address) deal.address = r.address; if (!deal.city && r.city) deal.city = r.city; if (!deal.phone) deal.phone = r.phone;
+    if (deal) { deal.productCost = productCost; deal.productDelivery = 'ship'; deal.productStatus = 'товар заказан';
+      if (!deal.address) deal.address = r.address; if (!deal.city && r.city) deal.city = r.city; if (!deal.phone) deal.phone = r.phone; }
     persist(); res.json(view(r));
   });
 
