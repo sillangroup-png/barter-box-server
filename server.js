@@ -1527,61 +1527,67 @@ app.delete("/api/influencer-deals/:id", requireAuth, (req,res)=>{
   res.json({ok:true});
 });
 app.post("/api/influencer-deals/import", requireAuth, (req,res)=>{
+  // 24.11.2026: у каждой крупной интеграции есть ID (колонка «id» в экспорте и в таблице). Строка с id обновляет
+  // эту интеграцию. Без id — ищем по блогеру + плановой дате (или дате выхода); нашли одну — обновляем, иначе добавляем.
+  // При обновлении меняем только те поля, колонки которых есть в файле, — пустые колонки, которых нет, ничего не стирают.
   const {rows} = req.body || {};
   if(!Array.isArray(rows)) return res.status(400).json({error:"rows[] обязателен"});
-  let added = 0, updated = 0;
+  let added = 0, updated = 0, byId = 0, byLogin = 0;
+  const has = (r, keys)=> keys.find(k=> Object.prototype.hasOwnProperty.call(r, k));
+  const int = v=> parseInt(String(v||"").replace(/[\s\u00a0]/g,""), 10) || 0;
+  const MAP = [
+    ["platform", ["платформа","platform"], v=> v || PLATFORMS[0]],
+    ["product", ["продукт","товар","product"], v=> v || ""],
+    ["plannedDate", ["план_дата","плановая дата","planned_date"], v=> v || ""],
+    ["publishedDate", ["факт_дата","дата выхода","published_date"], v=> v || ""],
+    ["plannedReach", ["план_охват","planned_reach"], int], ["plannedClicks", ["план_клики","planned_clicks"], int],
+    ["reach", ["охват","reach"], int], ["clicks", ["клики","clicks"], int],
+    ["plannedCost", ["план_расход","planned_cost"], int], ["cost", ["расход","cost"], int],
+    ["barcode", ["шк","штрихкод","barcode"], v=> String(v||"").trim()],
+    ["responsible", ["ответственный","responsible"], v=> v || ""],
+    ["bloggerCategory", ["категория","категория блогера","blogger_category"], v=> v || ""],
+    ["followers", ["подписчики","followers"], int],
+    ["plannedContribution", ["план_вклад","planned_contribution"], int],
+    ["instagramLink", ["instagram","ссылка на instagram","instagram_link"], v=> normalizeInstagramUrl(v || "")],
+    ["reelsLink", ["ссылка на reels","ссылка_на_reels","reels_link"], v=> normalizeLinkUrl(v || "")],
+    ["status", ["статус","status"], v=> v || DEAL_STATUSES[0]],
+    ["notes", ["комментарий","notes"], v=> v || ""],
+  ];
+  const key = v=> String(v||"").trim().toLowerCase().replace(/^@/,"").replace(/^https?:\/\/(www\.)?instagram\.com\//,"").replace(/[\/?].*$/,"");
   rows.forEach(r=>{
-    const blogerLogin = (r["блогер"] || r["blogger"] || r["логин"] || "").trim();
-    if(!blogerLogin) return;
-    const fields = {
-      blogerLogin,
-      platform: r["платформа"] || r["platform"] || PLATFORMS[0],
-      product: r["продукт"] || r["product"] || "",
-      plannedDate: r["план_дата"] || r["planned_date"] || "",
-      publishedDate: r["факт_дата"] || r["published_date"] || "",
-      plannedReach: parseInt(r["план_охват"] || r["planned_reach"] || 0, 10) || 0,
-      plannedClicks: parseInt(r["план_клики"] || r["planned_clicks"] || 0, 10) || 0,
-      reach: parseInt(r["охват"] || r["reach"] || 0, 10) || 0,
-      clicks: parseInt(r["клики"] || r["clicks"] || 0, 10) || 0,
-      plannedCost: parseInt(r["план_расход"] || r["planned_cost"] || 0, 10) || 0,
-      cost: parseInt(r["расход"] || r["cost"] || 0, 10) || 0,
-      barcode: (r["шк"] || r["штрихкод"] || r["barcode"] || "").toString().trim(),
-      responsible: r["ответственный"] || r["responsible"] || "",
-      bloggerCategory: r["категория"] || r["категория блогера"] || r["blogger_category"] || "",
-      plannedContribution: parseInt(r["план_вклад"] || r["planned_contribution"] || 0, 10) || 0,
-      instagramLink: normalizeInstagramUrl(r["instagram"] || r["ссылка на instagram"] || r["instagram_link"] || ""),
-      reelsLink: normalizeLinkUrl(r["ссылка на reels"] || r["ссылка_на_reels"] || r["reels_link"] || ""),
-      status: r["статус"] || r["status"] || DEAL_STATUSES[0],
-      notes: r["комментарий"] || r["notes"] || "",
-    };
-    // Папка с видео: трогаем, только если колонка есть в файле (старые CSV без неё не должны
-    // стирать ссылки). Если в ячейке ссылка, которую нашёл автоподбор, — ручной её не делаем.
+    const blogerLogin = String(r["блогер"] || r["blogger"] || r["логин"] || "").trim();
+    const rowId = parseInt(r["id"] || r["ID"], 10);
+    let existing = rowId ? state.influencerDeals.find(d=>d.id===rowId) : null;
+    if(existing) byId++;
+    if(!blogerLogin && !existing) return;
+    const fields = {};
+    for(const [f, keys, conv] of MAP){ const k = has(r, keys); if(k) fields[f] = conv(r[k]); }
+    if(blogerLogin) fields.blogerLogin = blogerLogin;
+    if(!existing && blogerLogin){
+      const pd = fields.plannedDate || "", fd = fields.publishedDate || "";
+      const same = state.influencerDeals.filter(d=> key(d.blogerLogin)===key(blogerLogin) && ((pd && d.plannedDate===pd) || (fd && d.publishedDate===fd)));
+      if(same.length===1){ existing = same[0]; byLogin++; }
+    }
+    // Папка с видео: трогаем, только если колонка есть в файле. Если в ячейке ссылка автоподбора — ручной её не делаем.
     const driveCol = ["папка_видео","папка с видео","drive_folder"].find(k=>Object.prototype.hasOwnProperty.call(r,k));
     if(driveCol){
       const v = normalizeLinkUrl(r[driveCol] || "");
-      const ex = rowIdForDrive(r);
+      const ex = existing || rowIdForDrive(r);
       const autoUrl = ex && ex.driveFolderAuto && ex.driveFolderAuto.url;
       fields.driveFolderLink = (v && v===autoUrl) ? "" : v;
     }
-    // Строка со своим id (как в "Экспорт CSV" этой же таблицы — см. ниже) обновляет
-    // существующую интеграцию вместо создания дубля. Раньше id в экспорт не попадал,
-    // и цикл "выгрузить → поправить в Excel → загрузить обратно" молча плодил вторые
-    // копии тех же блогеров вместо обновления исходных строк.
-    const rowId = parseInt(r["id"] || r["ID"], 10);
-    const existing = rowId ? state.influencerDeals.find(d=>d.id===rowId) : null;
     if(existing){
       Object.assign(existing, fields);
       updated++;
     } else {
-      state.influencerDeals.push(Object.assign(
-        {id: nextId("influencerDeals"), likes:0, comments:0, saves:0, lastUpdatedFrom:"", lastUpdatedAt:""},
-        fields
-      ));
+      const base = {id: nextId("influencerDeals"), likes:0, comments:0, saves:0, lastUpdatedFrom:"", lastUpdatedAt:"", createdAt: new Date().toISOString()};
+      for(const [f, , conv] of MAP) if(!(f in fields)) base[f] = conv("");
+      state.influencerDeals.push(Object.assign(base, fields));
       added++;
     }
   });
   persist();
-  res.json({added, updated});
+  res.json({added, updated, byId, byLogin});
 });
 
 // ---------- инфлюенс интеграции микро/средние (отв. Нина) ----------
