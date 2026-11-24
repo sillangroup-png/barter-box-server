@@ -977,7 +977,7 @@ require("./crm-bloggers").mount(app,{getState:()=>state,requireAuth,kostPool:pgP
 require("./pub-check").mount(app,{getState:()=>state,requireAuth,persist:()=>persist()}); // 23.11.2026: в 23:55 сам ищет вышедшие ролики
 require("./delivery-requests").mount(app,{getState:()=>state,requireAuth,persist});
 require("./finance-client").createFinanceClient({getState:()=>state,persist:()=>persist()}).mount(app,requireAuth);
-require("./contracts").createContracts({getState:()=>state,dataDir:DATA_DIR}).mount(app,requireAuth);
+require("./contracts").createContracts({getState:()=>state,dataDir:DATA_DIR,persist:()=>persist()}).mount(app,requireAuth);
 
 // ---------- state & health ----------
 // /api/state отдаёт ВСЮ базу (заказы, телефоны, адреса, выручку, ROMI) — без

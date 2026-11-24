@@ -342,6 +342,59 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     return chatappManagers().includes(personKey(d.responsible)) ? d.responsible : null;
   }
   if (chatapp.configured()) setTimeout(() => chatapp.check().then((r) => console.log("ChatApp:", r.ok ? `вход OK, лицензия ${r.license}, мессенджер ${r.messenger}; менеджеры: ${chatappManagers().join(", ")}` : `ошибка — ${r.error}`)).catch(() => {}), 5000).unref();
+  // 24.11.2026 Нина: отправить блогеру договор или базовое ТЗ — с того же номера, что и переписка.
+  // ChatApp умеет файл — шлём файлом с подписью; иначе (Wazzup / Битрикс) — текстом со ссылкой.
+  async function sendToBlogger({ phone, dealId, text, fileUrl, fileName }) {
+    const n = waNumber(phone); if (!n) throw new Error("нет номера WhatsApp — впишите телефон в интеграцию");
+    const d = (getState().microInfluencerDeals || []).find((x) => x.id === +dealId) || { id: null, phone, responsible: "" };
+    if (fileUrl && chatappFor(phone)) { await chatapp.send({ chatId: n, contentUri: fileUrl, fileName, caption: text }); if (d.id) log(d.id, "out", `[вручную] через ChatApp: ${text} (файл ${fileName || ""})`); return "ChatApp"; }
+    const full = fileUrl ? `${text}\n${fileUrl}` : text;
+    const r = await sendNow(d, full); if (d.id) log(d.id, "out", `[вручную] ${r.via}: ${full}`); return r.via;
+  }
+  app.locals.bbSendToBlogger = sendToBlogger;
+  app.locals.bbScope = (req) => paidScope(req);
+  // Базовое ТЗ блогеру: ссылка на страницу ТЗ (без входа, подписанная), в интеграции фиксируется, какое ТЗ и когда ушло.
+  const TZ_KEY = crypto.createHash("sha256").update("bb-tz-link|" + (process.env.SESSION_SECRET || [process.env.MANAGER_PASSWORD, process.env.MARKETER_PASSWORD, process.env.ANNA_PASSWORD].filter(Boolean).join("|") || "barter-box-fallback-key")).digest();
+  const tzSig = (id) => crypto.createHmac("sha256", TZ_KEY).update(String(id)).digest("hex").slice(0, 20);
+  const escH = (t) => String(t == null ? "" : t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  function tzMd(md) {
+    const inl = (t) => escH(t).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1">$1</a>');
+    const L = String(md || "").replace(/\r/g, "").split("\n"), out = []; let i = 0;
+    while (i < L.length) { const l = L[i];
+      if (/^\s*\|/.test(l)) { const rows = []; while (i < L.length && /^\s*\|/.test(L[i])) { if (!/^\s*\|[\s:|-]+\|?\s*$/.test(L[i])) rows.push(L[i].trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim())); i++; }
+        out.push("<table>" + rows.map((r, k) => "<tr>" + r.map((c) => (k ? "<td>" : "<th>") + inl(c) + (k ? "</td>" : "</th>")).join("") + "</tr>").join("") + "</table>"); continue; }
+      if (/^\s*[-*•]\s+/.test(l)) { const it = []; while (i < L.length && /^\s*[-*•]\s+/.test(L[i])) { it.push("<li>" + inl(L[i].replace(/^\s*[-*•]\s+/, "")) + "</li>"); i++; } out.push("<ul>" + it.join("") + "</ul>"); continue; }
+      const h = /^(#{1,3})\s+(.*)$/.exec(l); if (h) { out.push(`<h${h[1].length}>${inl(h[2])}</h${h[1].length}>`); i++; continue; }
+      if (l.trim()) out.push("<p>" + inl(l) + "</p>"); i++; }
+    return out.join("\n");
+  }
+  app.get("/tz/:id", (req, res) => {
+    const x = (getState().tzTexts || []).find((t) => t.id === req.params.id);
+    if (!x || req.query.k !== tzSig(x.id)) return res.status(404).send("Ссылка устарела — попросите менеджера отправить ТЗ ещё раз");
+    res.set("Cache-Control", "no-store"); res.set("X-Robots-Tag", "noindex");
+    res.send(`<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>ТЗ MIXIT — ${escH(x.family || "")}</title><style>
+      body{font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif;font-size:15px;line-height:1.55;color:#2B2228;max-width:820px;margin:20px auto;padding:0 18px}
+      h1{font-size:22px;margin:0 0 6px} h2{font-size:17px;margin:20px 0 6px;color:#C2306F} h3{font-size:15px;margin:14px 0 4px}
+      table{border-collapse:collapse;width:100%;margin:8px 0;font-size:14px} th,td{border:1px solid #E7D3DC;padding:6px 8px;vertical-align:top;text-align:left} th{background:#FCE4EF}
+      .meta{color:#8A7B83;font-size:13px;margin-bottom:14px;border-bottom:1px solid #F1E1E8;padding-bottom:10px}</style></head><body>
+      <div class="meta">MIXIT KZ · техническое задание · ${escH(x.product || x.family || "")}</div>${tzMd(x.text)}</body></html>`);
+  });
+  app.post("/api/coord/send-tz", requireAuth, async (req, res) => {
+    if (!staff(req, res)) return;
+    try {
+      const b = req.body || {}, st = getState();
+      const d = (st.microInfluencerDeals || []).find((x) => x.id === +b.dealId); if (!d) return res.status(404).json({ error: "Выберите интеграцию блогера" });
+      const x = (st.tzTexts || []).find((t) => t.id === String(b.tzId || "")); if (!x) return res.status(404).json({ error: "ТЗ не найдено" });
+      const base = `${req.headers["x-forwarded-proto"] || req.protocol}://${req.get("host")}`;
+      const link = `${base}/tz/${encodeURIComponent(x.id)}?k=${tzSig(x.id)}`;
+      const text = String(b.text || "").trim() || `Добрый день! Отправляем техническое задание${x.family ? " — " + x.family : ""}. Посмотрите, пожалуйста, и подтвердите 🙏`;
+      const via = await sendToBlogger({ phone: d.phone, dealId: d.id, text: `${text}\n${link}` }); // ссылкой (страница ТЗ — не файл)
+      const now = new Date().toISOString();
+      d.tz = x.hook || d.tz; d.tzBaseId = x.id; d.tzSentAt = now; d.tzSentBy = (req.session && req.session.name) || "";
+      const r = IB()[waNumber(d.phone)]; if (r) { r.tzDoneAt = now; r.tzDoneBy = d.tzSentBy; }
+      persist(); res.json({ ok: true, via, link });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
   app.get("/api/chatapp/status", requireAuth, async (req, res) => { try { res.json(Object.assign({ configured: chatapp.configured(), managers: chatappManagers() }, req.query.fresh ? await chatapp.check() : chatapp.status() || {})); } catch (e) { res.status(500).json({ error: e.message }); } });
   async function wazzupSend(body) {
     const m = body && !body.templateId ? chatappFor(body.chatId) : null;

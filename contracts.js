@@ -83,18 +83,19 @@ function setParagraph(doc, anchor, text) {
 function applyFormat(doc, fmt, p, count) {
   if (fmt === 'reels_tt' || !FORMATS[fmt]) return doc;
   const places = fmt === 'tiktok' ? `в социальной сети TikTok: ${p.tiktok} (далее - “Площадка”)` : `в социальной сети Instagram: ${p.instagram} (далее - “Площадка”)`;
-  const unit = FORMATS[fmt].unit;
+  let unit = FORMATS[fmt].unit;
+  if (fmt === 'stories_reels' && p.stories > 1) unit = unit.replace('блок сторис', `${p.stories} (${COUNT_WORDS[p.stories] || p.stories}) блока сторис`);
   doc = setParagraph(doc, 'принимает на себя обязательства по созданию и размещению', `Исполнитель принимает на себя обязательства по созданию и размещению рекламных материалов бренда «MIXIT» (МИКСИТ) на принадлежащей Исполнителю странице ${places} в составе: ${count} ${unit}.`);
   doc = setParagraph(doc, 'обязуется создать и разместить', `1.1. В рамках настоящего договора Исполнитель обязуется создать и разместить ${count} ${unit} в течение 1 (одного) календарного месяца с даты подписания настоящего договора в соответствии с согласованным графиком публикаций:`);
   const bullets = { reels: [`—  ${count} видеоролика в формате Reels (Instagram) с активной ссылкой на продукт Заказчика;`, null], tiktok: [null, `—  ${count} видеоролика в TikTok с активной ссылкой на продукт Заказчика.`],
     stories: [`—  ${count} блока сторис в Instagram с активной ссылкой-стикером на продукт Заказчика.`, null],
-    stories_reels: [`—  ${count} видеоролика в формате Reels (Instagram) с активной ссылкой на продукт Заказчика;`, `—  блок сторис в Instagram с активной ссылкой-стикером на продукт Заказчика.`] }[fmt];
+    stories_reels: [`—  ${count} видеоролика в формате Reels (Instagram) с активной ссылкой на продукт Заказчика;`, `—  ${p.stories > 1 ? `${p.stories} (${COUNT_WORDS[p.stories] || p.stories}) блока сторис` : 'блок сторис'} в Instagram с активной ссылкой-стикером на продукт Заказчика.`] }[fmt];
   doc = setParagraph(doc, 'в формате Reels (Instagram) с активной ссылкой', bullets[0]);
   doc = setParagraph(doc, 'в TikTok с активной ссылкой', bullets[1]);
   return doc;
 }
 
-function createContracts({ getState, env = process.env, dataDir }) {
+function createContracts({ getState, env = process.env, dataDir, persist = () => {} }) {
   const templatePath = path.join(dataDir, 'contract-template.docx');
   const customer = () => { try { const c = JSON.parse(env.CONTRACT_CUSTOMER_JSON || '{}'); return c && typeof c === 'object' ? c : {}; } catch { return {}; } };
   function prepare(d, body) {
@@ -110,7 +111,7 @@ function createContracts({ getState, env = process.env, dataDir }) {
     const date = /^\d{4}-\d{2}-\d{2}$/.test(String(body.date || '')) ? body.date : new Date().toISOString().slice(0, 10);
     const number = String(body.number || '').trim().slice(0, 40) || `${d.id}-${date.slice(5, 7)}-${date.slice(0, 4)}`;
     const ig = String(d.instagramAccount || '').trim(), tt = String(d.tiktokAccount || '').trim();
-    return { r, c, amount, videos, format, date, number, city: String(body.city || c.city || 'Астана').slice(0, 60),
+    return { r, c, amount, videos, format, date, number, stories: Math.max(0, Math.min(20, Math.round(Number(body.stories) || 0))), city: String(body.city || c.city || 'Астана').slice(0, 60),
       instagram: ig || '—', tiktok: tt ? (/^https?:/.test(tt) ? tt : 'https://www.tiktok.com/@' + tt.replace(/^@/, '')) : '—' };
   }
   const safe = s => s.replace(/[\\/:*?"<>|]/g, '_');
@@ -168,6 +169,62 @@ function createContracts({ getState, env = process.env, dataDir }) {
     app.get('/api/contracts/template', requireAuth, (req, res) => { let at = null; try { at = fs.statSync(templatePath).mtime.toISOString(); } catch {} res.json({ uploaded: !!at, updatedAt: at }); });
     app.post('/api/contracts/template', requireAuth, staff, (req, res, next) => up(req, res, e => e ? res.status(400).json({ error: 'Файл до 5 МБ' }) : next()), (req, res) => {
       try { if (!req.file || !/\.docx$/i.test(req.file.originalname)) throw fail(400, 'Нужен файл .docx'); res.json(saveTemplate(req.file.buffer)); } catch (e) { res.status(e.status || 500).json({ error: e.status ? e.message : 'Не удалось сохранить шаблон' }); } });
+    // ---------- 24.11.2026 Нина: вкладка «Договоры» ----------
+    // Вставили сообщение блогера с реквизитами, выбрали соцсети, сколько видео / сторис и сумму → договор по шаблону.
+    // Номер — по дню: первый за день 01.ДД-ММ-ГГГГ, следующий 02.… Договор фиксируется (тимлид видит), его можно скачать и отправить блогеру.
+    const crypto = require('crypto');
+    const LINK_KEY = crypto.createHash('sha256').update('bb-doc-link|' + (env.SESSION_SECRET || [env.MANAGER_PASSWORD, env.MARKETER_PASSWORD, env.ANNA_PASSWORD].filter(Boolean).join('|') || 'barter-box-fallback-key')).digest();
+    const sig = (id) => crypto.createHmac('sha256', LINK_KEY).update('c' + id).digest('hex').slice(0, 24);
+    const store = () => { const st = getState(); if (!Array.isArray(st.contractsLog)) st.contractsLog = []; return st.contractsLog; };
+    const pad = (n) => String(n).padStart(2, '0');
+    const fmtOf = (c) => { const v = c.videos, s2 = c.stories; if (v > 0 && s2 > 0) return 'stories_reels'; if (s2 > 0) return 'stories'; if (c.useIg && c.useTt) return 'reels_tt'; if (c.useTt) return 'tiktok'; return 'reels'; };
+    const docOf = (c) => { const f = fmtOf(c); return contract({ id: c.id, ipRequisites: c.requisites, instagramAccount: c.useIg ? c.instagram : '', tiktokAccount: c.useTt ? c.tiktok : '', cost: c.amount },
+      { amount: c.amount, videos: f === 'stories' ? c.stories : c.videos, stories: c.stories, format: f, date: c.date, number: c.number, city: c.city }); };
+    const cView = (c) => ({ id: c.id, number: c.number, date: c.date, blogger: c.blogger, manager: c.manager, createdBy: c.createdBy, createdAt: c.createdAt, amount: c.amount, videos: c.videos, stories: c.stories,
+      platforms: [c.useIg ? 'Instagram' : '', c.useTt ? 'TikTok' : ''].filter(Boolean).join(' + '), format: FORMATS[fmtOf(c)].label, ipName: (c.requisites || {}).name || '', dealId: c.dealId || null, sentAt: c.sentAt || null, sentVia: c.sentVia || '', cancelled: !!c.cancelled });
+    const visible = (req) => { const me = req.session && req.session.name; const sc = req.app.locals.bbScope ? req.app.locals.bbScope(req) : () => true; return (c) => c.createdBy === me || sc({ responsible: c.manager }); };
+    const findC = (req) => { const c = store().find((x) => x.id === +req.params.id); if (!c || !visible(req)(c)) throw fail(404, 'Договор не найден'); return c; };
+    app.get('/api/contracts/list', requireAuth, staff, (req, res) => { const v = visible(req); res.json({ items: store().filter(v).slice().reverse().slice(0, 500).map(cView) }); });
+    app.post('/api/contracts/new', requireAuth, staff, (req, res) => {
+      try {
+        const b = req.body || {}, st = getState(); const R = b.requisites || {};
+        const requisites = {}; for (const k of ['name', 'iin', 'head', 'address', 'iban', 'bank', 'bik', 'kbe', 'phone', 'email']) requisites[k] = String(R[k] || '').trim().slice(0, 300);
+        const miss = REQ.filter(([k]) => !requisites[k]).map(([, l]) => l); if (miss.length) throw fail(400, 'Заполните реквизиты ИП: ' + miss.join(', '));
+        const useIg = !!b.useIg, useTt = !!b.useTt; if (!useIg && !useTt) throw fail(400, 'Отметьте соцсети: Instagram и/или TikTok');
+        const videos = Math.max(0, Math.min(20, Math.round(Number(b.videos) || 0))), stories = Math.max(0, Math.min(20, Math.round(Number(b.stories) || 0)));
+        if (!videos && !stories) throw fail(400, 'Укажите, сколько видео или сторис');
+        if (stories && !useIg) throw fail(400, 'Сторис — только в Instagram: отметьте Instagram');
+        const amount = Math.round(Number(String(b.amount || '').replace(/\s/g, '')) || 0); if (!(amount > 0)) throw fail(400, 'Укажите сумму');
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(String(b.date || '')) ? b.date : new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10);
+        const deal = b.dealId ? (st.microInfluencerDeals || []).find((d) => d.id === +b.dealId) : null;
+        const nick = String(b.blogger || '').replace(/^@/, '').trim().slice(0, 80);
+        const all = store(); const seq = all.filter((x) => x.date === date).length + 1;
+        const c = { id: (all.reduce((m, x) => Math.max(m, x.id), 0) || 0) + 1, number: `${pad(seq)}.${date.slice(8, 10)}-${date.slice(5, 7)}-${date.slice(0, 4)}`, date, city: String(b.city || '').trim().slice(0, 60) || undefined,
+          blogger: nick ? '@' + nick : '', dealId: deal ? deal.id : null, manager: (deal && deal.responsible) || req.session.name || '', createdBy: req.session.name || '', createdAt: new Date().toISOString(),
+          requisites, useIg, useTt, instagram: String(b.instagram || '').trim() || (nick ? `https://www.instagram.com/${nick}/` : ''), tiktok: String(b.tiktok || '').trim() || (nick ? `https://www.tiktok.com/@${nick}` : ''),
+          videos, stories, amount, source: String(b.source || '').slice(0, 4000) };
+        docOf(c); // проверить, что договор собирается, до записи номера
+        all.push(c);
+        if (deal) { deal.contractNumber = c.number; deal.contractId = c.id; if (!deal.ipRequisites || !deal.ipRequisites.iban) deal.ipRequisites = Object.assign({}, requisites); }
+        persist(); res.json(cView(c));
+      } catch (e) { res.status(e.status || 500).json({ error: e.status ? e.message : 'Не удалось собрать договор' }); }
+    });
+    app.get('/api/contracts/:id/invoice', requireAuth, staff, (req, res) => { try { const c = findC(req), f = fmtOf(c); send(res, invoice({ id: c.id, ipRequisites: c.requisites, instagramAccount: c.instagram, tiktokAccount: c.tiktok, cost: c.amount }, { amount: c.amount, videos: f === 'stories' ? c.stories : c.videos, stories: c.stories, format: f, date: c.date, number: c.number })); } catch (e) { res.status(e.status || 500).json({ error: e.status ? e.message : 'Не удалось собрать счёт' }); } });
+    app.get('/api/contracts/:id/docx', requireAuth, staff, (req, res) => { try { send(res, docOf(findC(req))); } catch (e) { res.status(e.status || 500).json({ error: e.status ? e.message : 'Не удалось собрать договор' }); } });
+    app.get('/c/:id/:sig/:name', (req, res) => { const c = store().find((x) => x.id === +req.params.id); if (!c || c.cancelled || req.params.sig !== sig(c.id)) return res.status(404).send('Ссылка недействительна'); try { send(res, docOf(c)); } catch (e) { res.status(500).send('Не удалось собрать договор'); } });
+    app.post('/api/contracts/:id/send', requireAuth, staff, async (req, res) => {
+      try {
+        const c = findC(req); if (c.cancelled) throw fail(400, 'Договор отменён');
+        const st = getState(); const deal = c.dealId ? (st.microInfluencerDeals || []).find((d) => d.id === c.dealId) : null;
+        const phone = String((req.body && req.body.phone) || (deal && deal.phone) || '').trim(); if (!phone) throw fail(400, 'Нет телефона блогера — выберите интеграцию или впишите номер');
+        if (!req.app.locals.bbSendToBlogger) throw fail(503, 'Отправка в WhatsApp не настроена');
+        const out = docOf(c), base = `${req.headers['x-forwarded-proto'] || req.protocol}://${req.get('host')}`;
+        const url = `${base}/c/${c.id}/${sig(c.id)}/${encodeURIComponent(out.filename)}`;
+        const via = await req.app.locals.bbSendToBlogger({ phone, dealId: c.dealId, text: `Добрый день! Направляем договор № ${c.number} — проверьте, пожалуйста, и подпишите 🙏`, fileUrl: url, fileName: out.filename });
+        c.sentAt = new Date().toISOString(); c.sentVia = String(via || ''); c.sentBy = req.session.name || ''; persist(); res.json(cView(c));
+      } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+    });
+    app.post('/api/contracts/:id/cancel', requireAuth, staff, (req, res) => { try { const c = findC(req); c.cancelled = true; c.cancelledBy = req.session.name || ''; persist(); res.json(cView(c)); } catch (e) { res.status(e.status || 500).json({ error: e.message }); } });
     app.post('/api/micro-influencer-deals/:id/documents/:kind', requireAuth, staff, (req, res) => {
       try {
         const d = (getState().microInfluencerDeals || []).find(x => x.id === +req.params.id);
