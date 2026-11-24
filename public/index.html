@@ -3685,7 +3685,7 @@ function tabsForRole(){
     : [base[0],{id:"desk",label:"Рабочий стол"},{id:"crmBloggers",label:"Блогеры"},...base.slice(1)];
   // 23.11.2026: Товары (ШК и себестоимость) — только Нина и Сая; Оплаты и Доставки — у всех (менеджер видит только свои).
   const extra = UI.role==="marketer" ? [...(lead ? [{id:"control",label:"Контроль"}] : []), ...(crmIsLead() ? [{id:"crmProducts",label:"Товары"}] : []), ...(lead ? [{id:"publications",label:"Публикации"},{id:"report",label:"Сводный отчёт"}] : [])] : [];
-  return [...main, ...extra, ...(UI.role==="marketer" ? [{id:"crmPayments", label:"Оплаты"}, {id:"deliveryReq", label:"Доставки"}] : [])];
+  return [...main, ...extra, ...(UI.role==="marketer" ? [{id:"crmPayments", label:"Оплаты"}, {id:"deliveryReq", label:"Доставки"}, {id:"contracts", label:"Договоры"}] : [])];
 }
 function roleLabel(){
   const base = UI.role==="marketer" ? "📊 Маркетолог" : "👤 Менеджер / логист";
@@ -3758,7 +3758,7 @@ function renderDeskTab(){
     : (lastRenderedDeskTab===UI.tab ? Array.from(main.querySelectorAll(".table-wrap")).map(el=>el.scrollLeft) : []);
   pendingTableScroll = null;
   lastRenderedDeskTab = UI.tab;
-  main.classList.toggle("bb-wide", ["crmBloggers","crmPayments","deliveryReq"].includes(UI.tab)); // 24.11.2026: во всю ширину, как старая CRM
+  main.classList.toggle("bb-wide", ["crmBloggers","crmPayments","deliveryReq","contracts"].includes(UI.tab)); // 24.11.2026: во всю ширину, как старая CRM
   if(UI.tab==="dashboard") main.innerHTML = UI.role==="marketer" ? tplMarketerDashboard() : tplDashboard();
   else if(UI.tab==="campaigns") main.innerHTML = tplCampaigns();
   else if(UI.tab==="deliveries") main.innerHTML = tplDeliveries();
@@ -3776,6 +3776,7 @@ function renderDeskTab(){
   else if(UI.tab==="desk") main.innerHTML = tplDesk();
   else if(UI.tab==="tzBase") main.innerHTML = tplTzBase();
   else if(UI.tab==="deliveryReq") main.innerHTML = tplDeliveryReq();
+  else if(UI.tab==="contracts") main.innerHTML = tplContracts();
   else if(UI.tab==="control") main.innerHTML = tplControl();
   wireDeskTab();
   if(scrollPositions.length){
@@ -8835,7 +8836,7 @@ function modalMicroDeal(existing, prefill){
     <div id="mm-problem-warn">${microProblemWarning(d.blogerName, isEdit ? existing.id : null)}</div>
     <div id="mm-history">${microBloggerHistoryHtml(d.blogerName, isEdit ? existing.id : null)}</div>
     <div id="mm-ip-banner">${microIpBannerHtml(d)}</div>
-    ${microIpDocsHtml(d, isEdit)}
+    <div class="login-hint" style="margin:4px 0 10px">Договор и счёт для ИП — во вкладке <a href="#" onclick="closeModal();UI.tab='contracts';render();return false">«Договоры»</a>.</div>
     ${isEdit ? videoStageBlock(existing) : ""}
     <div class="mm-sec">Блогер</div>
     <div class="form-row">
@@ -9743,7 +9744,7 @@ function modalMicroCard(d){
           ${d.linkAuto ? `<div class="pv-note" style="margin-top:8px">Ссылку нашла система сама${d.linkAuto.confirmedBy?" · подтвердила "+escapeHtml(d.linkAuto.confirmedBy):""} — проверьте, что это тот ролик.</div>` : ""}
           <div class="mut" style="font-size:11.5px;margin-top:6px">По ссылке статус станет «опубликовано», дата выхода — сегодня${d.publishDate?" · вышло "+ddmmStr(d.publishDate):""}. Охват — ${microDealFactReach(d) ? fmtNum(microDealFactReach(d)) : "соберётся по ссылке"}.</div>`)}
         ${UI.readOnly ? "" : card("Оплата", `${(()=>{ const pmv = d.paymentMethod || (ip ? "ИП" : "Наличные"); return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px"><span class="pv-lbl">Как платим</span><button type="button" class="pv-chip mc-pm ${/налич/i.test(pmv)?"on":""}" data-v="Наличные">ИИН / Kaspi</button><button type="button" class="pv-chip mc-pm ${/^ип/i.test(pmv)?"on":""}" data-v="ИП">ИП</button><span class="mut" style="font-size:11.5px">сохраняется сразу</span></div><input type="hidden" id="mm-payment-method" value="${escapeHtml(pmv)}">`; })()}
-          <div id="mc-ipdocs" style="${/^ип/i.test(d.paymentMethod || (ip ? "ИП" : "")) ? "" : "display:none"}">${microIpDocsHtml(d, true)}</div>
+          <div id="mc-ipdocs" class="pv-note" style="margin-top:6px;${/^ип/i.test(d.paymentMethod || (ip ? "ИП" : "")) ? "" : "display:none"}">Договор и счёт для ИП — во вкладке <a href="#" onclick="closeModal();UI.tab='contracts';render();return false">«Договоры»</a>.</div>
           <div class="pv-note" style="margin-top:6px">Подать на оплату и на доставку — во вкладке «Блогеры» (💳 📦 в строке блогера), в «Оплатах» и «Доставках»: вводите ник — интеграции и прошлые реквизиты подтянутся сами.</div>
           ${ip ? `<div class="pv-note" style="margin-top:8px">${(()=>{ const ipDeals = all.filter(x=> microIsIp(x) || ip), left = ipDeals.filter(x=> !microDealPublished(x)); return left.length ? `ИП: АВР и ЭСФ запросим, когда выйдут все видео по договору — осталось ${left.length}.` : (ipDeals.every(x=>x.avrReceived) ? "АВР и ЭСФ получены." : "Все видео вышли — запросите у блогера АВР и ЭСФ."); })()}</div>` : ""}`, `<span class="pv-st ${d.paymentStatus==="оплачено"?"s-ok":d.paymentStatus==="к оплате"?"s-a":"s-w"}">${escapeHtml(d.paymentStatus||"не оплачено")}</span>`)}
       </div>
@@ -10041,7 +10042,8 @@ function modalChats(phone){
     <div style="display:flex;flex-direction:column;min-height:0;background:#FBF6F8">
       <div id="ch-head" style="padding:10px 14px;border-bottom:1px solid #F3DDE7;min-height:44px;display:flex;justify-content:space-between;align-items:center;gap:8px"><span class="mut">Выберите диалог слева</span></div>
       <div id="ch-msgs" style="flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:8px;font-size:13px"></div>
-      <div style="padding:10px;border-top:1px solid #F3DDE7;display:flex;gap:8px;background:#fff"><textarea id="ch-in" class="pv-inp" rows="2" style="flex:1;height:auto;padding:8px 10px;resize:none" placeholder="Сообщение… Enter — отправить, Shift+Enter — новая строка" disabled></textarea><button class="btn btn-primary" id="ch-send" disabled>Отправить</button></div>
+      <div id="ch-quick" style="padding:6px 10px 0;border-top:1px solid #F3DDE7;background:#fff;display:flex;gap:5px;flex-wrap:wrap">${CHAT_PHRASES.map(([t],i)=>`<button type="button" class="pv-chip ch-ph" data-i="${i}" style="height:22px;font-size:11px" title="${escapeHtml(CHAT_PHRASES[i][1])}">${escapeHtml(t)}</button>`).join("")}</div>
+      <div style="padding:10px;display:flex;gap:8px;background:#fff"><textarea id="ch-in" class="pv-inp" rows="2" style="flex:1;height:auto;padding:8px 10px;resize:none" placeholder="Сообщение… Enter — отправить, Shift+Enter — новая строка" disabled></textarea><button class="btn btn-primary" id="ch-send" disabled>Отправить</button></div>
     </div></div>`);
   { const ms = document.querySelectorAll(".modal-back .modal"), m = ms[ms.length-1]; if(m){ m.classList.add("modal-wide"); m.style.setProperty("max-width","1100px","important"); m.style.width="min(1100px,96vw)"; } }
   const list = document.getElementById("ch-list"), q = document.getElementById("ch-q"), msgs = document.getElementById("ch-msgs"), inp = document.getElementById("ch-in"), send = document.getElementById("ch-send"), head = document.getElementById("ch-head");
@@ -10072,6 +10074,9 @@ function modalChats(phone){
     try{ await withBusy(send, ()=> apiFetch('/api/coord/deal/'+r0.dealId+'/send-now',{method:'POST', headers:jsonHeaders, body:JSON.stringify({text:txt})})); inp.value = ""; r0.waiting = false; lastSig = ""; loadMsgs(); paintList(); }
     catch(e){ toast("Не отправилось: "+e.message, true); } };
   send.onclick = doSend;
+  document.querySelectorAll(".ch-ph").forEach(b=> b.onclick = ()=>{ if(inp.disabled){ toast("Сначала выберите диалог слева", true); return; } const r0 = items.find(x=> x.phone===CHATS.phone), d = r0 && deal(r0.dealId);
+    let t = CHAT_PHRASES[+b.dataset.i][1].replace("{имя}", UI.actorName||"").replace("{дата}", d && d.plannedDate ? ddmmStr(d.plannedDate) : "{дата}");
+    inp.value = inp.value.trim() ? inp.value.trim()+"\n"+t : t; inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); });
   inp.onkeydown = e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); doSend(); } };
   q.oninput = paintList;
   clearInterval(CHATS.timer);
@@ -10237,9 +10242,9 @@ function tplTzApproved(){
   const q = String(TZB.q||"").toLowerCase();
   const list = (TZT||[]).filter(x=> !q || (x.hook+" "+x.family+" "+x.product).toLowerCase().includes(q)).sort((a,b)=> String(a.family).localeCompare(String(b.family),"ru") || String(a.hook).localeCompare(String(b.hook),"ru"));
   return `<div class="panel" style="padding:0;margin-bottom:14px;overflow:hidden">
-    <div style="padding:14px 16px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><b style="font-size:15px">Утверждённые ТЗ · ${list.length}</b> <span class="pv-st s-blue">Базовые</span> <span class="mut" style="font-size:12px">шаблоны из Blogery Audit — откройте или скачайте PDF и отправьте блогеру</span>${crmIsLead() ? `<span style="margin-left:auto"><button class="btn btn-sm" id="tzt-import">Загрузить файл ТЗ</button><input type="file" id="tzt-file" accept=".json,application/json" style="display:none"></span>` : ""}</div>
+    <div style="padding:14px 16px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><b style="font-size:15px">Утверждённые ТЗ · ${list.length}</b> <span class="pv-st s-blue">Базовые</span> <span class="mut" style="font-size:12px">шаблоны из Blogery Audit — откройте, скачайте PDF или «Отправить блогеру»: ТЗ уйдёт в WhatsApp и запишется в интеграцию</span>${crmIsLead() ? `<span style="margin-left:auto"><button class="btn btn-sm" id="tzt-import">Загрузить файл ТЗ</button><input type="file" id="tzt-file" accept=".json,application/json" style="display:none"></span>` : ""}</div>
     ${list.length ? `<table><thead><tr><th>ТЗ</th><th>Товар</th><th>Статус</th><th>Утверждено</th><th></th></tr></thead><tbody>${list.map(x=> `<tr><td><b>«${escapeHtml(x.hook||"")}»</b>${x.angle?`<div class="mut" style="font-size:11.5px">${escapeHtml(x.angle)}</div>`:""}</td><td>${escapeHtml(x.family||"")}</td><td><span class="pv-st s-ok">Утверждено</span> <span class="pv-st s-blue">Базовое</span></td><td class="mut">${escapeHtml(String(x.approved||"").slice(0,10).split("-").reverse().join("."))}</td>
-      <td style="white-space:nowrap;text-align:right"><button class="btn btn-sm tzt-open" data-id="${escapeHtml(x.id)}">Открыть</button><button class="btn btn-sm btn-primary tzt-pdf" data-id="${escapeHtml(x.id)}">Скачать PDF</button></td></tr>`).join("")}</tbody></table>`
+      <td style="white-space:nowrap;text-align:right"><button class="btn btn-sm tzt-open" data-id="${escapeHtml(x.id)}">Открыть</button><button class="btn btn-sm btn-primary tzt-pdf" data-id="${escapeHtml(x.id)}">Скачать PDF</button>${UI.readOnly?"":` <button class="btn btn-sm tzt-send" data-id="${escapeHtml(x.id)}" style="background:#FFF3C8;border-color:#F1D97A">Отправить блогеру</button>`}</td></tr>`).join("")}</tbody></table>`
       : `<div class="mut" style="padding:0 16px 14px">${TZT && TZT.length ? "Ничего не найдено" : (crmIsLead() ? "Файл ещё не загружен — нажмите «Загрузить файл ТЗ» и выберите briefs_clean.json из Blogery Audit" : "Базовые ТЗ ещё не загружены")}</div>`}
   </div>`;
 }
@@ -10247,6 +10252,7 @@ function wireTzBase(){
   document.querySelectorAll(".tzb-cancel").forEach(b=> b.onclick = async ()=>{ if(!confirm("Удалить запрос ТЗ? Используйте, если он подан по ошибке.")) return; try{ await withBusy(b, ()=> apiFetch("/api/automation/brief-request-cancel/"+encodeURIComponent(b.dataset.rid), {method:"POST", headers:jsonHeaders, body:"{}"})); toast("Запрос удалён"); TZB.data = null; render(); }catch(e){ toast(e.message, true); } });
   document.querySelectorAll(".tzt-open").forEach(b=> b.onclick = ()=> tzTextOpen(b.dataset.id, false));
   document.querySelectorAll(".tzt-pdf").forEach(b=> b.onclick = ()=> tzTextOpen(b.dataset.id, true));
+  document.querySelectorAll(".tzt-send").forEach(b=> b.onclick = ()=> modalSendTz(b.dataset.id));
   const ti = document.getElementById("tzt-import"), tf = document.getElementById("tzt-file");
   if(ti && tf){ ti.onclick = ()=> tf.click(); tf.onchange = async ()=>{ const f = tf.files[0]; if(!f) return; const fd = new FormData(); fd.append("file", f);
     try{ const r = await withBusy(ti, ()=> apiFetch("/api/tz-texts/import", {method:"POST", body:fd})); toast("Загружено утверждённых ТЗ: "+r.count); TZT = null; render(); }catch(e){ toast(e.message, true); } tf.value = ""; }; }
@@ -10642,6 +10648,132 @@ function wireDesk(){
   document.querySelectorAll(".desk-tz").forEach(sel=> sel.onchange = ()=>{ const [g,it] = sel.value.split("\u0001"); if(!it) return; done(+sel.dataset.id, {tz:it, tzGroup:g}, "ТЗ выбрано: " + it); });
 }
 
+// ===== 24.11.2026 Нина: вкладка «Договоры» — всё в одном месте =====
+// Вставили сообщение блогера с реквизитами → выбрали соцсети, сколько видео / сторис, сумму → «Сохранить договор».
+// Номер даётся сам по дню (01.ДД-ММ-ГГГГ, 02.…), договор фиксируется — тимлид видит. Дальше: скачать Word, счёт или отправить блогеру.
+const CT = { f:null, list:null, loading:false, last:null };
+function ctBlank(){ return { nick:"", dealId:"", src:"", req:{}, useIg:true, useTt:true, ig:"", tt:"", videos:1, stories:0, amount:"", date:todayStr(), phone:"" }; }
+async function ctLoad(){ CT.loading = true; try{ CT.list = (await apiFetch("/api/contracts/list"+(UI.canExport?"?all=1":""))).items || []; }catch(e){ CT.list = []; CT.err = e.message; } CT.loading = false; if(UI.tab==="contracts") render(); }
+function tplContracts(){
+  if(!CT.f) CT.f = ctBlank();
+  if(CT.list===null && !CT.loading) setTimeout(ctLoad, 0);
+  const f = CT.f, deals = f.nick ? bbDealsFor(f.nick) : [], list = CT.list || [];
+  const inp = (id, v, ph, type)=> `<input id="${id}" class="pv-inp" ${type?`type="${type}"`:""} value="${escapeHtml(v==null?"":String(v))}" placeholder="${escapeHtml(ph||"")}" style="width:100%">`;
+  const fl = (t, html, span)=> `<label style="display:flex;flex-direction:column;gap:4px;${span?"grid-column:1/-1":""}"><span class="pv-lbl">${t}</span>${html}</label>`;
+  const filled = MICRO_IP_FIELDS.filter(([k])=> String(f.req[k]||"").trim()).length;
+  const fmtHint = f.videos>0 && f.stories>0 ? (f.useTt ? "Видео + сторис: договор оформится как Reels + сторис в Instagram (TikTok в такой связке шаблон не описывает)." : "Reels + сторис в Instagram.") : f.stories>0 ? "Только сторис в Instagram." : f.useIg && f.useTt ? "Видео с кросспостингом: Instagram Reels + TikTok." : f.useTt ? "Видео только в TikTok." : "Видео только в Instagram Reels.";
+  const L = CT.last;
+  return `
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+    <div><h1 style="margin:0;font-size:22px;font-weight:800">Договоры</h1><div class="mut" style="margin-top:3px">вставьте сообщение блогера с реквизитами — договор соберётся по шаблону MIXIT · номер по дню ставится сам</div></div>
+    ${crmIsLead() ? `<label class="btn" style="cursor:pointer">Загрузить шаблон (Word)<input type="file" id="ct-template" accept=".docx" style="display:none"></label>` : ""}
+  </div>
+  <div style="display:grid;grid-template-columns:minmax(0,560px) minmax(0,1fr);gap:16px;align-items:start">
+    <div class="panel" style="padding:16px 18px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        ${fl("Блогер", `<input id="ct-nick" class="pv-inp" list="ct-nicks" autocomplete="off" value="${escapeHtml(f.nick?"@"+f.nick:"")}" placeholder="@ник" style="width:100%"><datalist id="ct-nicks">${bbNickOptions().map(n=>`<option value="${escapeHtml(n)}">`).join("")}</datalist>`)}
+        ${fl("Интеграция <span class='mut' style='font-weight:400'>— необязательно</span>", `<select id="ct-deal" class="pv-inp" style="width:100%"><option value="">— без интеграции —</option>${deals.map(d=>`<option value="${d.id}" ${String(d.id)===String(f.dealId)?"selected":""}>${escapeHtml(bbDealLine(d).replace(/<[^>]+>/g,""))}</option>`).join("")}</select>`)}
+      </div>
+      ${bbSec("Сообщение блогера с реквизитами")}
+      <textarea id="ct-src" class="pv-inp" rows="4" style="width:100%;height:auto;padding:8px 10px" placeholder="Вставьте сюда сообщение блогера: ИП «…», ИИН, IBAN KZ…, банк, БИК, КБе, адрес, ФИО — поля ниже заполнятся сами">${escapeHtml(f.src||"")}</textarea>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px"><span class="mut" style="font-size:12px" id="ct-parse-msg">Реквизиты: заполнено ${filled} из ${MICRO_IP_FIELDS.length}</span><button class="btn btn-sm" id="ct-parse">Разобрать</button></div>
+      <details ${filled && filled < MICRO_IP_FIELDS.length ? "open" : ""} style="margin-top:6px"><summary style="cursor:pointer;font-size:12.5px;font-weight:700">Проверить и поправить реквизиты</summary>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">${MICRO_IP_FIELDS.map(([k,l])=> fl(l, inp("ct-r-"+k, f.req[k]||""))).join("")}</div></details>
+      ${bbSec("Где и сколько")}
+      <div style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 10px;align-items:center">
+        <label style="display:flex;gap:6px;align-items:center;font-weight:700;font-size:13px"><input type="checkbox" id="ct-ig" ${f.useIg?"checked":""}> Instagram</label>${inp("ct-ig-url", f.ig, "ссылка на Instagram")}
+        <label style="display:flex;gap:6px;align-items:center;font-weight:700;font-size:13px"><input type="checkbox" id="ct-tt" ${f.useTt?"checked":""}> TikTok</label>${inp("ct-tt-url", f.tt, "ссылка на TikTok")}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-top:10px">
+        ${fl("Видео", inp("ct-videos", f.videos, "0", "number"))}${fl("Сторис (блоков)", inp("ct-stories", f.stories, "0", "number"))}${fl("Сумма, ₸", inp("ct-amount", f.amount, "150000", "number"))}${fl("Дата", inp("ct-date", f.date, "", "date"))}
+      </div>
+      <div class="mut" style="font-size:12px;margin-top:6px">${escapeHtml(fmtHint)}</div>
+      <div class="modal-actions" style="margin-top:12px"><button class="btn" id="ct-reset">Очистить</button><button class="btn btn-primary" id="ct-save">Сохранить договор</button></div>
+      ${L ? `<div style="margin-top:12px;background:#E2F6EC;border:1px solid #BFE6CF;border-radius:12px;padding:10px 12px;font-size:13px"><b>Договор № ${escapeHtml(L.number)} сохранён</b> · ${escapeHtml(L.blogger||"")} · ${fmtNum(L.amount)} ₸
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn btn-sm btn-primary ct-dl" data-id="${L.id}">Скачать договор</button><button class="btn btn-sm ct-inv" data-id="${L.id}">Счёт на оплату</button><button class="btn btn-sm ct-send" data-id="${L.id}">Отправить блогеру</button></div></div>` : ""}
+    </div>
+    <div class="panel" style="padding:0;overflow:hidden">
+      <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:15px">Оформленные договоры · ${list.filter(c=>!c.cancelled).length}</b><span class="mut" style="font-size:12px">${UI.canExport?"все":"ваши"+(crmIsLeadName()?" и команды":"")}</span></div>
+      <div class="table-wrap" style="${CT.loading?"opacity:.55":""}"><table><thead><tr><th>№</th><th>Блогер · ИП</th><th>Что</th><th style="text-align:right">Сумма</th><th>Менеджер</th><th>Отправлен</th><th></th></tr></thead><tbody>
+        ${list.length ? list.map(c=>`<tr style="${c.cancelled?"opacity:.45;text-decoration:line-through":""}"><td><b>${escapeHtml(c.number)}</b><div class="mut" style="font-size:11px">${escapeHtml(ddmmStr(c.date))}</div></td>
+          <td>${c.dealId?`<a href="#" onclick="openMicroById(${c.dealId});return false" style="font-weight:800;color:#2B2228">${escapeHtml(c.blogger||"—")}</a>`:`<b>${escapeHtml(c.blogger||"—")}</b>`}<div class="mut" style="font-size:11px">ИП «${escapeHtml(c.ipName)}»</div></td>
+          <td style="font-size:12px">${escapeHtml(c.platforms)}<div class="mut">${c.videos?c.videos+" видео":""}${c.videos&&c.stories?" + ":""}${c.stories?c.stories+" сторис":""}</div></td>
+          <td style="text-align:right"><b>${fmtNum(c.amount)} ₸</b></td><td>${escapeHtml(c.manager||"")}</td>
+          <td style="font-size:12px">${c.sentAt?`<span style="color:#1E6B47;font-weight:700">✓ ${escapeHtml(ddmmStr(String(c.sentAt).slice(0,10)))}</span>`:`<span class="mut">нет</span>`}</td>
+          <td style="white-space:nowrap;text-align:right">${c.cancelled?"отменён":`<button class="btn btn-sm ct-dl" data-id="${c.id}" title="Скачать договор (Word)">⬇</button> <button class="btn btn-sm ct-inv" data-id="${c.id}" title="Счёт на оплату (Word)">Счёт</button> <button class="btn btn-sm ct-send" data-id="${c.id}">${c.sentAt?"Ещё раз":"Отправить"}</button> <button class="btn btn-sm ct-cancel" data-id="${c.id}" title="Отменить (номер не переиспользуется)" style="color:#C42B45;padding:0 9px">✕</button>`}</td></tr>`).join("")
+          : `<tr><td colspan="7" class="empty">${CT.loading?"Загружаю…":"Договоров пока нет"}</td></tr>`}
+      </tbody></table></div>
+    </div>
+  </div>`;
+}
+function wireContracts(){
+  const $ = id=> document.getElementById(id), f = CT.f;
+  const keep = ()=>{ f.src = $("ct-src").value; MICRO_IP_FIELDS.forEach(([k])=>{ const el = $("ct-r-"+k); if(el) f.req[k] = el.value.trim(); });
+    f.useIg = $("ct-ig").checked; f.useTt = $("ct-tt").checked; f.ig = $("ct-ig-url").value.trim(); f.tt = $("ct-tt-url").value.trim();
+    f.videos = Math.max(0, parseInt($("ct-videos").value,10)||0); f.stories = Math.max(0, parseInt($("ct-stories").value,10)||0); f.amount = $("ct-amount").value; f.date = $("ct-date").value || todayStr(); f.dealId = $("ct-deal").value; };
+  const rr = ()=>{ keep(); render(); };
+  const parse = ()=>{ keep(); const o = microParseRequisites(f.src); Object.assign(f.req, o); render(); const m = $("ct-parse-msg"); if(m){ const miss = MICRO_IP_FIELDS.filter(([k])=> ["name","iin","head","address","iban","bank","bik","kbe"].includes(k) && !String(f.req[k]||"").trim()).map(([,l])=>l); m.textContent = Object.keys(o).length ? ("Нашла: "+Object.keys(o).length+(miss.length?" · проверьте: "+miss.join(", "):" · всё на месте")) : "Не нашла реквизитов в тексте"; m.style.color = miss.length ? "var(--bad)" : "var(--ok,#1f8a4c)"; } };
+  $("ct-parse").onclick = parse; $("ct-src").addEventListener("paste", ()=> setTimeout(parse, 50));
+  $("ct-nick").onchange = ()=>{ keep(); f.nick = bbNickNorm($("ct-nick").value); const deals = f.nick ? bbDealsFor(f.nick) : []; const d = deals.find(x=> !microDealPublished(x)) || deals[0];
+    f.dealId = d ? String(d.id) : ""; f.ig = d && d.instagramAccount ? normalizeInstagramUrl(d.instagramAccount) : (f.nick ? "https://www.instagram.com/"+f.nick+"/" : "");
+    f.tt = d && d.tiktokAccount ? (/^https?:/.test(d.tiktokAccount) ? d.tiktokAccount : "https://www.tiktok.com/@"+String(d.tiktokAccount).replace(/^@/,"")) : (f.nick ? "https://www.tiktok.com/@"+f.nick : "");
+    if(d && d.ipRequisites) MICRO_IP_FIELDS.forEach(([k])=>{ if(!f.req[k] && d.ipRequisites[k]) f.req[k] = d.ipRequisites[k]; });
+    if(d && !f.amount && Number(d.cost)) f.amount = d.cost; render(); };
+  $("ct-deal").onchange = rr; ["ct-ig","ct-tt"].forEach(id=> $(id).onchange = rr); ["ct-videos","ct-stories"].forEach(id=> $(id).onchange = rr);
+  $("ct-reset").onclick = ()=>{ CT.f = ctBlank(); CT.last = null; render(); };
+  $("ct-save").onclick = async (e)=>{ keep();
+    try{ const c = await withBusy(e.target, ()=> apiFetch("/api/contracts/new", {method:"POST", headers:jsonHeaders, body:JSON.stringify({blogger:f.nick, dealId:f.dealId||null, requisites:f.req, useIg:f.useIg, useTt:f.useTt, instagram:f.ig, tiktok:f.tt, videos:f.videos, stories:f.stories, amount:f.amount, date:f.date, source:f.src})}));
+      CT.last = c; CT.f = ctBlank(); toast("Договор № "+c.number+" сохранён"); await ctLoad(); crmDownload("/api/contracts/"+c.id+"/docx", "Договор "+c.number+".docx"); }catch(err){ toast(err.message, true); } };
+  document.querySelectorAll(".ct-dl").forEach(b=> b.onclick = ()=>{ const c = (CT.list||[]).find(x=> x.id===+b.dataset.id) || CT.last; crmDownload("/api/contracts/"+b.dataset.id+"/docx", "Договор "+((c&&c.number)||"")+".docx"); });
+  document.querySelectorAll(".ct-inv").forEach(b=> b.onclick = ()=>{ const c = (CT.list||[]).find(x=> x.id===+b.dataset.id) || CT.last; crmDownload("/api/contracts/"+b.dataset.id+"/invoice", "Счёт "+((c&&c.number)||"")+".docx"); });
+  document.querySelectorAll(".ct-send").forEach(b=> b.onclick = async ()=>{ const c = (CT.list||[]).find(x=> x.id===+b.dataset.id) || CT.last; if(!c) return;
+    const d = c.dealId ? (DataManager.state.microInfluencerDeals||[]).find(x=> x.id===c.dealId) : null; let phone = d && d.phone;
+    if(!phone){ phone = prompt("Номер WhatsApp блогера (в интеграции его нет):", ""); if(!phone) return; }
+    if(!confirm(`Отправить блогеру ${c.blogger||""} договор № ${c.number} в WhatsApp?`)) return;
+    try{ await withBusy(b, ()=> apiFetch("/api/contracts/"+c.id+"/send", {method:"POST", headers:jsonHeaders, body:JSON.stringify({phone})})); toast("Договор отправлен блогеру ✓"); ctLoad(); }catch(err){ toast("Не отправилось: "+err.message, true); } });
+  document.querySelectorAll(".ct-cancel").forEach(b=> b.onclick = async ()=>{ if(!confirm("Отменить договор? Номер больше не будет использован.")) return; try{ await withBusy(b, ()=> apiFetch("/api/contracts/"+b.dataset.id+"/cancel", {method:"POST", headers:jsonHeaders, body:"{}"})); ctLoad(); }catch(err){ toast(err.message, true); } });
+  const tp = $("ct-template"); if(tp) tp.onchange = async ()=>{ const file = tp.files[0]; if(!file) return; const fd = new FormData(); fd.append("template", file); try{ await apiFetch("/api/contracts/template", {method:"POST", body:fd}); toast("Шаблон договора загружен"); }catch(err){ toast(err.message, true); } tp.value = ""; };
+}
+
+// 24.11.2026: базовое ТЗ → блогеру в WhatsApp (ссылкой), в интеграции фиксируется, какое ТЗ и когда ушло.
+function modalSendTz(tzId){
+  const x = (TZT||[]).find(t=> t.id===tzId); if(!x) return;
+  const S = { nick:"", dealId:null };
+  openModal(`<h3 style="margin:0 0 2px">📝 Отправить ТЗ блогеру</h3><div class="mut" style="font-size:12px;margin-bottom:8px">«${escapeHtml(x.hook||"")}» · ${escapeHtml(x.family||"")} — уйдёт ссылкой в WhatsApp с номера менеджера; в интеграции запишется, какое ТЗ отправлено.</div>
+    <div class="field"><label>Блогер</label><input id="st-nick" list="st-nicks" autocomplete="off" placeholder="начните вводить ник"><datalist id="st-nicks">${bbNickOptions().map(n=>`<option value="${escapeHtml(n)}">`).join("")}</datalist></div>
+    <div id="st-body"></div>`);
+  bbModalWidth(560);
+  const $ = id=> document.getElementById(id);
+  const paint = ()=>{ const box = $("st-body"); if(!S.nick){ box.innerHTML = ""; return; }
+    const deals = bbDealsFor(S.nick); if(!deals.length){ box.innerHTML = `<div style="font-size:12.5px;color:#9A6400;margin-top:6px">У блогера нет интеграции в Barter Box — номер и ТЗ записываются в неё. Заведите интеграцию.</div>`; return; }
+    if(!S.dealId || !deals.some(d=> d.id===S.dealId)) S.dealId = (deals.find(d=> !microDealPublished(d)) || deals[0]).id;
+    const d = deals.find(z=> z.id===S.dealId);
+    box.innerHTML = `<div class="field"><label>Интеграция</label><select id="st-deal">${deals.map(z=>`<option value="${z.id}" ${z.id===S.dealId?"selected":""}>${escapeHtml(bbDealLine(z).replace(/<[^>]+>/g,""))}</option>`).join("")}</select></div>
+      <div class="mut" style="font-size:12px">${d.phone ? "Номер: "+escapeHtml(d.phone) : `<span style="color:var(--bad)">В интеграции нет телефона — впишите его в карточку</span>`}${d.tz ? " · сейчас ТЗ: «"+escapeHtml(d.tz)+"»" : ""}</div>
+      <div class="field" style="margin-top:8px"><label>Текст сообщения</label><textarea id="st-text" rows="3" class="pv-inp" style="width:100%;height:auto;padding:8px 10px">Добрый день! Отправляем техническое задание${x.family?" — "+escapeHtml(x.family):""}. Посмотрите, пожалуйста, и подтвердите 🙏</textarea><div class="mut" style="font-size:11.5px">Ссылка на ТЗ добавится сама.</div></div>
+      <div class="modal-actions"><button class="btn" onclick="closeModal()">Отмена</button><button class="btn btn-primary" id="st-send" ${d.phone?"":"disabled"}>Отправить</button></div>`;
+    $("st-deal").onchange = ()=>{ S.dealId = +$("st-deal").value; paint(); };
+    $("st-send").onclick = async (e)=>{ try{ const r = await withBusy(e.target, ()=> apiFetch("/api/coord/send-tz", {method:"POST", headers:jsonHeaders, body:JSON.stringify({dealId:S.dealId, tzId:x.id, text:$("st-text").value})})); closeModal(); toast("ТЗ отправлено блогеру ✓ ("+(r.via||"")+")"); DataManager.refresh().then(()=> render()).catch(()=>{}); }catch(err){ toast("Не отправилось: "+err.message, true); } };
+  };
+  $("st-nick").onchange = ()=>{ S.nick = bbNickNorm($("st-nick").value); S.dealId = null; paint(); };
+}
+
+// 24.11.2026: готовые фразы в чате — клик вставляет текст, менеджер правит и отправляет.
+const CHAT_PHRASES = [
+  ["Приветствие", "Добрый день! Меня зовут {имя}, я менеджер MIXIT 💚 Хотим предложить вам сотрудничество — расскажу подробнее?"],
+  ["Условия", "Подскажите, пожалуйста, ваши условия: стоимость Reels, TikTok и блока сторис, а также свежую статистику охватов."],
+  ["ТЗ", "Отправляем техническое задание — посмотрите, пожалуйста, и подтвердите 🙏"],
+  ["На согласование", "Пришлите, пожалуйста, видео на согласование до публикации 🙌"],
+  ["Согласовано", "Видео согласовано ✅ Можно публиковать. После публикации пришлите, пожалуйста, ссылку."],
+  ["Дата выхода", "Напоминаем: публикация запланирована на {дата}. Пришлите ссылку после выхода, пожалуйста 🙌"],
+  ["Статистика", "Пришлите, пожалуйста, скрины статистики (просмотры, охват, клики) через 3 дня после публикации."],
+  ["Реквизиты", "Для оплаты пришлите, пожалуйста: ФИО, ИИН и номер Kaspi."],
+  ["Реквизиты ИП", "Для оплаты по ИП пришлите, пожалуйста, реквизиты ИП (ИИН, IBAN, банк, БИК, КБе, адрес) — подготовим договор."],
+  ["Товар отправлен", "Товар отправили 📦 Как получите — напишите, пожалуйста."],
+  ["Оплата", "Добрый день! Направили вам оплату 💚🙌"],
+  ["Спасибо", "Спасибо за сотрудничество! Будем рады работать снова 💚"],
+];
+
 /* =========================================================================
    9. ОБРАБОТЧИКИ ВКЛАДОК
    ========================================================================= */
@@ -10650,6 +10782,7 @@ function wireDeskTab(){
   if(UI.tab==="crmBloggers"){ wireCrmBloggers(); return; }
   if(UI.tab==="crmPayments"){ wireCrmPayments(); return; }
   if(UI.tab==="deliveryReq"){ wireDeliveryReq(); return; }
+  if(UI.tab==="contracts"){ wireContracts(); return; }
   if(UI.tab==="crmProducts"){ wireCrmProducts(); return; }
   if(UI.tab==="desk"){ wireDesk(); return; }
   if(UI.tab==="control"){ wireControl(); return; }
@@ -11922,7 +12055,7 @@ function startPolling(){
     try{
       await DataManager.refresh();
       setConnStatus(true);
-      if(UI.tab==="crmBloggers" || UI.tab==="crmPayments" || UI.tab==="crmProducts") return; // свои данные, не сбиваем поиск
+      if(UI.tab==="crmBloggers" || UI.tab==="crmPayments" || UI.tab==="crmProducts" || UI.tab==="contracts") return; // свои данные, не сбиваем поиск/ввод
       { const ae = document.activeElement; if(ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName) && ae.closest("#main")) return; }
       if(UI.role) render();
     }catch(e){
