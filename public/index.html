@@ -4425,7 +4425,7 @@ function vtBudgetHtml(st, rows){
         <div class="kpi"><div class="num" style="font-size:18px">${vtTg(ex.limit)}</div><div class="lbl">Лимит, ₸</div></div>
         <div class="kpi"><div class="num" style="font-size:18px">${vtTg(bought)}</div><div class="lbl">Куплено: ${exr.length} интеграций · ${Math.round(bought/ex.limit*100)}% лимита</div></div>
         <div class="kpi ok"><div class="num" style="font-size:18px">${vtTg(sum(done))}</div><div class="lbl">Реализовано: ${done.length} вышло</div></div>
-        <div class="kpi warn"><div class="num" style="font-size:18px">${vtTg(sum(rest))}</div><div class="lbl">Осталось реализовать: ${rest.length} · в ${VT_MON[mm-1].toLowerCase()} ${exr.filter(r=> outM(r)===M).length}, позже ${exr.filter(r=> outM(r)>M).length}, без даты ${exr.filter(r=> !outM(r)).length}</div></div>
+        <div class="kpi warn"><div class="num" style="font-size:18px">${vtTg(sum(rest))}</div><div class="lbl">Осталось реализовать: ${rest.length} · выход в ${VT_MON[mm-1].toLowerCase()} ${rest.filter(r=> outM(r)===M).length}, позже ${rest.filter(r=> outM(r)>M).length}, без даты ${rest.filter(r=> !outM(r)).length}</div></div>
         <div class="kpi ${ex.limit-bought<0?"bad":"ok"}"><div class="num" style="font-size:18px">${vtTg(ex.limit - bought)}</div><div class="lbl">Свободный остаток лимита, ₸</div></div>
       </div>
       <div style="display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:12px">
