@@ -662,6 +662,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const c = C();
     if (!c.paidAutoSince) { c.paidAutoSince = new Date().toISOString(); persist(); return; }
     const h = almatyHour(); if (h < 9 || h >= 22) return;
+    paidAutoBusy = true; try { await crmPaidSweep(); } catch (e) { console.error("Оплата из CRM → блогеру:", e.message); } finally { paidAutoBusy = false; }
     const since = Date.parse(c.paidAutoSince), all = getState().microInfluencerDeals || [];
     const due = all.filter((d) => d.paymentStatus === "оплачено" && d.paidAt && Date.parse(d.paidAt) >= since && !d.paidMsgSent && !d.paidSkip && !d.paidMsgNote && (d.paidMsgTries || 0) < 3);
     if (!due.length) return;
@@ -684,6 +685,36 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         await new Promise((r) => setTimeout(r, 1500));
       }
     } finally { paidAutoBusy = false; }
+  }
+  // 24.11.2026: оплата отмечена в Blogger CRM (без связи с интеграцией) → state.crmPaidQueue (crm-bloggers.js).
+  // Статус интеграции не трогаем; находим блогера по ID CRM / нику, номер — из его интеграций (иначе WhatsApp из CRM).
+  const nickKey = (v) => String(v || "").replace(/#.*$/, "").replace(/[?].*$/, "").replace(/\/+$/, "").split("/").pop().replace("@", "").trim().toLowerCase();
+  async function crmPaidSweep() {
+    const st = getState(), q = Array.isArray(st.crmPaidQueue) ? st.crmPaidQueue : [];
+    const todo = q.filter((e) => !e.done && (e.tries || 0) < 3);
+    if (!todo.length) return;
+    const all = st.microInfluencerDeals || [];
+    for (const e of todo.slice(0, 40)) {
+      const his = all.filter((d) => (e.bloggerId && String(d.crmBloggerId || "") === e.bloggerId) || (e.nicks.length && [d.blogerName, d.instagramAccount, d.tiktokAccount].some((v) => v && e.nicks.includes(nickKey(v)))));
+      const withPhone = his.filter((d) => waNumber(d.phone)).sort((a, b) => String(b.plannedDate || b.createdAt || "").localeCompare(String(a.plannedDate || a.createdAt || "")));
+      const deal = withPhone[0] || his[0] || null;
+      const target = withPhone[0] || { id: null, phone: e.wa, responsible: (deal && deal.responsible) || e.manager || "", blogerName: e.nicks[0] || "" };
+      const n = waNumber(target.phone);
+      if (!n) { e.done = new Date().toISOString(); e.note = "нет номера WhatsApp"; persist(); continue; }
+      const recent = all.find((d) => waNumber(d.phone) === n && [d.paidMsgSent, d.crmPaidMsgAt].some((t) => t && Date.now() - Date.parse(t) < 6 * H));
+      if (recent) { e.done = new Date().toISOString(); e.note = "уже отправляли сегодня"; if (deal) deal.crmPaidMsgAt = recent.crmPaidMsgAt || recent.paidMsgSent; persist(); continue; }
+      const ids = new Set(his.map((d) => d.id)), since = Date.parse(e.at) - 6 * H;
+      const w = C().log.filter((l) => l.dir === "in" && ids.has(l.dealId) && Date.parse(l.at) >= since && RE_PAIDMSG.test(String(l.text || ""))).pop();
+      if (w) { e.done = new Date().toISOString(); e.note = "блогер уже написал про оплату"; persist(); continue; }
+      try {
+        const t = paidText(); const r = await sendNow(target, t);
+        log(deal ? deal.id : null, "out", `[оплата из CRM, авто] ${r.via}: ${t}`);
+        e.done = new Date().toISOString(); e.sent = true;
+        if (deal) { deal.crmPaidMsgAt = e.done; deal.crmPaidMsgAmount = e.amount; }
+      } catch (err) { e.tries = err.permanent ? 3 : (e.tries || 0) + 1; e.err = String(err.message || err).slice(0, 200); }
+      persist();
+      await new Promise((r) => setTimeout(r, 1500));
+    }
   }
   setInterval(() => { paidAutoSweep().catch((e) => console.error("Оплата → блогеру:", e.message)); }, 60 * 1000);
   setTimeout(() => { paidAutoSweep().catch(() => {}); }, 25000);
