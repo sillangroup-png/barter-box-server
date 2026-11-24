@@ -77,7 +77,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const c = C();
     c.log.push(Object.assign({ at: new Date().toISOString(), dealId: dealId || null, dir, text: String(text).slice(0, 600) }, extra || {}));
     if (c.log.length > MAX_LOG) c.log.splice(0, c.log.length - MAX_LOG);
-    if (dir === "out" && dealId) { const d = (getState().microInfluencerDeals || []).find((x) => x.id === dealId); const n = d && waNumber(d.phone); if (n && c.inbox && c.inbox[n]) c.inbox[n].lastOut = new Date().toISOString(); }
+    if (dir === "out" && dealId) { const d = (getState().microInfluencerDeals || []).find((x) => x.id === dealId); const n = d && waNumber(d.phone); if (n && c.inbox && c.inbox[n]) { const t = new Date().toISOString(); c.inbox[n].lastOut = t; tzSentMark(c.inbox[n], t, String(text || ""), extra && extra.type); } }
   };
   const event = (d, kind, text, extra) => {
     const c = C();
@@ -98,6 +98,9 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     return pool.slice().sort((a, b) => dist(a) - dist(b))[0] || null;
   }
   const isVideoMsg = (type, url, name) => String(type) === "video" || /\.(mp4|mov|webm|m4v)(?:$|[?#])/i.test(String(url || "") + " " + String(name || ""));
+  // 24.11.2026: блогер просит ТЗ / сценарий → у менеджера «Просят ТЗ», пока ТЗ не отправлено (наш файл или сообщение с «ТЗ»).
+  const TZ_ASK_RE = /(^|[^а-яёa-z])(тз|т\.з|техническ[а-яё]*\s*задани[а-яё]*|техзадани[а-яё]*|сценари[а-яё]*|бриф[а-яё]*|задани[ея]|тапсырма[а-яә]*)([^а-яёa-z]|$)/i;
+  const tzSentMark = (row, t, body, type) => { if (row && row.tzAskAt && (TZ_ASK_RE.test(body) || /^(file|document|pdf)$/i.test(String(type || "")) || /\.pdf(\b|$)/i.test(body))) row.tzSentAt = t; };
   function inboxRecord({ phone, side, text, type, url, via, id, at, noLog }) {
     const n = waNumber(phone); if (!n) return null;
     const c = C();
@@ -107,8 +110,9 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const ib = IB(), t = at || new Date().toISOString();
     const row = ib[n] = Object.assign(ib[n] || { phone: n }, { dealId: d.id, manager: d.responsible || "", blogger: d.blogerName || d.instagramAccount || "", via });
     const body = type && type !== "text" ? `[${type === "video" ? "видео" : type === "image" ? "фото" : type === "audio" ? "голосовое" : "файл"}] ${text || ""} ${url || ""}`.trim() : String(text || "").trim();
-    if (side === "in") { if (via === "wazzup") c.lastIn[n] = t; row.lastIn = t; row.lastInText = body.slice(0, 300); row.lastInType = type || "text"; }
-    else row.lastOut = t;
+    if (side === "in") { if (via === "wazzup") c.lastIn[n] = t; row.lastIn = t; row.lastInText = body.slice(0, 300); row.lastInType = type || "text";
+      if (TZ_ASK_RE.test(String(text || ""))) { row.tzAskAt = t; row.tzAskText = String(text || "").slice(0, 200); } }
+    else { row.lastOut = t; tzSentMark(row, t, body, type); }
     if (!noLog) log(d.id, side === "in" ? "in" : "out", (side === "in" ? "" : "мы (" + via + "): ") + body);
     const keys = Object.keys(ib); if (keys.length > 4000) { keys.sort((a, b) => String(ib[a].lastIn || ib[a].lastOut || "").localeCompare(String(ib[b].lastIn || ib[b].lastOut || ""))).slice(0, keys.length - 4000).forEach((k) => delete ib[k]); }
     return { d, row };
@@ -668,9 +672,16 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     const rows = Object.values(IB()).filter((r) => !mine || personKey(r.manager) === me).map((r) => {
       const d = byId.get(r.dealId) || {};
       return { phone: r.phone, dealId: r.dealId, manager: r.manager, blogger: d.blogerName || r.blogger, product: d.product || "", via: r.via,
-        lastIn: r.lastIn || "", lastInText: r.lastInText || "", lastInType: r.lastInType || "", lastOut: r.lastOut || "", waiting: waiting(r) };
+        lastIn: r.lastIn || "", lastInText: r.lastInText || "", lastInType: r.lastInType || "", lastOut: r.lastOut || "", waiting: waiting(r),
+        tzAskAt: r.tzAskAt || "", tzAskText: r.tzAskText || "", tzWait: !!r.tzAskAt && !(String(r.tzSentAt || "") > r.tzAskAt) && !(String(r.tzDoneAt || "") > r.tzAskAt) && !(d.flowBriefSentVersionId && String(d.flowBriefSentAt || "") > r.tzAskAt) };
     }).sort((a, b) => String(b.lastIn || b.lastOut).localeCompare(String(a.lastIn || a.lastOut)));
     res.json({ all, items: rows.slice(0, 400) });
+  });
+  app.post("/api/inbox/:phone/tz-done", requireAuth, (req, res) => {
+    if (!staff(req, res)) return;
+    const r = IB()[waNumber(req.params.phone)]; if (!r) return res.status(404).json({ error: "не найдено" });
+    r.tzDoneAt = new Date().toISOString(); r.tzDoneBy = (req.session && req.session.name) || "";
+    persist(); res.json({ ok: true });
   });
   app.post("/api/inbox/:phone/done", requireAuth, (req, res) => {
     if (!staff(req, res)) return;
