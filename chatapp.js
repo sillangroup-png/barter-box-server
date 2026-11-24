@@ -95,6 +95,20 @@ function createChatApp({ env = process.env, fetchImpl = fetch } = {}) {
     } catch (e) { license = 'не проверена (' + e.message.slice(0, 80) + ')'; }
     return (lastCheck = { ok: true, at: new Date().toISOString(), license, messenger: k.messenger });
   }
-  return { configured, send, check, status: () => lastCheck };
+  // Вебхук входящих (24.11.2026): ставим адрес Barter Box через API — в кабинет ChatApp ничего вставлять не нужно.
+  // PUT /licenses/{licenseId}/messengers/{messenger}/callbackUrl {events, url}; список — GET /callbackUrls (свой для appId).
+  async function setCallback(url, events) {
+    if (!configured()) throw new Error('ChatApp не настроен: нет ' + missing().join(', '));
+    const k = cfg();
+    await authed('PUT', `/licenses/${encodeURIComponent(k.licenseId)}/messengers/${encodeURIComponent(k.messenger)}/callbackUrl`, { events: events || ['message'], url });
+    return listCallbacks();
+  }
+  async function listCallbacks() {
+    const j = await authed('GET', '/callbackUrls');
+    const list = Array.isArray(j.data) ? j.data : [];
+    // адрес содержит секрет — наружу отдаём только начало
+    return list.map((x) => ({ licenseId: x.licenseId, messengerType: x.messengerType, events: x.events, url: String(x.url || '').replace(/(\/webhook\/)[^/?#]+/, '$1•••') }));
+  }
+  return { configured, send, check, setCallback, listCallbacks, status: () => lastCheck };
 }
 module.exports = { createChatApp };

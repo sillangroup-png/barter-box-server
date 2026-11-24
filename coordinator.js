@@ -599,7 +599,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         const msg = m.message && typeof m.message === "object" ? m.message : { text: m.message || m.text };
         const f = msg.file; const url = f ? (typeof f === "string" ? f : f.link || f.url || f.src || "") : String(m.file || "");
         const out = m.fromMe === true || m.fromMe === "1" || m.fromMe === "true" || m.side === "out";
-        if (out && m.fromApp) continue; // отправлено нашими кнопками через API — уже в журнале
+        if (out && (m.fromApp || m.fromApi)) continue; // отправлено нашими кнопками через API — уже в журнале
         const type = String(m.type || (url ? "file" : "text"));
         const at = m.time ? new Date(Number(m.time) > 1e12 ? Number(m.time) : Number(m.time) * 1000).toISOString() : null;
         const r = inboxRecord({ phone, side: out ? "out" : "in", text: msg.text || msg.caption || "", type, url, via: "chatapp", id: m.id || m.messageId, at });
@@ -607,6 +607,18 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       }
       if (changed) persist();
     } catch (e) { console.error("ChatApp webhook:", e.message); }
+  });
+  // 24.11.2026: подключение входящих одной кнопкой — Barter Box сам прописывает свой адрес в ChatApp через API.
+  app.post("/api/chatapp/connect", requireAuth, async (req, res) => {
+    if (!(req.session && req.session.canExport)) return res.status(403).json({ error: "Только Нина и Сая" });
+    const k = cfg(); if (k.secret.length < 16) return res.status(400).json({ error: "В Render нет COORD_WEBHOOK_SECRET" });
+    const base = String(process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || "https://barter-box-server.onrender.com").replace(/\/$/, "");
+    try { const list = await chatapp.setCallback(`${base}/api/chatapp/webhook/${k.secret}`, ["message"]); log(null, "sys", "ChatApp: входящие подключены (" + ((req.session && req.session.name) || "") + ")"); persist(); res.json({ ok: true, callbacks: list }); }
+    catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  app.get("/api/chatapp/callbacks", requireAuth, async (req, res) => {
+    if (!(req.session && req.session.canExport)) return res.status(403).json({ error: "Только Нина и Сая" });
+    try { res.json({ callbacks: await chatapp.listCallbacks() }); } catch (e) { res.status(500).json({ error: e.message }); }
   });
   app.get("/api/chatapp/webhook-url", requireAuth, (req, res) => {
     if (!(req.session && req.session.canExport)) return res.status(403).json({ error: "Только Нина и Сая" });
