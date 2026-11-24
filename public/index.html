@@ -3822,7 +3822,12 @@ function tplControl(){
 }
 function wireControl(){
   const tza = document.getElementById("ctrl-tzauto"); if(tza) tza.onclick = async ()=>{ try{ await withBusy(tza, ()=> apiFetch("/api/pub-check/classify", {method:"POST"})); toast("Запущено: ИИ смотрит вышедшие ролики — займёт 10–30 минут, ТЗ и язык появятся в интеграциях сами"); }catch(e){ toast(e.message, true); } };
-  const ca = document.getElementById("ctrl-chatapp"); if(ca) ca.onclick = async ()=>{ try{ const r = await apiFetch("/api/chatapp/webhook-url");
+  const ca = document.getElementById("ctrl-chatapp"); if(ca) ca.onclick = async ()=>{
+    // 24.11.2026: сначала пробуем подключить сами через API ChatApp; не вышло — показываем адрес для ручной вставки.
+    try{ const c = await withBusy(ca, ()=> apiFetch("/api/chatapp/connect", {method:"POST"}));
+      openModal(`<h3>ChatApp подключён ✅</h3><div style="font-size:13px;line-height:1.6">Ответы блогеров на номер ChatApp теперь приходят в Barter Box: в карточку интеграции, «Ждут ответа» и «Просят ТЗ».</div><div class="mut" style="font-size:12px;margin-top:8px">Подписки в ChatApp: ${(c.callbacks||[]).map(x=> escapeHtml(x.messengerType+" · линия "+x.licenseId+" · "+(x.events||[]).join(", "))).join("<br>")||"—"}</div><div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Хорошо</button></div>`); return;
+    }catch(e){ toast("Автоподключение не удалось: " + e.message, true); }
+    try{ const r = await apiFetch("/api/chatapp/webhook-url");
     openModal(`<h3>Входящие из ChatApp</h3><div style="font-size:13px;line-height:1.6">1. Откройте кабинет ChatApp → настройки линии WhatsApp → «Webhook» (вебхук сообщений).<br>2. Вставьте этот адрес и сохраните:</div><input class="pv-inp" style="width:100%;margin:10px 0" readonly value="${escapeHtml(r.url)}" onclick="this.select()"><div class="mut" style="font-size:12px">После этого ответы блогеров на номер ChatApp появятся в карточке интеграции и в «Ждут ответа». Адрес секретный — не пересылайте его.</div><div class="modal-actions"><button class="btn btn-primary" onclick="navigator.clipboard&&navigator.clipboard.writeText('${escapeHtml(r.url)}');toast('Скопировано')">Скопировать</button><button class="btn" onclick="closeModal()">Закрыть</button></div>`); }catch(e){ toast(e.message, true); } };
   const mo = document.getElementById("ctrl-month"); if(mo) mo.onchange = ()=>{ CTRL.month = mo.value; renderDeskTab(); };
   const titles = {all:"Интеграции",out:"Вышло",late:"Не вышли в срок",moved:"Переносили плановую дату",noreply2:"Без ответа больше 2 часов",noreply:"Ждут ответа",nopay:"Вышло, оплата не подана",nolink:"Вышло, нет ссылки",notz:"Нет ТЗ"};
