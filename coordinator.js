@@ -1089,6 +1089,9 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   // 24.11.2026: только чтение — какие смарт-процессы и поля есть в Битриксе (для заявки «Согласование оплаты» по ИП).
   app.get("/api/bitrix/pay-discover", requireAuth, async (req, res) => {
     if (!staff(req, res)) return;
+    const via = process.env.BITRIX_PAY_WEBHOOK_URL ? "BITRIX_PAY_WEBHOOK_URL" : process.env.BITRIX_WEBHOOK_URL ? "BITRIX_WEBHOOK_URL" : "нет вебхука";
+    let scope = null; try { scope = await bxPay("scope", {}); } catch (e) { scope = "ошибка: " + e.message; }
+    let users = null; try { const u = await bxPay("user.search", { NAME: String(req.query.user || "Нина"), ACTIVE: true }); users = (u || []).map((x) => ({ id: x.ID, name: [x.NAME, x.LAST_NAME].filter(Boolean).join(" "), position: x.WORK_POSITION || "" })); } catch (e) { users = "ошибка: " + e.message; }
     try {
       const t = await bxPay("crm.type.list", {}); const types = ((t && t.types) || []).map((x) => ({ id: x.entityTypeId, title: x.title }));
       const want = types.filter((x) => new RegExp(String(req.query.q || "оплат"), "i").test(x.title));
@@ -1097,8 +1100,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         const f = await bxPay("crm.item.fields", { entityTypeId: ty.id }); const fields = (f && f.fields) || {};
         out.push({ type: ty, fields: Object.entries(fields).map(([k, v]) => ({ code: k, title: v.title, type: v.type, required: !!v.isRequired, multiple: !!v.isMultiple, items: (v.items || []).slice(0, 40).map((i) => ({ id: i.ID, value: i.VALUE })) })) });
       }
-      res.json({ types, details: out });
-    } catch (e) { res.status(400).json({ error: e.message }); }
+      res.json({ via, scope, users, types, details: out });
+    } catch (e) { res.status(400).json({ error: e.message, via, scope, users }); }
   });
   // 24.11.2026 Нина: заявка на оплату по ИП (со счётом) → карточка «Согласование оплаты» в Битриксе через вебхук.
   // Вебхук — BITRIX_PAY_WEBHOOK_URL (права crm и user), иначе BITRIX_WEBHOOK_URL. Поля ищем по названиям, значения списков — по тексту,
@@ -1148,8 +1151,9 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       const fHit = byTitle(/сч[её]т/i) || Object.entries(F).find(([k, v]) => k.startsWith("uf") && v.type === "file");
       if (fHit) { const val = { fileData: [String(req.file.originalname || "счёт.pdf").slice(0, 150), req.file.buffer.toString("base64")] }; fields[fHit[0]] = fHit[1].isMultiple ? [val] : val; } else missed.push("Счёт на оплату (нет поля)");
       // ответственный: BITRIX_USER_MAP_JSON {"Мадина": 123} или поиск сотрудника по имени (нужно право user)
-      const me = String(b.manager || (req.session && req.session.name) || "").trim();
-      let uid = 0; try { uid = Number((JSON.parse(process.env.BITRIX_USER_MAP_JSON || "{}") || {})[me]) || 0; } catch (e) {}
+      // 25.11.2026 Нина: ответственный в Битриксе — всегда она (BITRIX_PAY_ASSIGNED_ID или поиск «Нина»).
+      const me = String(process.env.BITRIX_PAY_ASSIGNED_NAME || "Нина").trim();
+      let uid = Number(process.env.BITRIX_PAY_ASSIGNED_ID) || 0; if (!uid) { try { uid = Number((JSON.parse(process.env.BITRIX_USER_MAP_JSON || "{}") || {})[me]) || 0; } catch (e) {} }
       if (!uid && me) { try { const u = await bxPay("user.search", { NAME: me, ACTIVE: true }); if (Array.isArray(u) && u.length === 1) uid = Number(u[0].ID); } catch (e) {} }
       if (uid) fields.assignedById = uid; else missed.push("Ответственный (не нашла «" + me + "» в Битриксе)");
       const r = await bxPay("crm.item.add", { entityTypeId: meta.id, fields });
