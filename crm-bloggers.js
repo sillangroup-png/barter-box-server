@@ -664,6 +664,40 @@ function mount(app, { getState, requireAuth, kostPool, persist, env = process.en
     finally { mirroring = false; }
   }
   if (pool) { setInterval(() => mirror().catch(() => {}), 2 * 60 * 1000); setTimeout(() => mirror().catch(() => {}), 30000); }
+  // 24.11.2026 Нина: «оплачено» чаще ставят прямо в Blogger CRM, и оплата не связана с интеграцией. Ловим переход в paid
+  // (снимок статусов — state.crmPaySeen), находим интеграцию блогера по ID CRM или нику → «оплачено» → coordinator.js
+  // сам отправляет блогеру «Оплата прошла». Связанные оплаты (bb_deal_id / flow_integration_ids) ведут syncDealPay и finance-client.
+  let payWatching = false;
+  async function payWatch() {
+    if (!pool || payWatching) return; payWatching = true;
+    try {
+      const st = getState() || {};
+      const r = await pool.query("select p.id, p.status, p.blogger_id, p.created_at, p.data->>'amount' amount, p.data->>'bb_deal_id' bb, p.data->'flow_integration_ids' fi, b.data->>'instagram_url' ig, b.data->>'tiktok_url' tt from crm.payments p left join crm.bloggers b on b.id = p.blogger_id where not p.deleted and p.created_at > now() - interval '120 days'");
+      const seen = st.crmPaySeen && typeof st.crmPaySeen === 'object' ? st.crmPaySeen : null, next = {};
+      for (const x of r.rows) next[x.id] = x.status;
+      if (!seen) { st.crmPaySeen = next; if (persist) persist(); return; } // первый запуск: только запоминаем, по старым не пишем
+      const deals = st.microInfluencerDeals || []; let changed = Object.keys(seen).length !== r.rows.length;
+      for (const x of r.rows) {
+        const was = seen[x.id]; if (was === x.status) continue; changed = true;
+        if (x.status !== 'paid') continue;
+        if (was === undefined && Date.now() - Date.parse(x.created_at) > 3 * 864e5) continue;
+        if (x.bb || (Array.isArray(x.fi) && x.fi.length)) continue;
+        const nicks = [nickOf(x.ig), nickOf(x.tt)].filter(Boolean);
+        const his = deals.filter((d) => (d.crmBloggerId && String(d.crmBloggerId) === String(x.blogger_id)) || (nicks.length && [d.blogerName, d.instagramAccount, d.tiktokAccount].some((v) => v && nicks.includes(nickOf(v)))));
+        const open = his.filter((d) => d.paymentStatus !== 'оплачено' && (Number(d.cost) || 0) > 0);
+        const amt = Number(x.amount) || 0;
+        let pick = open.filter((d) => Number(d.cost) === amt);
+        if (!pick.length) { const q = open.filter((d) => d.paymentStatus === 'к оплате'); pick = q.length === 1 ? q : open.length === 1 ? open : []; }
+        if (pick.length > 1) pick = [pick.sort((a, b) => String(a.plannedDate || a.publishDate || '').localeCompare(String(b.plannedDate || b.publishDate || '')))[0]];
+        const now = new Date().toISOString();
+        for (const d of pick) Object.assign(d, { paymentStatus: 'оплачено', paidAt: now, paidBy: 'Blogger CRM', crmPaymentId: x.id, paidMsgSent: null, paidSkip: false, paidMsgNote: null, paidMsgErr: null, paidMsgTries: 0, paidMsgAuto: false });
+        if (!pick.length) console.log(`Оплата CRM ${x.id} (${amt} ₸, ${nicks.join(', ') || 'без ника'}): интеграция не найдена или их несколько — статус не поставлен`);
+      }
+      st.crmPaySeen = next;
+      if (changed && persist) persist();
+    } catch (e) { console.error('Оплаты CRM → интеграции:', e.message); } finally { payWatching = false; }
+  }
+  if (pool) { setInterval(() => payWatch().catch(() => {}), 60 * 1000); setTimeout(() => payWatch().catch(() => {}), 40000); }
 }
 
 module.exports = { mount, nickOf, statusLabels: { TALK, DECLINE, PAY_STATUS } };
