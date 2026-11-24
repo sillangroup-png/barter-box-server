@@ -233,6 +233,10 @@ select.inline-edit-input{cursor:pointer}
 /* 18.11.2026: кнопки формы всегда видны внизу окна; окно интеграции шире — поля в 3–4 колонки, меньше прокрутки */
 .modal .modal-actions{position:sticky;bottom:-22px;background:#fff;margin:16px -22px -22px;padding:12px 22px 14px;border-top:1px solid var(--line);z-index:3}
 .modal.modal-wide{max-width:900px !important;width:100%}
+.modal.mm-compact{padding:16px 18px}.mm-compact h3{font-size:15px}.mm-compact .form-row{gap:6px 8px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
+.mm-compact .field{margin-bottom:4px}.mm-compact .field label{font-size:10.5px;margin-bottom:2px}
+.mm-compact .field input,.mm-compact .field select,.mm-compact .field textarea{padding:4px 7px;font-size:12px;border-radius:7px;min-height:0;height:28px}
+.mm-compact .field textarea{height:auto}.mm-compact .login-hint,.mm-compact .hint{padding:5px 9px;font-size:11px;margin:4px 0}
 /* действия строки закреплены справа — не нужно прокручивать таблицу до конца */
 .sticky-right{position:sticky;right:0;z-index:1;background:#fff;box-shadow:-6px 0 8px -6px rgba(140,90,120,.28);white-space:nowrap}
 th.sticky-right{z-index:2;background:var(--canvas)}
@@ -8637,11 +8641,12 @@ function modalMicroDeal(existing, prefill){
     if(ag && pl) ag.addEventListener("change", ()=>{ const prevAuto = ag.dataset.prev ? addDaysYMD(ag.dataset.prev, 2) : ""; if(ag.value && (!pl.value || pl.value===prevAuto)) pl.value = addDaysYMD(ag.value, 2); ag.dataset.prev = ag.value; });
     if(ag) ag.dataset.prev = ag.value; }
   const formAtOpen = readMicroForm();
-  { const ms = document.querySelectorAll(".modal-back .modal"), m = ms[ms.length-1]; if(m){ m.classList.add("modal-wide"); m.style.setProperty("max-width","1240px","important"); m.style.width="min(1240px,97vw)"; } }
+  { const ms = document.querySelectorAll(".modal-back .modal"), m = ms[ms.length-1]; if(m){ m.classList.add("modal-wide","mm-compact"); } }
   // Кнопки внизу: сначала сохраняем изменения формы, потом открываем окно оплаты / доставки / ТЗ.
-  const mmGo = async (btn, fn)=>{ const toSend = changedFields(readMicroForm(), formAtOpen); if(flowGoodsDirty) toSend.flowGoodsInput = flowGoodsInput;
-    try{ if(Object.keys(toSend).length) await withBusy(btn, ()=> Api.updateMicroDeal(existing.id, toSend)); closeModal(); await DataManager.refresh(); render();
-      fn((DataManager.state.microInfluencerDeals||[]).find(x=> x.id===existing.id) || existing); }catch(e){ toast(e.message, true); } };
+  // Окно оплаты / доставки / ТЗ открывается сразу; изменения формы (если были) сохраняются в фоне.
+  const mmGo = (btn, fn)=>{ const toSend = changedFields(readMicroForm(), formAtOpen); if(flowGoodsDirty) toSend.flowGoodsInput = flowGoodsInput;
+    const d1 = Object.assign({}, existing, toSend); closeModal(); fn(d1);
+    if(Object.keys(toSend).length) Api.updateMicroDeal(existing.id, toSend).then(()=> DataManager.refresh()).catch(e=> toast("Изменения формы не сохранились: " + e.message, true)); };
   [["mm-paybtn", x=> modalMicroPayQuick(x)], ["mm-dlvbtn", x=> modalDeliveryRequest(x)], ["mm-tzbtn", x=> modalMicroTzQuick(x)], ["mm-open-card", x=> modalMicroCard(x)]].forEach(([id, fn])=>{ const b = document.getElementById(id); if(b) b.onclick = ()=> mmGo(b, fn); });
   if(isEdit) bindVideoStageButtons(()=>{ closeModal(); const fresh = (DataManager.state.microInfluencerDeals||[]).find(x=> x.id === existing.id); if(fresh) modalMicroDeal(fresh); render(); });
   document.getElementById("mm-save").onclick = async ()=>{
