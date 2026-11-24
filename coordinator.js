@@ -1093,8 +1093,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     let scope = null; try { scope = await bxPay("scope", {}); } catch (e) { scope = "ошибка: " + e.message; }
     let users = null; try { const u = await bxPay("user.search", { NAME: String(req.query.user || "Нина"), ACTIVE: true }); users = (u || []).map((x) => ({ id: x.ID, name: [x.NAME, x.LAST_NAME].filter(Boolean).join(" "), position: x.WORK_POSITION || "" })); } catch (e) { users = "ошибка: " + e.message; }
     try {
-      const t = await bxPay("crm.type.list", {}); const types = ((t && t.types) || []).map((x) => ({ id: x.entityTypeId, title: x.title }));
-      const want = types.filter((x) => new RegExp(String(req.query.q || "оплат"), "i").test(x.title));
+      const types = await bxTypes();
+      const want = req.query.id ? [{ id: Number(req.query.id), title: "id " + req.query.id }] : types.filter((x) => new RegExp(String(req.query.q || "оплат"), "i").test(x.title));
       const out = [];
       for (const ty of want.slice(0, 4)) {
         const f = await bxPay("crm.item.fields", { entityTypeId: ty.id }); const fields = (f && f.fields) || {};
@@ -1116,11 +1116,16 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (!r.ok || j.error) throw new Error(`Битрикс ${method}: ${j.error_description || j.error || r.status}`);
     return j.result;
   }
+  // crm.type.list доступен только администратору портала — иначе берём список типов из crm.enum.ownertype
+  async function bxTypes() {
+    try { const t = await bxPay("crm.type.list", {}); return ((t && t.types) || []).map((x) => ({ id: x.entityTypeId, title: x.title })); }
+    catch (e) { const o = await bxPay("crm.enum.ownertype", {}); return (o || []).map((x) => ({ id: Number(x.ID), title: String(x.NAME || x.SYMBOL_CODE || "") })).filter((x) => x.id >= 128); }
+  }
   let bxPayMeta = null;
   async function bxPayType() {
     if (bxPayMeta && Date.now() - bxPayMeta.at < 3600e3) return bxPayMeta;
     let id = Number(process.env.BITRIX_PAY_ENTITY_TYPE_ID) || 0;
-    if (!id) { const t = await bxPay("crm.type.list", {}); const ty = ((t && t.types) || []).find((x) => /согласован[а-яё]*\s+оплат/i.test(x.title)) || ((t && t.types) || []).find((x) => /оплат/i.test(x.title)); if (!ty) throw new Error("в Битриксе не найден смарт-процесс «Согласование оплаты»"); id = ty.entityTypeId; }
+    if (!id) { const tl = await bxTypes(); const ty = tl.find((x) => /согласован[а-яё]*\s+оплат/i.test(x.title)) || tl.find((x) => /оплат/i.test(x.title)); if (!ty) throw new Error("в Битриксе не найден смарт-процесс «Согласование оплаты»"); id = ty.id; }
     const f = await bxPay("crm.item.fields", { entityTypeId: id });
     bxPayMeta = { at: Date.now(), id, fields: (f && f.fields) || {} }; return bxPayMeta;
   }
