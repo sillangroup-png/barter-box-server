@@ -8758,23 +8758,32 @@ function modalDlvNew(ctx){
         <div class="field" style="grid-column:1/-1"><label>Адрес</label><input id="dn-address" value="${escapeHtml(S.address ?? (d.address || (lr&&lr.address) || pf.address || ""))}" placeholder="улица, дом, квартира"></div>
       </div>
       ${bbSec("Что отправляем")}
-      <input id="dn-add" class="pv-inp" list="dn-add-list" placeholder="выберите товар из списка — по названию или ШК" style="width:100%"><datalist id="dn-add-list">${rows().slice(0,2000).map(x=>`<option value="${escapeHtml((x.name||"")+" — "+(x.code||""))}">${x.cost?fmtNum(x.cost)+" ₸":"без себестоимости"}</option>`).join("")}</datalist>
-      <div class="mut" style="font-size:11.5px;margin-top:4px">Можно добавить несколько товаров — выбирайте по одному из списка.</div>
+      <input id="dn-q" class="pv-inp" autocomplete="off" placeholder="🔍 найдите товар: название или ШК — нажмите, чтобы добавить" value="${escapeHtml(S.q||"")}" style="width:100%">
+      <div id="dn-res" style="max-height:230px;overflow:auto;border:1px solid #F1E1E8;border-radius:10px;margin-top:4px;display:${S.open?"block":"none"}"></div>
+      <div class="mut" style="font-size:11.5px;margin-top:4px">Можно выбрать несколько товаров: каждый добавляется строкой ниже, количество меняется.</div>
       <div style="margin-top:8px">${S.goods.map((x,i)=>`<div style="display:grid;grid-template-columns:minmax(0,1fr) 64px 110px 28px;gap:8px;align-items:center;margin-bottom:6px;font-size:12.5px"><span>${escapeHtml(x.name)} <span class="mut" style="font-size:11px">${escapeHtml(x.code||"")}</span></span><input class="pv-inp dn-qty" data-i="${i}" type="number" min="1" value="${x.qty}"><span style="text-align:right">${x.cost?fmtNum(x.cost*x.qty)+" ₸":`<input class="pv-inp dn-cost" data-i="${i}" type="number" min="0" placeholder="себест." style="width:100%">`}</span><button type="button" class="btn btn-sm dn-rm" data-i="${i}" style="padding:0 8px">✕</button></div>`).join("") || `<div class="mut" style="font-size:12px">Товары не выбраны</div>`}</div>
-      <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-top:6px;font-size:13px"><span>Себестоимость набора: <b>${fmtNum(sum)} ₸</b></span><label style="display:flex;gap:6px;align-items:center">Доставка, ₸ <input id="dn-dcost" class="pv-inp" type="number" style="width:90px" value="${escapeHtml(String(S.dcost ?? (dlvDefaultCost(city)||"")))}"></label></div>
+      <div style="margin-top:6px;font-size:13px">${S.goods.length?`Отправляем: <b>${S.goods.map(x=> escapeHtml(x.name)+(x.qty>1?" ×"+x.qty:"")).join(", ")}</b> · `:""}Себестоимость набора: <b>${fmtNum(sum)} ₸</b></div>
       <div class="field" style="margin-top:8px"><label>Комментарий для логиста</label><input id="dn-note" value="${escapeHtml(S.note||"")}" placeholder="подъезд, время, домофон…"></div>
       <div class="modal-actions"><button class="btn" onclick="closeModal()">Отмена</button><button class="btn btn-primary" id="dn-save">Отправить заявку</button></div>`;
-    const keep = ()=>{ S.city = $("dn-city").value; S.phone = $("dn-phone").value; S.address = $("dn-address").value; S.dcost = $("dn-dcost").value; S.note = $("dn-note").value; };
-    $("dn-deal").onchange = ()=>{ keep(); S.dealId = +$("dn-deal").value || null; S.noDeal = !S.dealId; if(S.dealId){ S.city = S.phone = S.address = S.dcost = undefined; } if(!S.touched) S.goods = []; paint(); };
+    const keep = ()=>{ S.city = $("dn-city").value; S.phone = $("dn-phone").value; S.address = $("dn-address").value; S.note = $("dn-note").value; };
+    // 24.11.2026: поиск товара со списком (вместо datalist) — клик добавляет товар, можно несколько.
+    const q = $("dn-q"), res = $("dn-res");
+    const showRes = ()=>{ const all = rows(), t = q.value.trim().toLowerCase(); S.q = q.value;
+      if(!all.length){ res.style.display = "block"; res.innerHTML = `<div class="mut" style="padding:8px 10px;font-size:12px">Список товаров загружается…</div>`; if(!PROD.list && !PROD.loading) prodLoad(); if(typeof ensureSkuCatalogLoaded==="function") ensureSkuCatalogLoaded(); setTimeout(()=>{ if(document.activeElement===q) showRes(); }, 800); return; }
+      const hit = all.filter(x=> !t || String(x.name||"").toLowerCase().includes(t) || String(x.code||"").includes(t)).slice(0,60);
+      res.style.display = "block"; S.open = true;
+      res.innerHTML = hit.length ? hit.map((x,i)=>`<div class="dn-opt" data-k="${escapeHtml(x.code||"")}" data-n="${escapeHtml(x.name||"")}" style="display:flex;justify-content:space-between;gap:10px;padding:6px 10px;cursor:pointer;font-size:12.5px;border-bottom:1px solid #F8E9EF"><span>${escapeHtml(x.name||"")} <span class="mut" style="font-size:11px">${escapeHtml(x.code||"")}</span></span><span class="mut" style="white-space:nowrap">${x.cost?fmtNum(x.cost)+" ₸":"—"} ＋</span></div>`).join("") : `<div class="mut" style="padding:8px 10px;font-size:12px">Ничего не нашлось</div>`;
+      res.querySelectorAll(".dn-opt").forEach(el=> el.onmousedown = e=>{ e.preventDefault(); const r = all.find(x=> (x.code||"")===el.dataset.k && (x.name||"")===el.dataset.n); if(!r) return;
+        keep(); S.touched = true; const ex = S.goods.find(g=> g.code ? g.code===r.code : g.name===r.name); if(ex) ex.qty++; else S.goods.push({code:r.code||"", name:r.name, qty:1, cost:Number(r.cost)||0});
+        paint(); const q2 = $("dn-q"); if(q2){ q2.focus(); q2.setSelectionRange(q2.value.length, q2.value.length); } }); };
+    q.addEventListener("input", showRes); q.addEventListener("focus", showRes); q.addEventListener("blur", ()=> setTimeout(()=>{ S.open = false; if(res) res.style.display = "none"; }, 150));
+    if(S.open){ showRes(); }
+    $("dn-deal").onchange = ()=>{ keep(); S.dealId = +$("dn-deal").value || null; S.noDeal = !S.dealId; if(S.dealId){ S.city = S.phone = S.address = undefined; } if(!S.touched) S.goods = []; paint(); };
     { const nd = $("dn-newdeal"); if(nd) nd.onclick = e=>{ e.preventDefault(); closeModal(); modalMicroDeal(null, {blogerName:"@"+S.nick, instagramAccount:"https://www.instagram.com/"+S.nick+"/", responsible:UI.actorName||""}); }; }
-    $("dn-city").onchange = ()=>{ if(!S.dcostManual) $("dn-dcost").value = dlvDefaultCost($("dn-city").value)||""; };
-    $("dn-dcost").oninput = ()=>{ S.dcostManual = true; };
-    $("dn-add").onchange = ()=>{ const v = $("dn-add").value, code = v.split(" — ").pop().trim(); const r = rows().find(x=> x.code && x.code===code) || rows().find(x=> (x.name||"")===v.split(" — ")[0].trim());
-      if(r){ keep(); S.touched = true; const ex = S.goods.find(g=> g.code && g.code===r.code); if(ex) ex.qty++; else S.goods.push({code:r.code||"", name:r.name, qty:1, cost:Number(r.cost)||0}); paint(); } };
     document.querySelectorAll(".dn-qty").forEach(el=> el.onchange = ()=>{ keep(); S.goods[+el.dataset.i].qty = Math.max(1, parseInt(el.value,10)||1); paint(); });
     document.querySelectorAll(".dn-cost").forEach(el=> el.onchange = ()=>{ keep(); S.goods[+el.dataset.i].cost = Number(el.value)||0; paint(); });
     document.querySelectorAll(".dn-rm").forEach(el=> el.onclick = ()=>{ keep(); S.touched = true; S.goods.splice(+el.dataset.i, 1); paint(); });
-    $("dn-save").onclick = async (e)=>{ keep(); if(!S.goods.length){ toast("Выберите, что отправляем", true); return; } const body = { dealId:S.dealId || null, blogger:"@"+S.nick, city:S.city.trim(), address:S.address.trim(), phone:S.phone.trim(), deliveryCost:S.dcost, note:(S.note||"").trim(), items:S.goods };
+    $("dn-save").onclick = async (e)=>{ keep(); if(!S.goods.length){ toast("Выберите, что отправляем", true); return; } const body = { dealId:S.dealId || null, blogger:"@"+S.nick, city:S.city.trim(), address:S.address.trim(), phone:S.phone.trim(), deliveryCost:0, note:(S.note||"").trim(), items:S.goods };
       try{ await withBusy(e.target, ()=> apiFetch("/api/delivery-requests", {method:"POST", headers:jsonHeaders, body:JSON.stringify(body)})); closeModal(); toast("Заявка на доставку отправлена"); await DataManager.refresh(); myDlvLoad(); render(); }catch(err){ toast(err.message, true); } };
   };
   const pickNick = ()=>{ const n = bbNickNorm($("dn-nick").value); if(n===S.nick) return; S.nick = n; S.goods = []; S.touched = false; S.city = S.phone = S.address = S.dcost = S.wa = undefined; S.noDeal = false; if(!ctx.deal || bbNickNorm(deskNick(ctx.deal))!==n) S.dealId = null; paint(); };
