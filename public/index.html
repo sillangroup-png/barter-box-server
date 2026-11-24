@@ -3206,7 +3206,7 @@ function openMicroBloggerCard(name){
     return `<button type="button" class="bd-item" data-open-id="${escapeHtml(String(d.id))}">
       <div class="bd-row"><span class="bd-date">${escapeHtml(microDealDate(d)||"без даты")}</span>
         <span class="bd-tag ${pub?"ok":"wait"}">${pub?"вышло":"ждём видео"}</span>
-        <span class="bd-tag ${paid?"ok":""}">${escapeHtml(d.paymentStatus||"—")}</span>
+        <span class="bd-tag ${paid?"ok":""}">${escapeHtml(d.paymentStatus||"—")}</span>${paidMsgMark(d)}
         <span style="margin-left:auto;font-weight:600">${fmtNum(d.cost||0)} ₸</span></div>
       <div class="bd-prod">${escapeHtml(d.product||"товар не указан")}</div>
       <div class="bd-meta">охват ${fmtNum(microDealFactReach(d))}${cpv ? " · CPV "+cpv+" ₸" : ""} · ${escapeHtml(d.responsible||"—")}</div>
@@ -6613,7 +6613,7 @@ function tplMicroInfluencers(){
               <td>${inlineEditSpan(escapeHtml(d.city||"—"), d.id, 'city', d.city||'', 'text')}</td>
               <td>${inlineEditSpan(fmtNum(d.cost||0)+" ₸", d.id, 'cost', d.cost||0, 'number')}</td>
               <td>${inlineEditSpan(fmtNum(d.productCost||0)+" ₸", d.id, 'productCost', d.productCost||0, 'number')}</td>
-              <td>${inlineEditSpan(escapeHtml(d.paymentStatus||"—"), d.id, 'paymentStatus', d.paymentStatus||'', 'select', MICRO_PAYMENT_STATUSES)}</td>
+              <td>${inlineEditSpan(escapeHtml(d.paymentStatus||"—"), d.id, 'paymentStatus', d.paymentStatus||'', 'select', MICRO_PAYMENT_STATUSES)}${paidMsgMark(d)}</td>
               <td>${inlineEditSpan(fmtNum(factReach), d.id, 'factReachTotal', factReach, 'number')}${socialViewsBadge(d,["factReachReels","factReachTT"])}${(()=>{ const hh = microViewsHistoryHtml(d); return hh ? `<br>${hh}` : ""; })()}${(d.factReachStories||0)>0 ? `<br><span style="font-size:10.5px;color:var(--ink-mute)">в т.ч. сторис ${fmtNum(d.factReachStories)}</span>` : ""}</td>
               <td>${microCpvCell(d, cpv)}</td>
               <td>
@@ -10206,6 +10206,18 @@ function inboxTzAsks(){ inboxWaiting();
   return ((INBOX.data && INBOX.data.items) || []).filter(r=> r.tzWait && byId.has(r.dealId)).map(r=>{ const d = byId.get(r.dealId), h = Math.max(0, Math.round((Date.now()-Date.parse(r.tzAskAt))/3600000));
     return {d, ib:r, act:"tzreq", cls: h>=3 ? "s-b" : "s-w", tag: "просит ТЗ " + (h ? h+" ч назад" : "только что") + (r.tzAskText ? " · «"+String(r.tzAskText).slice(0,60)+"»" : "") + (String(d.tz||"").trim() ? " · выбрано: "+d.tz : " · ТЗ не выбрано")}; });
 }
+// 24.11.2026: под «оплачено» — ушло ли блогеру «Оплата прошла» (отправляется само).
+function paidMsgMark(d){
+  if(!d || d.paymentStatus!=="оплачено") return "";
+  const st = (c,t,tip)=> `<br><span title="${escapeHtml(tip||t)}" style="font-size:11px;font-weight:700;color:${c};white-space:nowrap">${t}</span>`;
+  const when = x=>{ const t = new Date(Date.parse(x)+5*3600000).toISOString(); return t.slice(8,10)+"."+t.slice(5,7)+" "+t.slice(11,16); };
+  if(d.paidMsgSent) return st("#1E6B47", "✉ уведомление отправлено", "«Оплата прошла» отправлено блогеру "+when(d.paidMsgSent));
+  if(d.paidSkip) return st("#8A7F86", "✉ не нужно");
+  if(d.paidMsgNote) return st("#9A6400", "✉ не отправлено", d.paidMsgNote);
+  if((d.paidMsgTries||0)>=3) return st("#B3261E", "✉ ошибка отправки", d.paidMsgErr||"");
+  if(d.paidAt && Date.now()-Date.parse(d.paidAt) < 3*86400000) return st("#8A7F86", "✉ отправится автоматически", d.paidMsgErr ? "Повтор: "+d.paidMsgErr : "Уйдёт в течение пары минут (ночью — утром в 9:00)");
+  return "";
+}
 // 23.11.2026 «Оплачено — сообщите блогеру»: Нина поставила «оплачено» → плашка у менеджера (у тимлида — по своим менеджерам).
 const PAIDQ = { data:null, loading:false };
 async function paidLoad(){ PAIDQ.loading = true; PAIDQ.who = myWho()+"|"+(UI.deskAll?1:0); PAIDQ.at = Date.now(); try{ PAIDQ.data = await apiFetch("/api/coord/paid-pending"+(UI.deskAll && UI.canExport ? "?all=1" : "")); }catch(e){ PAIDQ.data = {items:[]}; } PAIDQ.loading = false; if(UI.tab==="desk") renderDeskTab(); }
@@ -10219,7 +10231,7 @@ function paidBannerHtml(){
     <div class="mut" style="font-size:12px;margin:3px 0 6px">Текст: «${escapeHtml((PAIDQ.data&&PAIDQ.data.text)||"")}». Кто сам уже написал про оплату — не отправляем.</div>
     ${items.map(x=>`<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;padding:6px 0;border-top:1px solid #CFEBDB;font-size:13px">
       <span><a href="#" onclick="openMicroById(${x.id});return false" style="font-weight:800;color:#2B2228">${escapeHtml(x.blogger)}</a> · ${escapeHtml(x.product||"")}${x.cost?" · "+fmtNum(x.cost)+" ₸":""}${crmIsLeadName()&&x.manager?` · <span class="mut">${escapeHtml(x.manager)}</span>`:""}
-        ${x.wrote ? `<br><span style="color:#9A6400;font-size:12px">Блогер уже написал: «${escapeHtml(x.wrote.text)}» — сообщение не нужно</span>` : !x.phone ? `<br><span class="mut" style="font-size:12px">нет номера WhatsApp</span>` : ""}</span>
+        ${x.err ? `<br><span style="color:#B3261E;font-size:12px">Автоотправка не прошла: ${escapeHtml(x.err)}</span>` : ""}        ${x.wrote ? `<br><span style="color:#9A6400;font-size:12px">Блогер уже написал: «${escapeHtml(x.wrote.text)}» — сообщение не нужно</span>` : !x.phone ? `<br><span class="mut" style="font-size:12px">нет номера WhatsApp</span>` : ""}</span>
       <span style="display:flex;gap:6px;white-space:nowrap">${x.phone && !x.wrote ? `<button class="btn btn-sm paid-one" data-id="${x.id}">Отправить</button>` : ""}<button class="btn btn-sm paid-skip" data-id="${x.id}">${x.wrote?"Ок, убрать":"Не нужно"}</button></span></div>`).join("")}
   </div>`;
 }
