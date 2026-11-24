@@ -697,10 +697,11 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     for (const e of todo.slice(0, 40)) {
       const his = all.filter((d) => (e.bloggerId && String(d.crmBloggerId || "") === e.bloggerId) || (e.nicks.length && [d.blogerName, d.instagramAccount, d.tiktokAccount].some((v) => v && e.nicks.includes(nickKey(v)))));
       const withPhone = his.filter((d) => waNumber(d.phone)).sort((a, b) => String(b.plannedDate || b.createdAt || "").localeCompare(String(a.plannedDate || a.createdAt || "")));
-      const deal = withPhone[0] || his[0] || null;
-      const target = withPhone[0] || { id: null, phone: e.wa, responsible: (deal && deal.responsible) || e.manager || "", blogerName: e.nicks[0] || "" };
-      const n = waNumber(target.phone);
-      if (!n) { e.done = new Date().toISOString(); e.note = "нет номера WhatsApp"; persist(); continue; }
+      const deal = withPhone[0] || his[0] || null, target = withPhone[0];
+      e.dealId = deal ? deal.id : null; e.blogger = (deal && deal.blogerName) || (e.nicks[0] ? "@" + e.nicks[0] : ""); if (deal && deal.responsible) e.manager = deal.responsible;
+      if (!deal) { e.done = new Date().toISOString(); e.note = "блогер не найден в Бартер Боксе — уведомление не отправлено"; persist(); continue; }
+      const n = target && waNumber(target.phone); // номер — только из интеграций Бартер Бокса
+      if (!n) { e.done = new Date().toISOString(); e.note = "нет номера в интеграции — уведомление не отправлено"; persist(); continue; }
       const recent = all.find((d) => waNumber(d.phone) === n && [d.paidMsgSent, d.crmPaidMsgAt].some((t) => t && Date.now() - Date.parse(t) < 6 * H));
       if (recent) { e.done = new Date().toISOString(); e.note = "уже отправляли сегодня"; if (deal) deal.crmPaidMsgAt = recent.crmPaidMsgAt || recent.paidMsgSent; persist(); continue; }
       const ids = new Set(his.map((d) => d.id)), since = Date.parse(e.at) - 6 * H;
@@ -716,6 +717,22 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       await new Promise((r) => setTimeout(r, 1500));
     }
   }
+  // Рабочий стол: «Оплачено в CRM — уведомление отправлено / не отправлено» (по своим; тимлид — по команде; Нина — все).
+  app.get("/api/coord/crm-paid-feed", requireAuth, (req, res) => {
+    if (!staff(req, res)) return;
+    const inScope = paidScope(req), from = Date.now() - 3 * 24 * H;
+    const q = Array.isArray(getState().crmPaidQueue) ? getState().crmPaidQueue : [];
+    const items = q.filter((e) => e.done && !e.dismissed && Date.parse(e.done) > from && inScope({ responsible: e.manager }))
+      .map((e) => ({ id: e.id, dealId: e.dealId || null, blogger: e.blogger || "", manager: e.manager || "", amount: e.amount || 0, sent: !!e.sent, note: e.note || "", at: e.done }))
+      .sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    res.json({ items });
+  });
+  app.post("/api/coord/crm-paid-feed/dismiss", requireAuth, (req, res) => {
+    if (!staff(req, res)) return;
+    const ids = new Set((Array.isArray(req.body && req.body.ids) ? req.body.ids : []).map(String));
+    for (const e of getState().crmPaidQueue || []) if (ids.has(String(e.id))) e.dismissed = true;
+    persist(); res.json({ ok: true });
+  });
   setInterval(() => { paidAutoSweep().catch((e) => console.error("Оплата → блогеру:", e.message)); }, 60 * 1000);
   setTimeout(() => { paidAutoSweep().catch(() => {}); }, 25000);
   app.get("/api/coord/paid-pending", requireAuth, (req, res) => {
