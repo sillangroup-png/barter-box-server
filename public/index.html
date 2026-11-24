@@ -10208,9 +10208,11 @@ function inboxTzAsks(){ inboxWaiting();
 }
 // 24.11.2026: под «оплачено» — ушло ли блогеру «Оплата прошла» (отправляется само).
 function paidMsgMark(d){
-  if(!d || d.paymentStatus!=="оплачено") return "";
+  if(!d) return "";
   const st = (c,t,tip)=> `<br><span title="${escapeHtml(tip||t)}" style="font-size:11px;font-weight:700;color:${c};white-space:nowrap">${t}</span>`;
   const when = x=>{ const t = new Date(Date.parse(x)+5*3600000).toISOString(); return t.slice(8,10)+"."+t.slice(5,7)+" "+t.slice(11,16); };
+  if(d.crmPaidMsgAt && !d.paidMsgSent) return st("#1E6B47", "✉ уведомление об оплате отправлено", "Оплата отмечена в Blogger CRM"+(d.crmPaidMsgAmount?" ("+fmtNum(d.crmPaidMsgAmount)+" ₸)":"")+" — «Оплата прошла» отправлено блогеру "+when(d.crmPaidMsgAt));
+  if(d.paymentStatus!=="оплачено") return "";
   if(d.paidMsgSent) return st("#1E6B47", "✉ уведомление отправлено", "«Оплата прошла» отправлено блогеру "+when(d.paidMsgSent));
   if(d.paidSkip) return st("#8A7F86", "✉ не нужно");
   if(d.paidMsgNote) return st("#9A6400", "✉ не отправлено", d.paidMsgNote);
