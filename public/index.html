@@ -9761,7 +9761,7 @@ function deskGaps(){
   const pub = d=> microDealPublished(d) || microPubDone(d);
   return [
     ["Нет даты выхода", mine.filter(d=> !d.plannedDate && !pub(d))],
-    ["Вышло, но нет ссылки", mine.filter(d=> pub(d) && !d.reelsLink && !d.tiktokVideoLink && !(Number(d.factReachStories)>0))],
+    ["Вышло, но нет ссылки", mine.filter(d=> pub(d) && !d.reelsLink && !d.tiktokVideoLink && !d.storiesLink && !(Number(d.factReachStories)>0))], // 24.11.2026: сторис — папка Drive в storiesLink считается ссылкой
     // 23.11.2026: доп. видео без доплаты (у блогера есть другая интеграция с суммой или «доп» в названии) — сумма не нужна.
     ["Нет суммы", mine.filter(d=> !pub(d) && !(Number(d.cost)>0) && d.coopType!=="За товар" && !/доп/i.test(String(d.blogerName||"")+" "+String(d.conditions||"")) && !microBloggerDeals(d.blogerName).some(x=> x.id!==d.id && Number(x.cost)>0))],
     ["Товар не выбран", mine.filter(d=> !pub(d) && !String(d.product||"").trim())],
