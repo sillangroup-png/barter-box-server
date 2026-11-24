@@ -616,6 +616,10 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     try { const list = await chatapp.setCallback(`${base}/api/chatapp/webhook/${k.secret}`, ["message"]); log(null, "sys", "ChatApp: входящие подключены (" + ((req.session && req.session.name) || "") + ")"); persist(); res.json({ ok: true, callbacks: list }); }
     catch (e) { res.status(500).json({ error: e.message }); }
   });
+  app.get("/api/chatapp/diag", requireAuth, async (req, res) => {
+    if (!(req.session && req.session.canExport)) return res.status(403).json({ error: "Только Нина и Сая" });
+    try { res.json(await chatapp.diag()); } catch (e) { res.status(500).json({ error: e.message }); }
+  });
   app.get("/api/chatapp/callbacks", requireAuth, async (req, res) => {
     if (!(req.session && req.session.canExport)) return res.status(403).json({ error: "Только Нина и Сая" });
     try { res.json({ callbacks: await chatapp.listCallbacks() }); } catch (e) { res.status(500).json({ error: e.message }); }

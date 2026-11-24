@@ -109,6 +109,14 @@ function createChatApp({ env = process.env, fetchImpl = fetch } = {}) {
     // адрес содержит секрет — наружу отдаём только начало
     return list.map((x) => ({ licenseId: x.licenseId, messengerType: x.messengerType, events: x.events, url: String(x.url || '').replace(/(\/webhook\/)[^/?#]+/, '$1•••') }));
   }
-  return { configured, send, check, setCallback, listCallbacks, status: () => lastCheck };
+  // Диагностика (24.11.2026): что видит наш вход — без пароля и ключей.
+  async function diag() {
+    const k = cfg(), out = { appId: k.appId, email: k.email.replace(/^(.).*(@.*)$/, '$1•••$2'), licenseIdEnv: k.licenseId, messenger: k.messenger };
+    const safe = async (name, fn) => { try { out[name] = await fn(); } catch (e) { out[name] = { error: e.message }; } };
+    await safe('me', async () => { const j = await authed('GET', '/me'); const d = j.data || j; return { id: d.id, name: d.name, role: d.role || d.roleName, companies: (d.companies || []).map((c) => c.id + ' ' + (c.name || '')) }; });
+    await safe('licenses', async () => { const j = await authed('GET', '/licenses'); const list = Array.isArray(j.data) ? j.data : []; return list.map((x) => ({ id: x.licenseId || x.id, name: x.name || x.licenseName, active: x.active, status: x.status, paid: x.licenseTo || x.endDate, messengers: (x.messenger || x.messengers || []).map ? (x.messenger || x.messengers || []).map((m) => (m.type || m.messengerType || m) + (m.status ? ':' + m.status : '') + (m.phone ? ':' + m.phone : '')) : x.messenger })); });
+    return out;
+  }
+  return { configured, send, check, setCallback, listCallbacks, diag, status: () => lastCheck };
 }
 module.exports = { createChatApp };
