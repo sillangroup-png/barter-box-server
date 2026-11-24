@@ -8742,27 +8742,30 @@ function modalDlvNew(ctx){
     const box = $("dn-body"); if(!box) return;
     if(!S.nick){ box.innerHTML = `<div class="mut" style="font-size:12.5px;padding:6px 0">Введите ник — подтянутся интеграции, адрес и телефон.</div>`; return; }
     const deals = bbDealsFor(S.nick, S.crmId);
-    if(!deals.length){ box.innerHTML = `<div style="font-size:12.5px;color:#9A6400;margin-top:6px">У блогера нет интеграций в Barter Box. Сначала заведите интеграцию — доставка привяжется к ней. <button type="button" class="btn btn-sm" id="dn-newdeal">+ Интеграция</button></div>`;
-      $("dn-newdeal").onclick = ()=>{ closeModal(); modalMicroDeal(null, {blogerName:"@"+S.nick, instagramAccount:"https://www.instagram.com/"+S.nick+"/", responsible:UI.actorName||""}); }; return; }
-    if(!S.dealId || !deals.some(d=> d.id===S.dealId)) S.dealId = (deals.find(d=> !microDealPublished(d) && !/доставлен/.test(String(d.productStatus||""))) || deals[0]).id;
-    const d = deals.find(x=> x.id===S.dealId), lr = lastReq(S.nick), pf = microBloggerPrefill(d.blogerName) || {};
+    // 24.11.2026: интеграция не обязательна — отправить можно несколько товаров, а снимать на один (или интеграции ещё нет).
+    if(S.dealId===null && !S.noDeal && deals.length) S.dealId = (deals.find(d=> !microDealPublished(d) && !/доставлен/.test(String(d.productStatus||""))) || deals[0]).id;
+    if(S.dealId && !deals.some(d=> d.id===S.dealId)) S.dealId = null;
+    if(S.wa===undefined && (S.crmId || S.nick)){ S.wa = ""; apiFetch("/api/crm/pay-history?"+new URLSearchParams({nick:S.nick, bloggerId:S.crmId||""}).toString()).then(h=>{ S.wa = (h && h.blogger && h.blogger.whatsapp) || ""; if(S.wa && S.phone===undefined && $("dn-phone") && !$("dn-phone").value) $("dn-phone").value = S.wa; }).catch(()=>{}); }
+    const d = deals.find(x=> x.id===S.dealId) || {}, lr = lastReq(S.nick), pf = (deals[0] && microBloggerPrefill(deals[0].blogerName)) || {};
     if(!S.goods.length && !S.touched){ const code = String(d.barcode||"").split(/[,;\s]+/).filter(Boolean)[0]; const r = code && rows().find(x=> x.code===code); if(r) S.goods.push({code:r.code, name:r.name, qty:1, cost:Number(r.cost)||0}); }
     const city = S.city ?? (d.city || (lr&&lr.city) || pf.city || ""), sum = S.goods.reduce((s,x)=> s+(Number(x.cost)||0)*x.qty, 0);
     box.innerHTML = `
       <div class="form-row" style="grid-template-columns:repeat(2,minmax(0,1fr))">
-        <div class="field" style="grid-column:1/-1"><label>Для какой интеграции</label><select id="dn-deal">${deals.map(x=>`<option value="${x.id}" ${x.id===S.dealId?"selected":""}>${bbDealLine(x).replace(/<[^>]+>/g,"")}</option>`).join("")}</select></div>
+        <div class="field" style="grid-column:1/-1"><label>Для какой интеграции <span style="font-weight:400;color:var(--ink-mute);font-size:11px">— необязательно</span></label><select id="dn-deal"><option value="">— без интеграции —</option>${deals.map(x=>`<option value="${x.id}" ${x.id===S.dealId?"selected":""}>${bbDealLine(x).replace(/<[^>]+>/g,"")}</option>`).join("")}</select>${deals.length?"":`<div class="mut" style="font-size:11.5px;margin-top:3px">Интеграций у блогера пока нет — заявка уйдёт без привязки. <a href="#" id="dn-newdeal">+ Интеграция</a></div>`}</div>
         <div class="field"><label>Город</label><input id="dn-city" value="${escapeHtml(city)}"></div>
-        <div class="field"><label>Телефон</label><input id="dn-phone" value="${escapeHtml(S.phone ?? (d.phone || (lr&&lr.phone) || pf.phone || ""))}"></div>
+        <div class="field"><label>Телефон</label><input id="dn-phone" value="${escapeHtml(S.phone ?? (d.phone || (lr&&lr.phone) || pf.phone || S.wa || ""))}"></div>
         <div class="field" style="grid-column:1/-1"><label>Адрес</label><input id="dn-address" value="${escapeHtml(S.address ?? (d.address || (lr&&lr.address) || pf.address || ""))}" placeholder="улица, дом, квартира"></div>
       </div>
       ${bbSec("Что отправляем")}
       <input id="dn-add" class="pv-inp" list="dn-add-list" placeholder="выберите товар из списка — по названию или ШК" style="width:100%"><datalist id="dn-add-list">${rows().slice(0,2000).map(x=>`<option value="${escapeHtml((x.name||"")+" — "+(x.code||""))}">${x.cost?fmtNum(x.cost)+" ₸":"без себестоимости"}</option>`).join("")}</datalist>
+      <div class="mut" style="font-size:11.5px;margin-top:4px">Можно добавить несколько товаров — выбирайте по одному из списка.</div>
       <div style="margin-top:8px">${S.goods.map((x,i)=>`<div style="display:grid;grid-template-columns:minmax(0,1fr) 64px 110px 28px;gap:8px;align-items:center;margin-bottom:6px;font-size:12.5px"><span>${escapeHtml(x.name)} <span class="mut" style="font-size:11px">${escapeHtml(x.code||"")}</span></span><input class="pv-inp dn-qty" data-i="${i}" type="number" min="1" value="${x.qty}"><span style="text-align:right">${x.cost?fmtNum(x.cost*x.qty)+" ₸":`<input class="pv-inp dn-cost" data-i="${i}" type="number" min="0" placeholder="себест." style="width:100%">`}</span><button type="button" class="btn btn-sm dn-rm" data-i="${i}" style="padding:0 8px">✕</button></div>`).join("") || `<div class="mut" style="font-size:12px">Товары не выбраны</div>`}</div>
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-top:6px;font-size:13px"><span>Себестоимость набора: <b>${fmtNum(sum)} ₸</b></span><label style="display:flex;gap:6px;align-items:center">Доставка, ₸ <input id="dn-dcost" class="pv-inp" type="number" style="width:90px" value="${escapeHtml(String(S.dcost ?? (dlvDefaultCost(city)||"")))}"></label></div>
       <div class="field" style="margin-top:8px"><label>Комментарий для логиста</label><input id="dn-note" value="${escapeHtml(S.note||"")}" placeholder="подъезд, время, домофон…"></div>
       <div class="modal-actions"><button class="btn" onclick="closeModal()">Отмена</button><button class="btn btn-primary" id="dn-save">Отправить заявку</button></div>`;
     const keep = ()=>{ S.city = $("dn-city").value; S.phone = $("dn-phone").value; S.address = $("dn-address").value; S.dcost = $("dn-dcost").value; S.note = $("dn-note").value; };
-    $("dn-deal").onchange = ()=>{ S.dealId = +$("dn-deal").value; S.city = S.phone = S.address = S.dcost = undefined; if(!S.touched) S.goods = []; paint(); };
+    $("dn-deal").onchange = ()=>{ keep(); S.dealId = +$("dn-deal").value || null; S.noDeal = !S.dealId; if(S.dealId){ S.city = S.phone = S.address = S.dcost = undefined; } if(!S.touched) S.goods = []; paint(); };
+    { const nd = $("dn-newdeal"); if(nd) nd.onclick = e=>{ e.preventDefault(); closeModal(); modalMicroDeal(null, {blogerName:"@"+S.nick, instagramAccount:"https://www.instagram.com/"+S.nick+"/", responsible:UI.actorName||""}); }; }
     $("dn-city").onchange = ()=>{ if(!S.dcostManual) $("dn-dcost").value = dlvDefaultCost($("dn-city").value)||""; };
     $("dn-dcost").oninput = ()=>{ S.dcostManual = true; };
     $("dn-add").onchange = ()=>{ const v = $("dn-add").value, code = v.split(" — ").pop().trim(); const r = rows().find(x=> x.code && x.code===code) || rows().find(x=> (x.name||"")===v.split(" — ")[0].trim());
@@ -8770,10 +8773,10 @@ function modalDlvNew(ctx){
     document.querySelectorAll(".dn-qty").forEach(el=> el.onchange = ()=>{ keep(); S.goods[+el.dataset.i].qty = Math.max(1, parseInt(el.value,10)||1); paint(); });
     document.querySelectorAll(".dn-cost").forEach(el=> el.onchange = ()=>{ keep(); S.goods[+el.dataset.i].cost = Number(el.value)||0; paint(); });
     document.querySelectorAll(".dn-rm").forEach(el=> el.onclick = ()=>{ keep(); S.touched = true; S.goods.splice(+el.dataset.i, 1); paint(); });
-    $("dn-save").onclick = async (e)=>{ keep(); const body = { dealId:S.dealId, blogger:"@"+S.nick, city:S.city.trim(), address:S.address.trim(), phone:S.phone.trim(), deliveryCost:S.dcost, note:(S.note||"").trim(), items:S.goods };
+    $("dn-save").onclick = async (e)=>{ keep(); if(!S.goods.length){ toast("Выберите, что отправляем", true); return; } const body = { dealId:S.dealId || null, blogger:"@"+S.nick, city:S.city.trim(), address:S.address.trim(), phone:S.phone.trim(), deliveryCost:S.dcost, note:(S.note||"").trim(), items:S.goods };
       try{ await withBusy(e.target, ()=> apiFetch("/api/delivery-requests", {method:"POST", headers:jsonHeaders, body:JSON.stringify(body)})); closeModal(); toast("Заявка на доставку отправлена"); await DataManager.refresh(); myDlvLoad(); render(); }catch(err){ toast(err.message, true); } };
   };
-  const pickNick = ()=>{ const n = bbNickNorm($("dn-nick").value); if(n===S.nick) return; S.nick = n; S.goods = []; S.touched = false; S.city = S.phone = S.address = S.dcost = undefined; if(!ctx.deal || bbNickNorm(deskNick(ctx.deal))!==n) S.dealId = null; paint(); };
+  const pickNick = ()=>{ const n = bbNickNorm($("dn-nick").value); if(n===S.nick) return; S.nick = n; S.goods = []; S.touched = false; S.city = S.phone = S.address = S.dcost = S.wa = undefined; S.noDeal = false; if(!ctx.deal || bbNickNorm(deskNick(ctx.deal))!==n) S.dealId = null; paint(); };
   $("dn-nick").onchange = pickNick; $("dn-nick").addEventListener("keydown", e=>{ if(e.key==="Enter") pickNick(); });
   if(ctx.nick || ctx.deal){ $("dn-nick").value = "@"+(ctx.nick ? bbNickNorm(ctx.nick) : deskNick(ctx.deal).replace(/^@/,"")); pickNick(); } else paint();
   if(!PROD.list) { const t = setInterval(()=>{ if(PROD.list || !document.getElementById("dn-body")){ clearInterval(t); if(document.getElementById("dn-body") && S.nick && !S.goods.length && !S.touched) paint(); } }, 400); }
