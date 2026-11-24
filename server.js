@@ -301,6 +301,21 @@ function seedState(){
 let state = loadState();
 // Журнал изменений (29.10.2026) — кто, что и когда поменял; удалённое можно вернуть. См. audit.js.
 const audit = require("./audit.js")({ dataDir: DATA_DIR, getState: ()=> state });
+// Дата покупки (24.11.2026): у старых интеграций createdAt берём из журнала изменений (запись «create»).
+try{
+  const created = { micro:new Map(), large:new Map() };
+  for(const f of ["audit-old.jsonl", "audit.jsonl"]){
+    const fp = path.join(DATA_DIR, f); if(!fs.existsSync(fp)) continue;
+    for(const line of fs.readFileSync(fp, "utf8").split("\n")){
+      if(!line.includes('"act":"create"')) continue;
+      try{ const e = JSON.parse(line); const m = created[e.e]; if(m && !m.has(String(e.id))) m.set(String(e.id), e.at); }catch(e){}
+    }
+  }
+  let n = 0;
+  for(const [key, ent] of [["microInfluencerDeals","micro"],["influencerDeals","large"]])
+    for(const d of state[key] || []) if(d && !d.createdAt && created[ent].has(String(d.id))){ d.createdAt = created[ent].get(String(d.id)); n++; }
+  if(n){ console.log("createdAt из журнала:", n); setTimeout(()=>{ try{ persist(); }catch(e){} }, 5000); }
+}catch(e){ console.error("createdAt из журнала:", e.message); }
 
 // ---------- Проблемные блогеры (микро): разовая разметка по заметкам менеджеров (16.10.2026) ----------
 // Причины P01–P10 (справочник — MICRO_PROBLEM_REASONS во фронтенде), статус, короткий комментарий.
@@ -1485,6 +1500,8 @@ app.post("/api/influencer-deals", requireAuth, (req,res)=>{
     driveFolderLink: normalizeLinkUrl(b.driveFolderLink || ""),
     status: b.status || DEAL_STATUSES[0], notes: b.notes || "",
     crmBloggerId: String(b.crmBloggerId || ""), // перенос из Blogger CRM (18.11.2026)
+    followers: +b.followers || 0, // подписчики (24.11.2026)
+    createdAt: new Date().toISOString(), // дата покупки — для бюджета месяца (24.11.2026)
   };
   state.influencerDeals.push(deal);
   persist();
@@ -1609,6 +1626,7 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
   if(crmLinkedProfile)deal.crmBloggerId=crmLinkedProfile.crmBloggerId;
   else if(b.crmBloggerId)deal.crmBloggerId=String(b.crmBloggerId).slice(0,80);
   if(flowSelection) Object.assign(deal,{flowGoods:flowSelection.items,flowGoodsCostMinor:flowSelection.costMinor,productCost:flowSelection.costMinor/100});
+  deal.createdAt = new Date().toISOString(); // дата покупки — для бюджета месяца (24.11.2026)
   state.microInfluencerDeals.push(deal);
   persist();
   res.json(deal);
