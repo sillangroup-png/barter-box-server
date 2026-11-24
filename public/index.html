@@ -348,6 +348,11 @@ input,select,textarea{font-family:inherit;font-size:12.5px;accent-color:#D6337E}
 .tab:hover{color:#D6337E}.tab.active{color:#D6337E;border-bottom-color:#D6337E;font-weight:700}.tab.active::after{display:none}
 .tab .cnt{background:#FCE4EF;color:#D6337E;font-size:10.5px;border-radius:999px;padding:1px 6px;margin-left:5px}
 main{max-width:1440px;padding:22px 20px 48px}
+.mm-sec{font-size:11px;font-weight:800;color:#8A7F86;text-transform:uppercase;letter-spacing:.04em;margin:12px 0 4px;padding-bottom:3px;border-bottom:1px solid #F1E1E8}
+main.bb-wide{max-width:none}
+main.bb-wide .table-wrap table{font-size:12.5px}
+main.bb-wide .table-wrap td,main.bb-wide .table-wrap th{padding:7px 9px}
+main.bb-wide .crm-act{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border-radius:8px;font-size:13px}
 .btn{height:32px;padding:0 14px;border-radius:999px;border:1px solid #F0C9DA;background:#fff;color:#C2306F;font-weight:700;font-size:12px;box-shadow:none;transition:background-color .15s,border-color .15s,transform .1s}
 .btn:hover{background:#FDF0F6}
 .btn-primary{background:#D6337E;border-color:#D6337E;color:#fff;box-shadow:0 1px 2px rgba(150,30,80,.22),0 4px 10px -6px rgba(214,51,126,.5)}.btn-primary:hover{background:#B0215F;color:#fff}
@@ -3753,6 +3758,7 @@ function renderDeskTab(){
     : (lastRenderedDeskTab===UI.tab ? Array.from(main.querySelectorAll(".table-wrap")).map(el=>el.scrollLeft) : []);
   pendingTableScroll = null;
   lastRenderedDeskTab = UI.tab;
+  main.classList.toggle("bb-wide", ["crmBloggers","crmPayments","deliveryReq"].includes(UI.tab)); // 24.11.2026: во всю ширину, как старая CRM
   if(UI.tab==="dashboard") main.innerHTML = UI.role==="marketer" ? tplMarketerDashboard() : tplDashboard();
   else if(UI.tab==="campaigns") main.innerHTML = tplCampaigns();
   else if(UI.tab==="deliveries") main.innerHTML = tplDeliveries();
@@ -8600,7 +8606,7 @@ function modalMicroQuick(d0){
       ${f("Комментарий", `<textarea id="mq-notes" class="pv-inp" rows="2" style="height:auto;padding:8px 10px">${v(d.notes)}</textarea>`, true)}
     </div>
     <div class="modal-actions" style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:14px">
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${isEdit && !UI.readOnly ? `<button class="btn" id="mq-paybtn" style="background:#FFF3C8;border-color:#F1D97A">💳 Подать на оплату</button><button class="btn" id="mq-dlvbtn">📦 Подать на доставку</button><button class="btn" id="mq-tzbtn">📝 Подать ТЗ</button>` : ""}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${isEdit && !UI.readOnly ? `<button class="btn" id="mq-tzbtn">📝 Подать ТЗ</button>` : ""}</div>
       <div style="display:flex;gap:6px">${isEdit?`<button class="btn btn-ghost" id="mq-full">Все поля</button>`:""}<button class="btn" onclick="closeModal()">Отмена</button><button class="btn btn-primary" id="mq-save">Сохранить</button></div>
     </div>`);
   { const ms = document.querySelectorAll(".modal-back .modal"), m = ms[ms.length-1]; if(m){ m.style.setProperty("max-width","760px","important"); m.style.width="min(760px,96vw)"; } }
@@ -8633,7 +8639,147 @@ function modalMicroQuick(d0){
   if($("mq-tzbtn")) $("mq-tzbtn").onclick = ()=> go($("mq-tzbtn"), x=> modalMicroTzQuick(x));
 }
 // «Подать на оплату» отдельным окном (как в Blogger CRM): сумма, получатель, для ИП — реквизиты и счёт.
+// ===== 24.11.2026 Нина: оплата и доставка — от блогера, а не из карточки интеграции =====
+// Открываются из «Блогеров» (значки 💳 📦 в строке и кнопки в карточке блогера), из «Оплат» и «Доставок» (кнопка «+»),
+// с рабочего стола. Ввели ник — подтягиваются его интеграции, прошлые реквизиты и сумма (из истории оплат), адрес и телефон.
+function bbNickNorm(v){ const s = String(v||"").trim().toLowerCase(); const m = s.match(/(?:instagram\.com|tiktok\.com)\/@?([^/?#\s]+)/); return (m ? m[1] : s.replace(/^@/,"").split(/[\s/?#]/)[0]).replace(/[^\w.]/g,""); }
+function bbNickOptions(){ const ix = bloggerIndex(); return [...new Set([...ix.nick.values()].filter(n=> /^@[\w.]+$/.test(n)))].sort(); }
+function bbDealsFor(nick, crmId){
+  const all = DataManager.state.microInfluencerDeals || [], n = bbNickNorm(nick), out = new Set();
+  for(const d of all){ if((crmId && String(d.crmBloggerId||"")===String(crmId)) || (n && [d.instagramAccount, d.tiktokAccount, d.blogerName].some(v=> bbNickNorm(v)===n))) out.add(d); }
+  for(const d of [...out]) dealsOfBlogger(d).forEach(x=> out.add(x));
+  return [...out].filter(d=> !/отмен/i.test(String(d.problemStatus||""))).sort((a,b)=> String(b.publishDate||b.plannedDate||"").localeCompare(String(a.publishDate||a.plannedDate||"")) || b.id-a.id);
+}
+function bbModalWidth(px){ const ms = document.querySelectorAll(".modal-back .modal"), m = ms[ms.length-1]; if(m){ m.style.setProperty("max-width",px+"px","important"); m.style.width="min("+px+"px,96vw)"; } }
+const bbSec = t=> `<div style="font-size:11px;font-weight:800;color:#8A7F86;text-transform:uppercase;letter-spacing:.03em;margin:12px 0 6px;padding-bottom:4px;border-bottom:1px solid #F1E1E8">${t}</div>`;
+function bbDealLine(d){ return `${escapeHtml(d.product||"товар не выбран")} · ${escapeHtml(ddmmStr(d.publishDate||d.plannedDate)||"без даты")}${Number(d.cost)?" · "+fmtNum(d.cost)+" ₸":""}${microDealPublished(d)?` · <span style="color:#1E6B47">вышло</span>`:""}`; }
+
+function modalPayNew(ctx){
+  ctx = ctx || {};
+  const S = { nick: ctx.nick ? bbNickNorm(ctx.nick) : (ctx.deal ? deskNick(ctx.deal).replace(/^@/,"") : ""), crmId: ctx.crmId || (ctx.deal && ctx.deal.crmBloggerId) || "", prices: ctx.prices || null, hist: null, pick: ctx.deal ? ctx.deal.id : null };
+  openModal(`<h3 style="margin:0 0 2px">💳 Подать на оплату</h3><div class="mut" style="font-size:12px;margin-bottom:8px">Заявка уйдёт в Blogger CRM → «Оплаты». Когда Нина отметит «оплачено», блогеру само уйдёт уведомление.</div>
+    <div class="field"><label>Блогер</label><input id="pn-nick" list="pn-nicks" autocomplete="off" placeholder="начните вводить ник" value="${escapeHtml(S.nick ? "@"+S.nick : "")}"><datalist id="pn-nicks">${bbNickOptions().map(n=>`<option value="${escapeHtml(n)}">`).join("")}</datalist></div>
+    <div id="pn-body"></div>`);
+  bbModalWidth(600);
+  const $ = id=> document.getElementById(id);
+  const paint = ()=>{
+    const box = $("pn-body"); if(!box) return;
+    if(!S.nick){ box.innerHTML = `<div class="mut" style="font-size:12.5px;padding:6px 0">Введите ник — подтянутся интеграции и прошлые реквизиты.</div>`; return; }
+    const deals = bbDealsFor(S.nick, S.crmId), open = deals.filter(d=> d.paymentStatus!=="оплачено" && (Number(d.cost)>0 || d.id===S.pick));
+    const last = S.hist && S.hist.items && S.hist.items[0];
+    const ip = S.ip!==undefined ? S.ip : (last ? !!last.isIp : (deals[0] ? bloggerIsIp(deals[0]) : false)); S.ip = ip;
+    if(!S.sel){ S.sel = new Set(S.pick ? [S.pick] : open.filter(d=> microDealPublished(d)).slice(0,1).map(d=>d.id)); if(!S.sel.size && open.length===1) S.sel.add(open[0].id); }
+    const pr = (S.hist && S.hist.blogger && S.hist.blogger.price) || S.prices || {};
+    const chips = [["Рилс",pr.reels],["ТТ",pr.tiktok],["Рилс+ТТ",pr.both],["Сторис",pr.stories],["Прошлая",last&&last.amount]].filter(x=> Number(x[1])>0);
+    const v = (k, d)=> S.f && S.f[k]!==undefined ? S.f[k] : d;
+    box.innerHTML = `
+      ${S.hist && S.hist.items && S.hist.items.length ? `<div style="background:#FFF9FB;border:1px solid #F3DDE7;border-radius:10px;padding:7px 10px;font-size:12px;margin-top:6px"><b>Прошлые оплаты:</b> ${S.hist.items.slice(0,3).map(p=> `${crmDate(p.createdAt)} · ${fmtNum(p.amount)} ₸ · ${escapeHtml(p.statusLabel||p.status)}${p.isIp?" · ИП":""}`).join(" &nbsp;|&nbsp; ")}<div class="mut" style="font-size:11.5px;margin-top:2px">ФИО, ИИН, Kaspi и сумма подставлены из последней — проверьте.</div></div>` : (S.hist ? `<div class="mut" style="font-size:12px;margin-top:6px">Раньше этому блогеру не платили — заполните реквизиты.</div>` : `<div class="mut" style="font-size:12px;margin-top:6px">Ищу прошлые оплаты…</div>`)}
+      <label style="display:flex;gap:8px;align-items:center;margin:10px 0 2px;padding:8px 12px;border-radius:10px;cursor:pointer;background:${ip?"#E2F6EC":"#F7F3F5"};border:1px solid ${ip?"#BFE6CF":"#EDE3E8"};font-weight:800;font-size:13px"><input type="checkbox" id="pn-ip" ${ip?"checked":""}> Оплата по ИП <span class="mut" style="font-weight:500;font-size:12px">— ${ip?"нужен счёт на оплату":"иначе Kaspi / ИИН"}</span></label>
+      <div class="form-row" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+        <div class="field"><label>${ip?"Получатель (ИП)":"ФИО получателя"} *</label><input id="pn-rec" value="${escapeHtml(v("rec", (last&&last.recipient) || ""))}" placeholder="${ip?"ИП «…»":"Иванов Иван Иванович"}"></div>
+        ${ip ? `<div class="field"><label>Счёт на оплату *</label><input id="pn-file" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg"></div>`
+             : `<div class="field"><label>ФИО при пополнении (для банка)</label><input id="pn-bank" value="${escapeHtml(v("bank",""))}" placeholder="как в приложении банка, если отличается"></div>
+                <div class="field"><label>ИИН</label><input id="pn-iin" maxlength="12" value="${escapeHtml(v("iin", (last&&last.iin) || ""))}"></div>
+                <div class="field"><label>Номер Kaspi</label><input id="pn-kaspi" value="${escapeHtml(v("kaspi", (last&&last.kaspi) || (S.hist&&S.hist.blogger&&S.hist.blogger.whatsapp) || ""))}" placeholder="+7 7xx xxx xx xx"></div>`}
+        <div class="field"><label>Сумма, ₸ *</label><input id="pn-amount" type="number" min="1" value="${escapeHtml(String(v("amount","")))}">${chips.length?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${chips.map(([t,n])=>`<button type="button" class="pv-chip pn-chip" data-v="${n}" style="height:22px;font-size:11px">${t}: ${fmtNum(n)}</button>`).join("")}</div>`:""}</div>
+        <div class="field"><label>Этап</label><select id="pn-stage">${["Окончательный расчёт","Предоплата","Остаток"].map(x=>`<option ${v("stage","")===x?"selected":""}>${x}</option>`).join("")}</select></div>
+        <div class="field"><label>Стоимость видео, ₸</label><input id="pn-video" type="number" min="0" value="${escapeHtml(String(v("video","")))}"></div>
+        <div class="field"><label>Стоимость товара (самовыкуп), ₸</label><input id="pn-goods" type="number" min="0" value="${escapeHtml(String(v("goods","")))}"></div>
+      </div>
+      <div class="field"><label>Заметки</label><input id="pn-notes" value="${escapeHtml(v("notes",""))}" placeholder="необязательно"></div>
+      ${bbSec("За какие интеграции")}
+      ${open.length ? open.map(d=>`<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:4px 0;cursor:pointer"><input type="checkbox" class="pn-deal" value="${d.id}" data-cost="${Number(d.cost)||0}" ${S.sel.has(d.id)?"checked":""}> <span>${bbDealLine(d)} <span class="mut">· ${escapeHtml(d.responsible||"")}</span></span></label>`).join("")
+        : `<div style="font-size:12.5px;color:#9A6400">У блогера нет неоплаченных интеграций в Barter Box. Сначала заведите интеграцию — к ней привяжется оплата. <button type="button" class="btn btn-sm" id="pn-newdeal">+ Интеграция</button></div>`}
+      <div id="pn-msg" style="font-size:12.5px;margin-top:8px"></div>
+      <div class="modal-actions"><button class="btn" onclick="closeModal()">Отмена</button><button class="btn btn-primary" id="pn-send" ${open.length?"":"disabled"}>Подать заявку</button></div>`;
+    const keep = ()=>{ S.f = {}; [["rec","pn-rec"],["bank","pn-bank"],["iin","pn-iin"],["kaspi","pn-kaspi"],["amount","pn-amount"],["stage","pn-stage"],["video","pn-video"],["goods","pn-goods"],["notes","pn-notes"]].forEach(([k,id])=>{ const el = $(id); if(el) S.f[k] = el.value; }); };
+    const total = ()=>{ const a = (Number($("pn-video").value)||0) + (Number($("pn-goods").value)||0); if(a) $("pn-amount").value = a; };
+    const bySel = ()=>{ const s = [...document.querySelectorAll(".pn-deal:checked")].reduce((x,c)=> x+(Number(c.dataset.cost)||0), 0); if(s){ $("pn-video").value = s; total(); } };
+    if(!(S.f && S.f.amount)) bySel();
+    $("pn-ip").onchange = ()=>{ keep(); S.ip = $("pn-ip").checked; paint(); };
+    $("pn-video").oninput = total; $("pn-goods").oninput = total;
+    document.querySelectorAll(".pn-chip").forEach(b=> b.onclick = ()=>{ $("pn-amount").value = b.dataset.v; $("pn-video").value = b.dataset.v; $("pn-goods").value = ""; });
+    document.querySelectorAll(".pn-deal").forEach(c=> c.onchange = ()=>{ c.checked ? S.sel.add(+c.value) : S.sel.delete(+c.value); bySel(); });
+    const nd = $("pn-newdeal"); if(nd) nd.onclick = ()=>{ closeModal(); modalMicroDeal(null, {blogerName:"@"+S.nick, instagramAccount:"https://www.instagram.com/"+S.nick+"/", responsible:UI.actorName||"", crmBloggerId: S.crmId || (S.hist&&S.hist.blogger&&S.hist.blogger.id) || undefined}); };
+    $("pn-send").onclick = async ()=>{ const btn = $("pn-send"), msg = (t, bad)=>{ const m = $("pn-msg"); m.textContent = t; m.style.color = bad ? "var(--bad)" : "var(--ok,#1f8a4c)"; };
+      try{
+        const ids = [...document.querySelectorAll(".pn-deal:checked")].map(c=> c.value); if(!ids.length) throw new Error("Отметьте, за какие интеграции платим");
+        const rec = $("pn-rec").value.trim(); if(!rec) throw new Error(S.ip ? "Укажите получателя (ИП)" : "Укажите ФИО получателя");
+        const amount = $("pn-amount").value.trim(); if(!(Number(amount) > 0)) throw new Error("Укажите сумму");
+        const f = S.ip ? $("pn-file").files[0] : null; if(S.ip && !f) throw new Error("Для ИП прикрепите счёт на оплату");
+        const vid = Number($("pn-video").value)||0, gd = Number($("pn-goods").value)||0;
+        const notes = [!S.ip && $("pn-bank").value.trim() ? "ФИО при пополнении: "+$("pn-bank").value.trim() : "", !S.ip && $("pn-iin").value.trim() ? "ИИН: "+$("pn-iin").value.trim() : "", !S.ip && $("pn-kaspi").value.trim() ? "Kaspi: "+$("pn-kaspi").value.trim() : "",
+          gd ? `Видео ${fmtNum(vid)} ₸ + товар (самовыкуп) ${fmtNum(gd)} ₸` : "", $("pn-notes").value.trim()].filter(Boolean).join(" · ");
+        btn.disabled = true; msg("Отправляю…");
+        const pm = S.ip ? "ИП" : "Наличные";
+        for(const id of ids){ const d = (DataManager.state.microInfluencerDeals||[]).find(x=> String(x.id)===id); if(d && d.paymentMethod!==pm) await Api.updateMicroDeal(d.id, {paymentMethod: pm}); }
+        const form = new FormData(); if(f) form.append("invoice", f);
+        form.append("payload", JSON.stringify({integrationIds: ids, amountKzt: amount, recipientName: rec, settlement: S.ip ? "ip" : "cash", stage: $("pn-stage").value, invoiceConfirmed: !!S.ip, notes}));
+        await apiFetch("/api/automation/payment-request", {method:"POST", body: form});
+        closeModal(); toast("Заявка на оплату подана — она в «Оплатах»"); MYPAY.at = 0; if(CRM.pay) CRM.pay.data = null; DataManager.refresh().then(()=> render()).catch(()=>{});
+      }catch(e){ msg("⚠ "+e.message, true); btn.disabled = false; }
+    };
+  };
+  const pickNick = ()=>{ const n = bbNickNorm($("pn-nick").value); if(n===S.nick && S.hist) return; S.nick = n; S.hist = null; S.sel = null; S.f = null; S.ip = undefined; paint();
+    if(n || S.crmId) apiFetch("/api/crm/pay-history?"+new URLSearchParams({nick:n, bloggerId:S.crmId||""}).toString()).then(h=>{ if(S.nick!==n) return; S.hist = h || {items:[]}; if(!S.crmId && h && h.blogger) S.crmId = h.blogger.id; S.ip = undefined; paint(); }).catch(()=>{ S.hist = {items:[]}; paint(); }); };
+  $("pn-nick").onchange = pickNick; $("pn-nick").addEventListener("keydown", e=>{ if(e.key==="Enter") pickNick(); });
+  S.nick = ""; if(ctx.nick || ctx.deal){ $("pn-nick").value = "@"+(ctx.nick ? bbNickNorm(ctx.nick) : deskNick(ctx.deal).replace(/^@/,"")); pickNick(); } else paint();
+}
+
+function modalDlvNew(ctx){
+  ctx = ctx || {};
+  if(!PROD.list && !PROD.loading) prodLoad();
+  if(myStale(MYDLV)) myDlvLoad();
+  const S = { nick:"", crmId: ctx.crmId || "", dealId: ctx.deal ? ctx.deal.id : null, goods: [] };
+  openModal(`<h3 style="margin:0 0 2px">📦 Заявка на доставку</h3><div class="mut" style="font-size:12px;margin-bottom:8px">Уйдёт Сае и Нине в «Доставки». Себестоимость считается сама по товарам — блогеру не возмещается, идёт в расходы интеграции.</div>
+    <div class="field"><label>Блогер</label><input id="dn-nick" list="dn-nicks" autocomplete="off" placeholder="начните вводить ник"><datalist id="dn-nicks">${bbNickOptions().map(n=>`<option value="${escapeHtml(n)}">`).join("")}</datalist></div>
+    <div id="dn-body"></div>`);
+  bbModalWidth(640);
+  const $ = id=> document.getElementById(id);
+  const rows = ()=> prodRows().filter(r=> r.code || r.name);
+  const lastReq = n=> ((MYDLV.data && MYDLV.data.items) || []).find(r=> bbNickNorm(r.blogger)===n);
+  const paint = ()=>{
+    const box = $("dn-body"); if(!box) return;
+    if(!S.nick){ box.innerHTML = `<div class="mut" style="font-size:12.5px;padding:6px 0">Введите ник — подтянутся интеграции, адрес и телефон.</div>`; return; }
+    const deals = bbDealsFor(S.nick, S.crmId);
+    if(!deals.length){ box.innerHTML = `<div style="font-size:12.5px;color:#9A6400;margin-top:6px">У блогера нет интеграций в Barter Box. Сначала заведите интеграцию — доставка привяжется к ней. <button type="button" class="btn btn-sm" id="dn-newdeal">+ Интеграция</button></div>`;
+      $("dn-newdeal").onclick = ()=>{ closeModal(); modalMicroDeal(null, {blogerName:"@"+S.nick, instagramAccount:"https://www.instagram.com/"+S.nick+"/", responsible:UI.actorName||""}); }; return; }
+    if(!S.dealId || !deals.some(d=> d.id===S.dealId)) S.dealId = (deals.find(d=> !microDealPublished(d) && !/доставлен/.test(String(d.productStatus||""))) || deals[0]).id;
+    const d = deals.find(x=> x.id===S.dealId), lr = lastReq(S.nick), pf = microBloggerPrefill(d.blogerName) || {};
+    if(!S.goods.length && !S.touched){ const code = String(d.barcode||"").split(/[,;\s]+/).filter(Boolean)[0]; const r = code && rows().find(x=> x.code===code); if(r) S.goods.push({code:r.code, name:r.name, qty:1, cost:Number(r.cost)||0}); }
+    const city = S.city ?? (d.city || (lr&&lr.city) || pf.city || ""), sum = S.goods.reduce((s,x)=> s+(Number(x.cost)||0)*x.qty, 0);
+    box.innerHTML = `
+      <div class="form-row" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+        <div class="field" style="grid-column:1/-1"><label>Для какой интеграции</label><select id="dn-deal">${deals.map(x=>`<option value="${x.id}" ${x.id===S.dealId?"selected":""}>${bbDealLine(x).replace(/<[^>]+>/g,"")}</option>`).join("")}</select></div>
+        <div class="field"><label>Город</label><input id="dn-city" value="${escapeHtml(city)}"></div>
+        <div class="field"><label>Телефон</label><input id="dn-phone" value="${escapeHtml(S.phone ?? (d.phone || (lr&&lr.phone) || pf.phone || ""))}"></div>
+        <div class="field" style="grid-column:1/-1"><label>Адрес</label><input id="dn-address" value="${escapeHtml(S.address ?? (d.address || (lr&&lr.address) || pf.address || ""))}" placeholder="улица, дом, квартира"></div>
+      </div>
+      ${bbSec("Что отправляем")}
+      <input id="dn-add" class="pv-inp" list="dn-add-list" placeholder="выберите товар из списка — по названию или ШК" style="width:100%"><datalist id="dn-add-list">${rows().slice(0,2000).map(x=>`<option value="${escapeHtml((x.name||"")+" — "+(x.code||""))}">${x.cost?fmtNum(x.cost)+" ₸":"без себестоимости"}</option>`).join("")}</datalist>
+      <div style="margin-top:8px">${S.goods.map((x,i)=>`<div style="display:grid;grid-template-columns:minmax(0,1fr) 64px 110px 28px;gap:8px;align-items:center;margin-bottom:6px;font-size:12.5px"><span>${escapeHtml(x.name)} <span class="mut" style="font-size:11px">${escapeHtml(x.code||"")}</span></span><input class="pv-inp dn-qty" data-i="${i}" type="number" min="1" value="${x.qty}"><span style="text-align:right">${x.cost?fmtNum(x.cost*x.qty)+" ₸":`<input class="pv-inp dn-cost" data-i="${i}" type="number" min="0" placeholder="себест." style="width:100%">`}</span><button type="button" class="btn btn-sm dn-rm" data-i="${i}" style="padding:0 8px">✕</button></div>`).join("") || `<div class="mut" style="font-size:12px">Товары не выбраны</div>`}</div>
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-top:6px;font-size:13px"><span>Себестоимость набора: <b>${fmtNum(sum)} ₸</b></span><label style="display:flex;gap:6px;align-items:center">Доставка, ₸ <input id="dn-dcost" class="pv-inp" type="number" style="width:90px" value="${escapeHtml(String(S.dcost ?? (dlvDefaultCost(city)||"")))}"></label></div>
+      <div class="field" style="margin-top:8px"><label>Комментарий для логиста</label><input id="dn-note" value="${escapeHtml(S.note||"")}" placeholder="подъезд, время, домофон…"></div>
+      <div class="modal-actions"><button class="btn" onclick="closeModal()">Отмена</button><button class="btn btn-primary" id="dn-save">Отправить заявку</button></div>`;
+    const keep = ()=>{ S.city = $("dn-city").value; S.phone = $("dn-phone").value; S.address = $("dn-address").value; S.dcost = $("dn-dcost").value; S.note = $("dn-note").value; };
+    $("dn-deal").onchange = ()=>{ S.dealId = +$("dn-deal").value; S.city = S.phone = S.address = S.dcost = undefined; if(!S.touched) S.goods = []; paint(); };
+    $("dn-city").onchange = ()=>{ if(!S.dcostManual) $("dn-dcost").value = dlvDefaultCost($("dn-city").value)||""; };
+    $("dn-dcost").oninput = ()=>{ S.dcostManual = true; };
+    $("dn-add").onchange = ()=>{ const v = $("dn-add").value, code = v.split(" — ").pop().trim(); const r = rows().find(x=> x.code && x.code===code) || rows().find(x=> (x.name||"")===v.split(" — ")[0].trim());
+      if(r){ keep(); S.touched = true; const ex = S.goods.find(g=> g.code && g.code===r.code); if(ex) ex.qty++; else S.goods.push({code:r.code||"", name:r.name, qty:1, cost:Number(r.cost)||0}); paint(); } };
+    document.querySelectorAll(".dn-qty").forEach(el=> el.onchange = ()=>{ keep(); S.goods[+el.dataset.i].qty = Math.max(1, parseInt(el.value,10)||1); paint(); });
+    document.querySelectorAll(".dn-cost").forEach(el=> el.onchange = ()=>{ keep(); S.goods[+el.dataset.i].cost = Number(el.value)||0; paint(); });
+    document.querySelectorAll(".dn-rm").forEach(el=> el.onclick = ()=>{ keep(); S.touched = true; S.goods.splice(+el.dataset.i, 1); paint(); });
+    $("dn-save").onclick = async (e)=>{ keep(); const body = { dealId:S.dealId, blogger:"@"+S.nick, city:S.city.trim(), address:S.address.trim(), phone:S.phone.trim(), deliveryCost:S.dcost, note:(S.note||"").trim(), items:S.goods };
+      try{ await withBusy(e.target, ()=> apiFetch("/api/delivery-requests", {method:"POST", headers:jsonHeaders, body:JSON.stringify(body)})); closeModal(); toast("Заявка на доставку отправлена"); await DataManager.refresh(); myDlvLoad(); render(); }catch(err){ toast(err.message, true); } };
+  };
+  const pickNick = ()=>{ const n = bbNickNorm($("dn-nick").value); if(n===S.nick) return; S.nick = n; S.goods = []; S.touched = false; S.city = S.phone = S.address = S.dcost = undefined; if(!ctx.deal || bbNickNorm(deskNick(ctx.deal))!==n) S.dealId = null; paint(); };
+  $("dn-nick").onchange = pickNick; $("dn-nick").addEventListener("keydown", e=>{ if(e.key==="Enter") pickNick(); });
+  if(ctx.nick || ctx.deal){ $("dn-nick").value = "@"+(ctx.nick ? bbNickNorm(ctx.nick) : deskNick(ctx.deal).replace(/^@/,"")); pickNick(); } else paint();
+  if(!PROD.list) { const t = setInterval(()=>{ if(PROD.list || !document.getElementById("dn-body")){ clearInterval(t); if(document.getElementById("dn-body") && S.nick && !S.goods.length && !S.touched) paint(); } }, 400); }
+}
 function modalMicroPayQuick(d){
+  return modalPayNew({deal:d}); // 24.11.2026: единая форма оплаты (как в «Блогерах» и «Оплатах»)
   const pm = d.paymentMethod || (bloggerIsIp(d) ? "ИП" : "Наличные");
   openModal(`<h3 style="margin:0 0 10px">Подать на оплату — ${escapeHtml(deskNick(d))}</h3>
     <input type="hidden" id="mm-payment-method" value="${escapeHtml(pm)}">
@@ -8688,15 +8834,18 @@ function modalMicroDeal(existing, prefill){
     <div id="mm-ip-banner">${microIpBannerHtml(d)}</div>
     ${microIpDocsHtml(d, isEdit)}
     ${isEdit ? videoStageBlock(existing) : ""}
+    <div class="mm-sec">Блогер</div>
     <div class="form-row">
       <div class="field"><label>Блогер</label><input id="mm-name" list="mm-blogger-list" autocomplete="off" placeholder="Начните вводить — выберите из базы или новый" value="${escapeHtml(d.blogerName)}"><datalist id="mm-blogger-list">${microKnownBloggers().map(b=>`<option value="${escapeHtml(b.name)}">${escapeHtml(b.name)} · интеграций: ${b.n}</option>`).join("")}</datalist></div>
-      <div class="field"><label>Тип сотрудничества</label><select id="mm-coop-type"><option value="">—</option>${MICRO_COOP_TYPES.map(c=>`<option ${c===microCoopTypeOf(d)?'selected':''}>${c}</option>`).join("")}</select></div>
-      <div class="field"><label>Категория блогера</label><select id="mm-blogger-category"><option value="">—</option>${MICRO_BLOGGER_CATEGORIES.map(c=>`<option ${d.bloggerCategory && c===normalizeBloggerCategory(d.bloggerCategory)?'selected':''}>${c}</option>`).join("")}</select></div>
       <div class="field"><label>Ответственный</label><select id="mm-responsible"><option value="">—</option>${microManagerNames(d.responsible).map(n=>`<option ${n===d.responsible?'selected':''}>${escapeHtml(n)}</option>`).join("")}</select></div>
+      <div class="field"><label>Категория блогера</label><select id="mm-blogger-category"><option value="">—</option>${MICRO_BLOGGER_CATEGORIES.map(c=>`<option ${d.bloggerCategory && c===normalizeBloggerCategory(d.bloggerCategory)?'selected':''}>${c}</option>`).join("")}</select></div>
       <div class="field"><label>Телефон</label><input id="mm-phone" value="${escapeHtml(d.phone||'')}"></div>
+    </div>
+    <div class="form-row">
       <div class="field"><label>Город</label><input id="mm-city" value="${escapeHtml(d.city||'')}"></div>
       <div class="field"><label>Адрес</label><input id="mm-address" value="${escapeHtml(d.address||'')}"></div>
     </div>
+    <div class="mm-sec">Соцсети</div>
     <div class="form-row">
       <div class="field"><label>Instagram (ссылка/логин)</label><input id="mm-ig" value="${escapeHtml(d.instagramAccount||'')}"></div>
       <div class="field"><label>Подписчики IG</label><input id="mm-followers" type="number" value="${d.followers||0}"></div>
@@ -8709,35 +8858,34 @@ function modalMicroDeal(existing, prefill){
       <div class="field"><label>ER TT, %</label><input id="mm-er-tt" type="number" step="0.1" value="${d.erTT||0}"></div>
       <div class="field"><label>Ср. охваты TT</label><input id="mm-avg-reach-tt" type="number" value="${d.avgReachTT||0}"></div>
     </div>
+    <div class="mm-sec">Сотрудничество и оплата</div>
     <div class="form-row">
+      <div class="field"><label>Тип сотрудничества <b style="color:#D6337E">*</b></label><select id="mm-coop-type"><option value="">—</option>${MICRO_COOP_TYPES.map(c=>`<option ${c===microCoopTypeOf(d)?'selected':''}>${c}</option>`).join("")}</select></div>
+      <div class="field"><label>Способ оплаты <b style="color:#D6337E">*</b></label><select id="mm-payment-method"><option value="">—</option>${MICRO_PAYMENT_METHODS.concat(d.paymentMethod && !MICRO_PAYMENT_METHODS.includes(d.paymentMethod) ? [d.paymentMethod] : []).map(x=>`<option ${x===d.paymentMethod?'selected':''}>${escapeHtml(x)}</option>`).join("")}</select></div>
       <div class="field"><label>Сумма, ₸</label><input id="mm-cost" type="number" value="${d.cost||0}"></div>
-      <div class="field"><label>Стоимость товара, ₸</label><input id="mm-product-cost" type="number" value="${d.productCost||0}"></div>
       <div class="field"><label>Статус оплаты</label><select id="mm-payment-status">${MICRO_PAYMENT_STATUSES.map(st=>`<option ${st===d.paymentStatus?'selected':''}>${st}</option>`).join("")}</select></div>
-      <div class="field"><label>Способ оплаты</label><select id="mm-payment-method"><option value="">—</option>${MICRO_PAYMENT_METHODS.concat(d.paymentMethod && !MICRO_PAYMENT_METHODS.includes(d.paymentMethod) ? [d.paymentMethod] : []).map(x=>`<option ${x===d.paymentMethod?'selected':''}>${escapeHtml(x)}</option>`).join("")}</select></div>
       <div class="field"><label>ИИН</label><input id="mm-iin" value="${escapeHtml(d.iin||'')}"></div>
     </div>
-    <div class="login-hint">Стоимость товара — себестоимость подарённого бартером товара; учитывается в расходах, CPV и ROMI вместе с суммой оплаты.</div>
-    ${(DataManager.state.automationFlow?.catalog||[]).length ? `<div class="field"><label>Выбрать товары и рассчитать себестоимость</label><div id="mm-flow-goods"></div><div class="login-hint">Это выбор товаров, без заявки и доставки. Отправка оформляется отдельно; координатор — Сая. Для нескольких видео общий расход не копируйте в каждую строку.</div></div>` : ""}
-
     <div class="field"><label>Условия</label><input id="mm-conditions" value="${escapeHtml(d.conditions||'')}"></div>
+    <div class="mm-sec">Товар</div>
     <div class="form-row">
-      <div class="field"><label>Товар</label><input id="mm-product" list="product-suggestions" placeholder="Название товара как в 1С" value="${escapeHtml(d.product||'')}"></div>
+      <div class="field"><label>Товар</label><input id="mm-product" list="product-suggestions" placeholder="выберите из списка: название или ШК" autocomplete="off" value="${escapeHtml(d.product||'')}"></div>
       <div class="field"><label>Штрихкод (ШК) товара</label><input id="mm-barcode" placeholder="необязательно, но надёжнее" value="${escapeHtml(d.barcode||'')}"></div>
-      <div class="field"><label>Подобрать товар (добавит ШК)</label><input id="mm-sku-pick" list="mm-sku-pick-list" placeholder="начните: флюид, праймер, салфетки…"><datalist id="mm-sku-pick-list">${microSkuAll().map(x=>`<option value="${escapeHtml(x.name+" — "+x.code)}"></option>`).join("")}</datalist></div>
+      <div class="field"><label>Себестоимость товара, ₸ <span style="font-weight:400;color:var(--ink-mute);font-size:11px">— сама по товару</span></label><input id="mm-product-cost" type="number" value="${d.productCost||0}"></div>
       <div class="field"><label>Категория товара <span style="font-weight:400;color:var(--ink-mute);font-size:11px">— сама по товару/ШК</span></label><input id="mm-product-category" placeholder="${escapeHtml(productCategoryOf(Object.assign({}, d, {productCategory:""})) === "Не указана" ? "не определилась — впишите" : "определилась: " + productCategoryOf(Object.assign({}, d, {productCategory:""})))}" title="Заполнять не нужно: категория для дашборда берётся по ШК и названию товара. Впишите, только если она не определилась." value="${escapeHtml(d.productCategory||'')}"></div>
       <div class="field"><label>Статус товара</label><select id="mm-product-status">${MICRO_PRODUCT_STATUSES.map(st=>`<option ${st===d.productStatus?'selected':''}>${st}</option>`).join("")}</select></div>
     </div>
-    <div class="form-row">
-      <div class="field"><label>Статус видео</label><select id="mm-video-status">${MICRO_VIDEO_STATUSES.map(st=>`<option ${st===d.videoStatus?'selected':''}>${st}</option>`).join("")}</select></div>
-      <div class="field"><label>Язык видео</label><select id="mm-video-lang"><option value="">— не указан —</option>${MICRO_VIDEO_LANGS.map(st=>`<option ${st===microVideoLang(d)?'selected':''}>${st}</option>`).join("")}</select></div>
-    </div>
-    <datalist id="product-suggestions">${knownProductNames().map(p=>`<option value="${escapeHtml(p)}">`).join("")}</datalist>
-    <div class="login-hint">Если укажешь ШК — вклад в продажи и ROMI будут считаться по нему (надёжнее, чем по названию товара).</div>
+    ${(DataManager.state.automationFlow?.catalog||[]).length ? `<div class="field"><label>Выбрать товары и рассчитать себестоимость</label><div id="mm-flow-goods"></div><div class="login-hint">Это выбор товаров, без заявки и доставки. Отправка оформляется отдельно; координатор — Сая. Для нескольких видео общий расход не копируйте в каждую строку.</div></div>` : ""}
+    <datalist id="product-suggestions">${microSkuAll().map(x=>`<option value="${escapeHtml(x.name+" — "+x.code)}">`).join("")}${knownProductNames().map(p=>`<option value="${escapeHtml(p)}">`).join("")}</datalist>
+    <div class="login-hint">Выберите товар из списка — ШК и себестоимость подставятся сами (по ШК считаются вклад в продажи и ROMI).</div>
+    <div class="mm-sec">Видео</div>
     <div class="form-row">
       <div class="field"><label>Формат</label><select id="mm-format">${MICRO_FORMATS.map(f=>`<option ${microFormatOf(d)===f?'selected':''}>${f}</option>`).join("")}</select></div>
-      <div class="field"><label>Охват сторис (вручную)</label><input id="mm-stories-reach" type="number" value="${d.factReachStories||0}"></div>
-      <div class="field"><label>Клики сторис</label><input id="mm-stories-clicks" type="number" value="${d.storiesClicks||0}"></div>
-      <div class="field"><label>Ссылка на сторис (Google Диск)</label><input id="mm-stories-link" placeholder="https://drive.google.com/..." value="${escapeHtml(d.storiesLink||'')}"></div>
+      <div class="field"><label>Статус видео</label><select id="mm-video-status">${MICRO_VIDEO_STATUSES.map(st=>`<option ${st===d.videoStatus?'selected':''}>${st}</option>`).join("")}</select></div>
+      <div class="field"><label>Язык видео</label><select id="mm-video-lang"><option value="">— не указан —</option>${MICRO_VIDEO_LANGS.map(st=>`<option ${st===microVideoLang(d)?'selected':''}>${st}</option>`).join("")}</select></div>
+      <div class="field"><label>Плановая дата</label><input id="mm-planned-date" type="date" value="${d.plannedDate||''}"></div>
+      <div class="field"><label>Дата выхода</label><input id="mm-publish-date" type="date" value="${d.publishDate||''}"></div>
+      ${d.id && DataManager.state.automationFlow ? `<div class="field"><a class="btn btn-ghost btn-sm" href="/flow/?lifecycle=${encodeURIComponent(d.id)}" target="_blank" rel="noopener">Доставка и сроки +2 / +4 ↗</a></div>` : ""}
     </div>
     <div class="form-row">
       <div class="field"><label>Ссылка на Reels</label><input id="mm-reels-link" value="${escapeHtml(d.reelsLink||'')}"></div>
@@ -8746,15 +8894,15 @@ function modalMicroDeal(existing, prefill){
       <div class="field"><label>Факт.охват TikTok</label><input id="mm-fact-reach-tt" type="number" value="${d.factReachTT||0}"></div>
     </div>
     <div class="form-row">
-      ${d.id && DataManager.state.automationFlow ? `<div class="field"><a class="btn btn-ghost btn-sm" href="/flow/?lifecycle=${encodeURIComponent(d.id)}" target="_blank" rel="noopener">Доставка и сроки +2 / +4 ↗</a></div>` : ""}
-      <div class="field"><label>Плановая дата</label><input id="mm-planned-date" type="date" value="${d.plannedDate||''}"></div>
-      <div class="field"><label>Дата выхода</label><input id="mm-publish-date" type="date" value="${d.publishDate||''}"></div>
+      <div class="field"><label>Ссылка на сторис (Google Диск)</label><input id="mm-stories-link" placeholder="https://drive.google.com/..." value="${escapeHtml(d.storiesLink||'')}"></div>
+      <div class="field"><label>Охват сторис (вручную)</label><input id="mm-stories-reach" type="number" value="${d.factReachStories||0}"></div>
+      <div class="field"><label>Клики сторис</label><input id="mm-stories-clicks" type="number" value="${d.storiesClicks||0}"></div>
     </div>
     <div class="field"><label>Комментарий</label><textarea id="mm-notes">${escapeHtml(d.notes||"")}</textarea></div>
     <label class="login-hint"${DataManager.state.automationFlow?'':' style="display:none"'}><input id="mm-brief-auto-send" type="checkbox" ${d.flowBriefAutoSend?'checked':''}> Разрешаю автоматически отправить утверждённое ТЗ в WhatsApp на проверенный телефон этой интеграции</label>
     ${isEdit&&!UI.readOnly&&!microDealPublished(d)?`<div class="login-hint" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button type="button" class="btn btn-ghost btn-sm" id="mm-remind-now">📨 Напомнить блогеру в WhatsApp, что ждём видео</button><span id="mm-remind-msg" style="font-size:12px;color:var(--ink-mute)">${d.coordLastOutDay?'Последнее сообщение блогеру: '+escapeHtml(d.coordLastOutDay):'Автонапоминаний нет — только по кнопке'}</span></div>`:''}
     <div class="modal-actions">
-      ${isEdit&&!UI.readOnly?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-right:auto"><button class="btn" id="mm-paybtn" style="background:#FFF3C8;border-color:#F1D97A">💳 Подать на оплату</button><button class="btn" id="mm-dlvbtn">📦 Подать на доставку</button><button class="btn" id="mm-tzbtn">📝 Подать ТЗ</button></div>`:''}
+      ${isEdit&&!UI.readOnly?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-right:auto"><button class="btn" id="mm-tzbtn">📝 Подать ТЗ</button></div>`:''}
       <button class="btn btn-ghost" id="mm-cancel">Отмена</button>
       <button class="btn btn-primary" id="mm-save">${isEdit?'Сохранить':'Добавить'}</button>
     </div>
@@ -8801,6 +8949,17 @@ function modalMicroDeal(existing, prefill){
   if(mmBc){ mmBc.addEventListener("change", mmAutoCost); if(!(Number(d.productCost)>0)) setTimeout(mmAutoCost, 0); }
   // 24.11.2026: появилась ссылка на видео → статус «опубликовано».
   ["mm-reels-link","mm-tt-link"].forEach(id=>{ const el = document.getElementById(id); if(el) el.addEventListener("input", ()=>{ const vs = document.getElementById("mm-video-status"); if(el.value.trim() && vs) vs.value = "опубликовано"; }); });
+  // 24.11.2026: товар выбирают из списка «название — ШК» → подставляются название, ШК и себестоимость.
+  { const pn = document.getElementById("mm-product");
+    if(pn) pn.addEventListener("change", ()=>{ const val = pn.value.trim(); if(!val) return;
+      const all = microSkuAll(); let hit = all.find(x=> val === x.name+" — "+x.code);
+      if(!hit){ const pr = (typeof prodRows==="function" ? prodRows() : []).filter(x=> x.code && String(x.name||"").trim().toLowerCase()===val.toLowerCase()); if(pr.length===1) hit = {name:pr[0].name, code:pr[0].code}; }
+      if(!hit){ const ex = all.filter(x=> String(x.name||"").trim().toLowerCase()===val.toLowerCase()); if(ex.length===1) hit = ex[0]; }
+      if(!hit) return;
+      pn.value = hit.name; const bc = document.getElementById("mm-barcode"); const cur = bc.value.split(/[,;\s]+/).map(c=>c.trim()).filter(Boolean);
+      if(!cur.includes(hit.code)) bc.value = (cur.length && !/ — /.test(val) ? cur.concat(hit.code) : [hit.code]).join(",");
+      const pc = document.getElementById("mm-product-cost"); if(pc && pc.dataset.auto!==undefined && Number(pc.value)===Number(pc.dataset.auto)) pc.value = 0;
+      mmAutoCost(); }); }
   const skuPick = document.getElementById("mm-sku-pick");
   if(skuPick) skuPick.addEventListener("change", ()=>{
     const hit = microSkuAll().find(x=> skuPick.value === x.name+" — "+x.code || skuPick.value.trim() === x.code);
@@ -8903,6 +9062,9 @@ function modalMicroDeal(existing, prefill){
     const btn = document.getElementById("mm-save");
     const blogerName = document.getElementById("mm-name").value.trim();
     if(!blogerName){ toast("Укажите блогера", true); return; }
+    { const ct = document.getElementById("mm-coop-type").value, pm = document.getElementById("mm-payment-method").value;
+      if(!ct){ toast("Выберите тип сотрудничества: платная, доп. видео или за товар", true); document.getElementById("mm-coop-type").focus(); return; }
+      if(!pm && ct!=="За товар"){ toast("Выберите способ оплаты: ИП или наличные", true); document.getElementById("mm-payment-method").focus(); return; } }
     if(flowGoodsDirty && flowPicker){try{flowPicker.validate();}catch(e){toast(e.message,true);return;}}
     if(prefill?.crmBloggerId&&!document.getElementById('mm-responsible').value.trim()){toast('Укажите ответственного: соответствие сотрудника CRM ещё не настроено',true);return;}
     const payload = readMicroForm();
@@ -9087,7 +9249,7 @@ function tplCrmBloggers(){
         <td style="max-width:210px;overflow:hidden;text-overflow:ellipsis">${edit ? `<span class="crm-icom" data-id="${escapeHtml(b.id)}" title="${escapeHtml(b.lastComment||"")}" style="cursor:text;${b.lastComment?"color:#6E6168":"color:#D6337E"}">${escapeHtml((b.lastComment||"добавить…").slice(0,40))}${(b.lastComment||"").length>40?"…":""}</span>` : `<span class="mut" title="${escapeHtml(b.lastComment||"")}">${escapeHtml((b.lastComment||"—").slice(0,40))}</span>`}</td>
         <td>${b.manager ? `<span class="pv-st s-m">${escapeHtml(b.manager)}</span>` : `<span class="mut">—</span>`}</td>
         ${cols.map(([k])=>`<td${right.has(k)?' style="text-align:right"':""}>${cell(k,b)}</td>`).join("")}
-        <td style="white-space:nowrap"><button class="btn btn-sm crm-deal" data-id="${escapeHtml(b.id)}">+ Интеграция</button>${crmIsLead() && edit ? ` <button class="btn btn-sm crm-del" data-id="${escapeHtml(b.id)}" title="Удалить" style="color:#C42B45;padding:0 9px">✕</button>` : ""}</td>
+        <td style="white-space:nowrap"><button class="btn btn-sm crm-act crm-pay" data-id="${escapeHtml(b.id)}" title="Подать на оплату">💳</button> <button class="btn btn-sm crm-act crm-dlv" data-id="${escapeHtml(b.id)}" title="Заявка на доставку">📦</button> <button class="btn btn-sm crm-deal" data-id="${escapeHtml(b.id)}">+ Интеграция</button>${crmIsLead() && edit ? ` <button class="btn btn-sm crm-del" data-id="${escapeHtml(b.id)}" title="Удалить" style="color:#C42B45;padding:0 9px">✕</button>` : ""}</td>
       </tr>`).join("") : `<tr><td colspan="${cols.length+8}" class="empty">${CRM.loading ? "Загружаю…" : "Ничего не нашлось"}</td></tr>`}</tbody>
     </table>
   </div>
@@ -9150,6 +9312,9 @@ function wireCrmBloggers(){
   const ss=document.getElementById("crm-sel-status"); if(ss) ss.onclick = ()=>{ const m=CRM.meta; openModal(`<h3>Статус для ${fmtNum(CRM.sel.size)} блогеров</h3><div class="field"><label>Статус</label><select id="bs-s">${Object.entries(m.talk).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}${Object.entries(m.decline).map(([k,v])=>`<option value="decl:${k}">Отказ: ${v}</option>`).join("")}</select></div><div class="modal-actions"><button class="btn btn-ghost" id="bs-no">Отмена</button><button class="btn btn-primary" id="bs-ok">Поставить</button></div>`); document.getElementById("bs-no").onclick=closeModal; document.getElementById("bs-ok").onclick=()=>{ const v=document.getElementById("bs-s").value; closeModal(); crmBulk(v.startsWith("decl:")?{action:"status",status:"declined",declineReason:v.slice(5)}:{action:"status",status:v}, "Статус поставлен"); }; };
   const sd=document.getElementById("crm-sel-del"); if(sd) sd.onclick = ()=>{ openModal(`<h3>Удалить ${fmtNum(CRM.sel.size)} блогеров?</h3><div class="login-hint" style="text-align:left">Они пропадут из списка. В базе остаётся отметка, кто и когда удалил — при необходимости можно вернуть.</div><div class="modal-actions"><button class="btn btn-ghost" id="bd-no">Отмена</button><button class="btn btn-primary" id="bd-ok" style="background:var(--bad)">Удалить</button></div>`); document.getElementById("bd-no").onclick=closeModal; document.getElementById("bd-ok").onclick=()=>{ closeModal(); crmBulk({action:"delete"}, "Удалено"); }; };
   document.querySelectorAll(".crm-del").forEach(b=> b.onclick = (e)=>{ e.stopPropagation(); CRM.sel = new Set([b.dataset.id]); document.getElementById("crm-sel-del") ? null : null; openModal(`<h3>Удалить блогера?</h3><div class="modal-actions"><button class="btn btn-ghost" id="bd-no">Отмена</button><button class="btn btn-primary" id="bd-ok" style="background:var(--bad)">Удалить</button></div>`); document.getElementById("bd-no").onclick=()=>{ CRM.sel.clear(); closeModal(); }; document.getElementById("bd-ok").onclick=()=>{ closeModal(); crmBulk({action:"delete"}, "Удалено"); }; });
+  { const it = id=> ((CRM.list && CRM.list.items) || []).find(x=> x.id===id);
+    document.querySelectorAll(".crm-pay").forEach(b=> b.onclick = e=>{ e.stopPropagation(); const x = it(b.dataset.id); if(x) modalPayNew({nick:x.nick || "", crmId:x.id, prices:x.price}); });
+    document.querySelectorAll(".crm-dlv").forEach(b=> b.onclick = e=>{ e.stopPropagation(); const x = it(b.dataset.id); if(x) modalDlvNew({nick:x.nick || "", crmId:x.id}); }); }
   document.querySelectorAll(".crm-deal").forEach(b=> b.onclick = async (e)=>{ e.stopPropagation(); try{ const x = await CrmApi.get(b.dataset.id); crmOpenDeal(x); }catch(err){ toast(err.message,true); } });
   const cb=document.getElementById("crm-cols"); if(cb) cb.onclick = ()=>{
     openModal(`<h3>Колонки</h3><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px">${CRM_COLS.map(([k,t])=>`<label style="display:flex;gap:6px;font-size:13px"><input type="checkbox" class="cc-k" value="${k}" ${CRM.cols.has(k)?"checked":""}>${t}</label>`).join("")}</div><div class="modal-actions"><button class="btn btn-ghost" id="cc-all">Все</button><button class="btn btn-primary" id="cc-ok">Готово</button></div>`);
@@ -9244,7 +9409,7 @@ async function modalCrmBlogger(id){
       <div><div style="display:flex;justify-content:space-between;align-items:center"><b>Интеграции · ${b.dealList.length}</b><button class="btn btn-ghost btn-sm" id="cb-add-deal">+ Интеграция</button></div>
         ${b.dealList.length ? `<div style="font-size:12.5px;margin-top:6px">${b.dealList.slice(0,8).map(d=>`<div style="padding:5px 0;border-bottom:1px solid var(--line)">${escapeHtml(d.date||"без даты")} · ${escapeHtml(d.product||"—")} · <span style="color:${d.cancelled?"var(--bad)":d.done?"var(--ok)":"var(--warn)"}">${d.cancelled?"отменена":d.done?"вышла":"в работе"}</span>${d.manager?` · ${escapeHtml(d.manager)}`:""}</div>`).join("")}</div>` : `<div style="font-size:12.5px;color:var(--ink-mute);margin-top:6px">Интеграций в Barter Box ещё нет</div>`}
       </div>
-      <div><div style="display:flex;justify-content:space-between;align-items:center"><b>Оплаты · ${b.payments.length}</b>${edit ? `<button class="btn btn-ghost btn-sm" id="cb-pay">Подать на оплату</button>` : ""}</div>
+      <div><div style="display:flex;justify-content:space-between;align-items:center"><b>Оплаты · ${b.payments.length}</b><span style="display:flex;gap:6px"><button class="btn btn-sm" id="cb-pay" style="background:#FFF3C8;border-color:#F1D97A">💳 Подать на оплату</button><button class="btn btn-sm" id="cb-dlv">📦 Доставка</button></span></div>
         ${b.payments.length ? `<div style="font-size:12.5px;margin-top:6px">${b.payments.slice(0,8).map(p=>`<div style="padding:5px 0;border-bottom:1px solid var(--line)">${crmDate(p.createdAt)} · <b>${fmtNum(p.amount)} ₸</b> · ${escapeHtml(p.statusLabel)}${p.isIp?" · ИП":""}</div>`).join("")}</div>` : `<div style="font-size:12.5px;color:var(--ink-mute);margin-top:6px">Оплат не было</div>`}
       </div>
     </div>
@@ -9270,7 +9435,8 @@ async function modalCrmBlogger(id){
     try{ const nb = await withBusy(save, ()=> CrmApi.save(b.id, body)); toast("Сохранено"); closeModal(); done(nb); }catch(e){ toast(e.message, true); }
   };
   document.getElementById("cb-add-deal").onclick = ()=>{ closeModal(); crmOpenDeal(b); };
-  const pay = document.getElementById("cb-pay"); if(pay) pay.onclick = ()=>{ closeModal(); modalCrmPayment(b); };
+  const pay = document.getElementById("cb-pay"); if(pay) pay.onclick = ()=>{ closeModal(); modalPayNew({nick:b.nick||"", crmId:b.id, prices:b.price}); };
+  const dlv = document.getElementById("cb-dlv"); if(dlv) dlv.onclick = ()=>{ closeModal(); modalDlvNew({nick:b.nick||"", crmId:b.id}); };
 }
 
 function modalCrmPayment(b){
@@ -9364,7 +9530,7 @@ function tplCrmPayments(){
   return `
   <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:12px">
     <div><h1 style="margin:0;font-size:22px;font-weight:800">${nina?"Заявки на оплату":"Мои заявки на оплату"}</h1><div class="mut" style="margin-top:3px">${fmtNum(all.length)} заявок · ${nina?"все менеджеры · видит только Нина":"только поданные вами · статус меняет Нина"}</div></div>
-    ${nina ? `<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="pay-excel">Excel</button><button class="btn" id="pay-copyall">Скопировать «${PAY_LABEL[PAY.st]||"все"}»</button>${edit?`<button class="btn btn-primary" id="pay-import">Импорт оплат</button><input type="file" id="pay-import-file" accept=".xlsx,.xls,.csv" style="display:none">`:""}</div>` : ""}
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" id="pay-new">+ Подать на оплату</button>${nina ? `<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="pay-excel">Excel</button><button class="btn" id="pay-copyall">Скопировать «${PAY_LABEL[PAY.st]||"все"}»</button>${edit?`<button class="btn btn-primary" id="pay-import">Импорт оплат</button><input type="file" id="pay-import-file" accept=".xlsx,.xls,.csv" style="display:none">`:""}</div>` : ""}</div>
   </div>
   <div style="display:flex;gap:6px;margin-bottom:12px"><button class="pv-chip pay-tab ${PAY.tab==="cash"?"on":""}" data-k="cash">Наличные и ИИН <span class="n">${cash.length}</span></button><button class="pv-chip pay-tab ${PAY.tab==="ip"?"on":""}" data-k="ip">ИП и договоры <span class="n">${ip.length}</span></button></div>
   <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:12px">${kpi(n("pending").length,"К оплате · "+fmtNum(sum(n("pending")))+" ₸","#9A6400")}${kpi(n("submitted").length,"Подано · "+fmtNum(sum(n("submitted")))+" ₸","#2F5FB3")}${kpi(n("paid").length,"Оплачено","#1E9E6A")}${kpi(fmtNum(sum(n("paid")))+" ₸","Выплачено")}${kpi(fmtNum(sum(n("pending"))+sum(n("submitted")))+" ₸","Итого к выплате","#D6337E")}${kpi(fmtNum(sum(n("refunded")))+" ₸","Возвраты ("+n("refunded").length+")")}</div>
@@ -9392,6 +9558,7 @@ function tplCrmPayments(){
 function wireCrmPayments(){
   const all = (CRM.pay.data && CRM.pay.data.items) || [], rp = ()=> crmRepaint();
   const visible = ()=>{ const base = all.filter(p=> PAY.tab==="ip" ? p.isIp : !p.isIp); let it = base.filter(p=> PAY.st==="all" || p.status===PAY.st); if(PAY.mgr) it = it.filter(p=> p.manager===PAY.mgr); return it; };
+  { const pn = document.getElementById("pay-new"); if(pn) pn.onclick = ()=> modalPayNew({}); }
   document.querySelectorAll(".pay-tab").forEach(b=> b.onclick = ()=>{ PAY.tab = b.dataset.k; PAY.sel.clear(); rp(); });
   document.querySelectorAll(".pay-st").forEach(b=> b.onclick = ()=>{ PAY.st = b.dataset.k; PAY.sel.clear(); rp(); });
   const mg = document.getElementById("pay-mgr"); if(mg) mg.onchange = ()=>{ PAY.mgr = mg.value; rp(); };
@@ -9536,8 +9703,8 @@ function modalMicroCard(d){
       <div><h3 style="margin:0;font-size:20px;font-weight:800">${escapeHtml(deskNick(d))} <span style="font-weight:700;font-size:15px">${escapeHtml(d.product||"товар не выбран")}</span></h3>
         <div class="mut" style="font-size:12.5px;margin-top:3px">${escapeHtml(microFormatOf(d))} · ведёт ${escapeHtml(d.responsible||"—")}${d.city?" · "+escapeHtml(d.city):""}${lang?" · видео "+lang:""}${d.cost?" · "+fmtNum(d.cost)+" ₸":""} · ${ip?"ИП":"ИИН / Kaspi"}${d.plannedDate?" · план "+ddmmStr(d.plannedDate):""}${d.publishDate?" · вышло "+ddmmStr(d.publishDate):""}</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        ${!UI.readOnly && pub && (Number(d.cost)||0)>0 && d.paymentStatus==="не оплачено" ? `<button class="btn btn-primary" id="mc-pay-go">Подать на оплату</button>` : ""}
-        ${!UI.readOnly && !/доставлен/i.test(String(d.productStatus||"")) && d.productDelivery!=="has" ? `<button class="btn" id="mc-dlv">Заявка на доставку</button>` : ""}
+        
+        
         ${!UI.readOnly ? `<button class="btn btn-ghost" id="mc-edit">← К интеграции</button>` : ""}
         <button class="btn" onclick="closeModal()">Закрыть</button></div>
     </div>
@@ -9574,7 +9741,7 @@ function modalMicroCard(d){
           <div class="mut" style="font-size:11.5px;margin-top:6px">По ссылке статус станет «опубликовано», дата выхода — сегодня${d.publishDate?" · вышло "+ddmmStr(d.publishDate):""}. Охват — ${microDealFactReach(d) ? fmtNum(microDealFactReach(d)) : "соберётся по ссылке"}.</div>`)}
         ${UI.readOnly ? "" : card("Оплата", `${(()=>{ const pmv = d.paymentMethod || (ip ? "ИП" : "Наличные"); return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px"><span class="pv-lbl">Как платим</span><button type="button" class="pv-chip mc-pm ${/налич/i.test(pmv)?"on":""}" data-v="Наличные">ИИН / Kaspi</button><button type="button" class="pv-chip mc-pm ${/^ип/i.test(pmv)?"on":""}" data-v="ИП">ИП</button><span class="mut" style="font-size:11.5px">сохраняется сразу</span></div><input type="hidden" id="mm-payment-method" value="${escapeHtml(pmv)}">`; })()}
           <div id="mc-ipdocs" style="${/^ип/i.test(d.paymentMethod || (ip ? "ИП" : "")) ? "" : "display:none"}">${microIpDocsHtml(d, true)}</div>
-          ${microPayHtml(d, true).replace('margin:4px 0 12px','margin:0')}
+          <div class="pv-note" style="margin-top:6px">Подать на оплату и на доставку — во вкладке «Блогеры» (💳 📦 в строке блогера), в «Оплатах» и «Доставках»: вводите ник — интеграции и прошлые реквизиты подтянутся сами.</div>
           ${ip ? `<div class="pv-note" style="margin-top:8px">${(()=>{ const ipDeals = all.filter(x=> microIsIp(x) || ip), left = ipDeals.filter(x=> !microDealPublished(x)); return left.length ? `ИП: АВР и ЭСФ запросим, когда выйдут все видео по договору — осталось ${left.length}.` : (ipDeals.every(x=>x.avrReceived) ? "АВР и ЭСФ получены." : "Все видео вышли — запросите у блогера АВР и ЭСФ."); })()}</div>` : ""}`, `<span class="pv-st ${d.paymentStatus==="оплачено"?"s-ok":d.paymentStatus==="к оплате"?"s-a":"s-w"}">${escapeHtml(d.paymentStatus||"не оплачено")}</span>`)}
       </div>
       <div style="display:flex;flex-direction:column;gap:14px">
@@ -10281,8 +10448,8 @@ function tplDeliveryReq(){
   const what = r=> r.items.map(x=> escapeHtml(x.name) + (x.qty>1 ? " ×"+x.qty : "")).join(", ");
   return `
   <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:12px">
-    <div><h1 style="margin:0;font-size:22px;font-weight:800">${lead?"Заявки на доставку":"Мои заявки на доставку"}</h1><div class="mut" style="margin-top:3px">${lead?"подают менеджеры из карточки интеграции · видят Сая и Нина":"подаются из карточки интеграции — кнопка «Заявка на доставку» · статус меняют Сая и Нина"}</div></div>
-    ${lead ? `<div style="display:flex;gap:8px"><button class="btn" id="dlv-import">Импорт списка (Excel)</button><input type="file" id="dlv-import-file" accept=".xlsx,.xls,.csv" style="display:none"><button class="btn" id="dlv-excel">Excel по фильтру</button></div>` : ""}
+    <div><h1 style="margin:0;font-size:22px;font-weight:800">${lead?"Заявки на доставку":"Мои заявки на доставку"}</h1><div class="mut" style="margin-top:3px">${lead?"подают менеджеры — здесь, из «Блогеров» (📦) или с рабочего стола · видят Сая и Нина":"кнопка «+ Заявка на доставку» или 📦 в «Блогерах» · статус меняют Сая и Нина"}</div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" id="dlv-new">+ Заявка на доставку</button>${lead ? `<div style="display:flex;gap:8px"><button class="btn" id="dlv-import">Импорт списка (Excel)</button><input type="file" id="dlv-import-file" accept=".xlsx,.xls,.csv" style="display:none"><button class="btn" id="dlv-excel">Excel по фильтру</button></div>` : ""}</div>
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
     ${["new","sent","delivered","failed","all"].map(k=>`<button class="pv-chip dlv-st ${DLV.st===k?"on":""}" data-k="${k}">${k==="all"?"Все":DLV_LABEL[k]} <span class="n">${k==="all"?all.length:n(k)}</span></button>`).join("")}
@@ -10306,6 +10473,7 @@ function tplDeliveryReq(){
 function wireDeliveryReq(){
   const all = (MYDLV.data && MYDLV.data.items) || [], rr = ()=> render();
   const vis = ()=> all.filter(r=> (DLV.st==="all" || r.status===DLV.st) && (!DLV.city || r.city===DLV.city) && (!DLV.mgr || r.manager===DLV.mgr));
+  { const dn = document.getElementById("dlv-new"); if(dn) dn.onclick = ()=> modalDlvNew({}); }
   document.querySelectorAll(".dlv-st").forEach(b=> b.onclick = ()=>{ DLV.st = b.dataset.k; DLV.sel.clear(); rr(); });
   const ci = document.getElementById("dlv-city"); if(ci) ci.onchange = ()=>{ DLV.city = ci.value; rr(); };
   const mg = document.getElementById("dlv-mgr"); if(mg) mg.onchange = ()=>{ DLV.mgr = mg.value; rr(); };
@@ -10324,6 +10492,7 @@ function wireDeliveryReq(){
 }
 // Заявка на доставку из карточки интеграции
 function modalDeliveryRequest(d){
+  return modalDlvNew({deal:d}); // 24.11.2026: единая форма доставки
   if(!PROD.list && !PROD.loading) prodLoad();
   const rows = ()=> prodRows().filter(r=> r.code || r.name);
   const goods = [];
