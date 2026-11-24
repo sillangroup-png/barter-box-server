@@ -8668,11 +8668,9 @@ function modalMicroDeal(existing, prefill){
     </div>
     <div class="form-row">
       ${d.id && DataManager.state.automationFlow ? `<div class="field"><a class="btn btn-ghost btn-sm" href="/flow/?lifecycle=${encodeURIComponent(d.id)}" target="_blank" rel="noopener">Доставка и сроки +2 / +4 ↗</a></div>` : ""}
-      <div class="field"><label>Договорились — блогер присылает видео</label><input id="mm-agreed-date" type="date" value="${d.agreedDate||''}"></div>
-      <div class="field"><label>Плановая дата публикации — выйдет</label><input id="mm-planned-date" type="date" value="${d.plannedDate||''}"><div style="font-size:11px;color:var(--ink-mute);margin-top:3px">ставится сама: +2 дня от договорённости</div></div>
-      <div class="field"><label>Дата выкладки (факт)</label><input id="mm-publish-date" type="date" value="${d.publishDate||''}"></div>
+      <div class="field"><label>Плановая дата</label><input id="mm-planned-date" type="date" value="${d.plannedDate||''}"></div>
+      <div class="field"><label>Дата выхода</label><input id="mm-publish-date" type="date" value="${d.publishDate||''}"></div>
     </div>
-    <div class="login-hint">Плановая дата — чтобы интеграция сразу попала в нужный месяц фильтра/графика, даже если видео ещё не вышло. Как только появится факт-дата выкладки — используется она.</div>
     <div class="field"><label>Комментарий</label><textarea id="mm-notes">${escapeHtml(d.notes||"")}</textarea></div>
     <label class="login-hint"${DataManager.state.automationFlow?'':' style="display:none"'}><input id="mm-brief-auto-send" type="checkbox" ${d.flowBriefAutoSend?'checked':''}> Разрешаю автоматически отправить утверждённое ТЗ в WhatsApp на проверенный телефон этой интеграции</label>
     ${isEdit&&!UI.readOnly&&!microDealPublished(d)?`<div class="login-hint" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button type="button" class="btn btn-ghost btn-sm" id="mm-remind-now">📨 Напомнить блогеру в WhatsApp, что ждём видео</button><span id="mm-remind-msg" style="font-size:12px;color:var(--ink-mute)">${d.coordLastOutDay?'Последнее сообщение блогеру: '+escapeHtml(d.coordLastOutDay):'Автонапоминаний нет — только по кнопке'}</span></div>`:''}
@@ -8715,6 +8713,15 @@ function modalMicroDeal(existing, prefill){
       flowGoodsInput=lines;flowGoodsDirty=true;document.getElementById('mm-product-cost').value=total/100;
     }});
   }
+  // 24.11.2026: себестоимость товара — сама по ШК из «Товаров» (если вручную не вписали другую).
+  const mmCost = document.getElementById("mm-product-cost"), mmBc = document.getElementById("mm-barcode");
+  const mmAutoCost = ()=>{ if(!mmCost || !mmBc) return; const codes = mmBc.value.split(/[,;\s]+/).map(c=>c.trim()).filter(Boolean); if(!codes.length) return;
+    const apply = ()=>{ let sum = 0; for(const c of codes){ const pr = (PROD.list||[]).find(p=> String(p.article||"").trim()===c || String(p.sku||"").trim()===c); if(pr && Number(pr.cost)>0) sum += Number(pr.cost); }
+      const cur = Number(mmCost.value)||0; if(sum > 0 && (!cur || mmCost.dataset.auto===String(cur))){ mmCost.value = Math.round(sum); mmCost.dataset.auto = String(Math.round(sum)); } };
+    if(PROD.list) apply(); else if(!PROD.loading) prodLoad().then(apply).catch(()=>{}); };
+  if(mmBc){ mmBc.addEventListener("change", mmAutoCost); if(!(Number(d.productCost)>0)) setTimeout(mmAutoCost, 0); }
+  // 24.11.2026: появилась ссылка на видео → статус «опубликовано».
+  ["mm-reels-link","mm-tt-link"].forEach(id=>{ const el = document.getElementById(id); if(el) el.addEventListener("input", ()=>{ const vs = document.getElementById("mm-video-status"); if(el.value.trim() && vs) vs.value = "опубликовано"; }); });
   const skuPick = document.getElementById("mm-sku-pick");
   if(skuPick) skuPick.addEventListener("change", ()=>{
     const hit = microSkuAll().find(x=> skuPick.value === x.name+" — "+x.code || skuPick.value.trim() === x.code);
@@ -8723,7 +8730,9 @@ function modalMicroDeal(existing, prefill){
     const cur = bc.value.split(/[,;\s]+/).map(c=>c.trim()).filter(Boolean);
     if(!cur.includes(hit.code)) cur.push(hit.code);
     bc.value = cur.join(",");
+    const pn = document.getElementById("mm-product"); if(pn && !pn.value.trim()) pn.value = hit.name;
     skuPick.value = "";
+    mmAutoCost();
   });
   { const pm = document.getElementById("mm-payment-method"), ib = document.getElementById("mm-ip-banner");
     if(pm && ib) pm.addEventListener("change", ()=>{ const keep = {markingChecked: (document.getElementById("mm-marking-checked")||{}).checked, avrReceived: (document.getElementById("mm-avr-received")||{}).checked};
@@ -8779,7 +8788,7 @@ function modalMicroDeal(existing, prefill){
       barcode: document.getElementById("mm-barcode").value.trim(),
       productCategory: document.getElementById("mm-product-category").value.trim(),
       productStatus: document.getElementById("mm-product-status").value,
-      videoStatus: document.getElementById("mm-video-status").value,
+      videoStatus: (document.getElementById("mm-reels-link").value.trim() || document.getElementById("mm-tt-link").value.trim()) ? "опубликовано" : document.getElementById("mm-video-status").value,
       videoLang: document.getElementById("mm-video-lang").value,
       reelsLink: document.getElementById("mm-reels-link").value.trim(),
       factReachReels: parseInt(document.getElementById("mm-fact-reach-reels").value,10)||0,
