@@ -9909,6 +9909,7 @@ function deskAction(x){
   if(x.act==="suggest"){ // Reels и TikTok — по отдельности: можно подтвердить оба
     const grp = pl=> d.linkSuggest.filter(s=> s.platform===pl), line = (pl, name)=>{ const g = grp(pl); if(!g.length) return ""; return `<div style="display:flex;gap:6px;align-items:center;justify-content:flex-end;flex-wrap:wrap"><span class="mut" style="font-size:11.5px">${name}:</span>${g.map((s,i)=>`<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(s.url)}" title="${escapeHtml(s.caption||"")}">${g.length>1?"вариант "+(i+1):"открыть"} · ${escapeHtml(ddmmStr(s.day)||"")}</a><button class="btn btn-sm btn-primary desk-sug-ok" data-id="${d.id}" data-url="${escapeHtml(s.url)}">Это ${name}</button>`).join("")}</div>`; };
     return `<div style="display:flex;flex-direction:column;gap:5px">${line("ig","Reels")}${line("tt","TikTok")}<div style="text-align:right"><button class="btn btn-sm desk-sug-no" data-id="${d.id}">Ничего из этого</button></div></div>`; }
+  if(x.act==="tzreq") return `<button class="btn btn-sm btn-primary" onclick="modalMicroTzQuick((DataManager.state.microInfluencerDeals||[]).find(z=>z.id===${d.id}))">📝 Отправить ТЗ</button><button class="btn btn-sm" onclick="modalChats('${escapeHtml(x.ib.phone)}')">Чат</button><button class="btn btn-sm desk-tz-done" data-phone="${escapeHtml(x.ib.phone)}">ТЗ отправлено</button>`;
   if(x.act==="reply") return `<span class="mut" style="font-size:11px">${x.ib.via==="chatapp"?"ChatApp":"общий номер"}</span><button class="btn btn-sm btn-primary" onclick="modalChats('${escapeHtml(x.ib.phone)}')">Ответить</button><button class="btn btn-sm desk-ib-done" data-phone="${escapeHtml(x.ib.phone)}">Ответила</button>`;
   if(x.act==="late") return `${wa ? deskSendBtn(d, x.wa, wa) : `<span class="mut" style="font-size:11.5px">нет телефона</span>`}<input class="pv-inp desk-link" data-id="${d.id}" placeholder="вышло? вставьте ссылку" style="width:190px">`;
   if(x.act==="wa") return wa ? deskSendBtn(d, x.wa, wa) : `<button class="btn btn-sm" onclick="openMicroById(${d.id})">Нет телефона — открыть</button>`;
@@ -10194,6 +10195,12 @@ function inboxWaiting(){ if(!INBOX.loading && (!INBOX.data || INBOX.who!==myWho(
     const txt = String(r.lastInText||"").replace(/https?:\/\/\S+/g, "ссылка").slice(0, 70);
     return {d: byId.get(r.dealId), ib: r, act:"reply", cls: h>=2 ? "s-b" : "s-w", tag: (h ? "ждёт "+h+" ч" : "только что")+(txt ? " · «"+txt+"»" : "")}; });
 }
+// 24.11.2026 «Просят ТЗ»: блогер написал «скиньте ТЗ / сценарий» — висит, пока ТЗ не отправлено (или менеджер не отметил).
+function inboxTzAsks(){ inboxWaiting();
+  const byId = new Map((DataManager.state.microInfluencerDeals||[]).map(d=> [d.id, d]));
+  return ((INBOX.data && INBOX.data.items) || []).filter(r=> r.tzWait && byId.has(r.dealId)).map(r=>{ const d = byId.get(r.dealId), h = Math.max(0, Math.round((Date.now()-Date.parse(r.tzAskAt))/3600000));
+    return {d, ib:r, act:"tzreq", cls: h>=3 ? "s-b" : "s-w", tag: "просит ТЗ " + (h ? h+" ч назад" : "только что") + (r.tzAskText ? " · «"+String(r.tzAskText).slice(0,60)+"»" : "") + (String(d.tz||"").trim() ? " · выбрано: "+d.tz : " · ТЗ не выбрано")}; });
+}
 // 23.11.2026 «Оплачено — сообщите блогеру»: Нина поставила «оплачено» → плашка у менеджера (у тимлида — по своим менеджерам).
 const PAIDQ = { data:null, loading:false };
 async function paidLoad(){ PAIDQ.loading = true; PAIDQ.who = myWho()+"|"+(UI.deskAll?1:0); PAIDQ.at = Date.now(); try{ PAIDQ.data = await apiFetch("/api/coord/paid-pending"+(UI.deskAll && UI.canExport ? "?all=1" : "")); }catch(e){ PAIDQ.data = {items:[]}; } PAIDQ.loading = false; if(UI.tab==="desk") renderDeskTab(); }
@@ -10326,7 +10333,8 @@ function tplDesk(){
   const urgent = []; // 23.11.2026: «Срочно сегодня» дублировал разделы ниже — убран
   const S = deskSections();
   S.reply = inboxWaiting();
-  const secs = [["reply","Ждут ответа"],["late","Должны были выйти"],["today","Выход сегодня"],["tz","ТЗ"],["pay","Оплаты и документы"],["links","Ссылки"],["wait","Скоро выход"]];
+  S.tzreq = inboxTzAsks();
+  const secs = [["reply","Ждут ответа"],["tzreq","Просят ТЗ"],["late","Должны были выйти"],["today","Выход сегодня"],["tz","ТЗ"],["pay","Оплаты и документы"],["links","Ссылки"],["wait","Скоро выход"]];
   if(!UI.deskSec || !S[UI.deskSec]) UI.deskSec = (secs.find(([k])=> S[k].length)||secs[0])[0];
   const cur = S[UI.deskSec] || [];
   const p = deskPlan(), gaps = deskGaps(), retAll = deskReturnList(), ret = retAll.slice(0,3), place = deskTeamPlace();
@@ -10401,6 +10409,7 @@ function wireDesk(){
   document.querySelectorAll(".desk-send").forEach(b=> b.onclick = ()=> deskSendNow(b));
   wirePaidBanner();
   document.querySelectorAll(".desk-sug-ok,.desk-sug-no").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch("/api/pub-check/confirm/"+b.dataset.id, {method:"POST", headers:jsonHeaders, body:JSON.stringify({url:b.dataset.url||""})})); await DataManager.refresh(); toast(b.dataset.url ? "Ссылка сохранена" : "Убрано"); renderDeskTab(); }catch(e){ toast(e.message, true); } });
+  document.querySelectorAll(".desk-tz-done").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch("/api/inbox/"+encodeURIComponent(b.dataset.phone)+"/tz-done", {method:"POST"})); const r = ((INBOX.data&&INBOX.data.items)||[]).find(x=> x.phone===b.dataset.phone); if(r) r.tzWait = false; toast("Отмечено: ТЗ отправлено"); renderDeskTab(); }catch(e){ toast(e.message, true); } });
   document.querySelectorAll(".desk-ib-done").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch("/api/inbox/"+encodeURIComponent(b.dataset.phone)+"/done", {method:"POST"})); const r = ((INBOX.data&&INBOX.data.items)||[]).find(x=> x.phone===b.dataset.phone); if(r) r.waiting = false; renderDeskTab(); }catch(e){ toast(e.message, true); } });
   const rAll = document.getElementById("desk-remind-all"); if(rAll) rAll.onclick = async ()=>{ const ra = rAll; const ids = ra.dataset.ids.split(",").filter(Boolean).map(Number); if(!ids.length){ toast("Ни у кого нет номера WhatsApp", true); return; } if(!confirm("Отправить напоминание в WhatsApp "+ids.length+" блогерам?")) return;
     try{ const r = await withBusy(ra, ()=> apiFetch("/api/coord/send-now-many", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids})})); toast(`Отправлено: ${r.sent||0} · пропущено: ${r.skipped||0}${r.skipped?" (номер не в рабочем WhatsApp — напомните кнопкой в строке)":""}`); }catch(e){ toast(e.message, true); } };
