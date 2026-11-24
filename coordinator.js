@@ -1086,6 +1086,20 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (!r.ok || j.error) throw new Error(`Битрикс ${method}: ${j.error_description || j.error || r.status}`);
     return j.result;
   }
+  // 24.11.2026: только чтение — какие смарт-процессы и поля есть в Битриксе (для заявки «Согласование оплаты» по ИП).
+  app.get("/api/bitrix/pay-discover", requireAuth, async (req, res) => {
+    if (!staff(req, res)) return;
+    try {
+      const t = await bitrix("crm.type.list", {}); const types = ((t && t.types) || []).map((x) => ({ id: x.entityTypeId, title: x.title }));
+      const want = types.filter((x) => new RegExp(String(req.query.q || "оплат"), "i").test(x.title));
+      const out = [];
+      for (const ty of want.slice(0, 4)) {
+        const f = await bitrix("crm.item.fields", { entityTypeId: ty.id }); const fields = (f && f.fields) || {};
+        out.push({ type: ty, fields: Object.entries(fields).map(([k, v]) => ({ code: k, title: v.title, type: v.type, required: !!v.isRequired, multiple: !!v.isMultiple, items: (v.items || []).slice(0, 40).map((i) => ({ id: i.ID, value: i.VALUE })) })) });
+      }
+      res.json({ types, details: out });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
   app.post("/api/coord/bitrix-bot/register", requireAuth, async (req, res) => {
     if (!staff(req, res)) return;
     const k = cfg(), c = C();
