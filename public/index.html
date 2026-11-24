@@ -6178,7 +6178,7 @@ function tplInfluencerDeals(){
           <!-- Колонка "Блогер" закреплена (sticky-col): таблица широкая, и при горизонтальном
                скролле вправо без этого не видно, чья строка. Так же сделано в микро/средних и в
                "Сводном отчёте". -->
-          <th>#</th><th class="sticky-col">Блогер</th><th>Ответственный</th><th>Категория</th><th>Подписчики</th><th>Платформа</th><th>Продукт</th>
+          <th title="Номер интеграции — по нему импорт CSV обновляет строку, а не добавляет новую">ID</th><th class="sticky-col">Блогер</th><th>Ответственный</th><th>Категория</th><th>Подписчики</th><th>Платформа</th><th>Продукт</th>
           ${UI.collapsedColGroups.has("infl-dates") ? `<th title="Дата план / Дата факт свёрнуты">Даты</th>` : `<th>Дата план</th><th>Дата факт</th>`}
           ${UI.collapsedColGroups.has("infl-reach") ? `<th title="План охват/клики / Факт охват/клики свёрнуты">Охваты</th>` : `<th>План охват/клики</th><th>Факт охват/клики</th>`}
           <th>План/факт расход</th><th>Вклад в продажи<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-mute)">план / факт</span></th><th title="План вклада в продажи ÷ актуальная цена товара по ШК (вкладка «Динамика цен»)">План, шт.</th><th>ROAS, ×</th><th title="Расчётный ROAS = вклад в продажи (колонка слева) ÷ расход на интеграцию (оплата блогеру). Показатель отображается множителем (колонка ROAS, ×) или в процентах (эта колонка, ROAS, %) и не является прибылью.">ROAS, %</th>${UI.collapsedColGroups.has("infl-auto") ? `<th title="Вклад по заказам Kaspi (24 ч после выхода) — свёрнуто, нажмите «+ Авто (Kaspi)» выше">Авто</th>` : `<th title="Вклад по заказам Kaspi: продажи товара сверх обычного уровня в дни выхода. Обычный уровень — среднее за дни до выхода при той же цене, без других блогеров этого товара (если цена была другой — дни после). Окно — с дня выхода, пока продажи не вернутся к обычным: у мелких до 7 дней, у крупных — только день выхода и следующий. Плюс шлейф: 50% подъёма продаж над уровнем до кампании (с поправкой на общий фон магазина — товары без блогеров; в дни скидок шлейфа нет), не попавшего в пики, делится по охвату (по корню: охват в 4 раза больше — доля в 2 раза больше) с затуханием (мелкие — до 7 дней, вдвое за 2 дня; крупные — только день выхода и следующий, сторис висят 24 ч). Скидка вычитается по прошлым сменам цены. Если в те же дни выходили другие блогеры этого товара — прирост делится по охвату (крупные и мелкие делят день, только если у меньшей стороны охват от 20% другой; иначе весь день — большей). Всплеска нет — 0. «—» — если обычный уровень определить не из чего. Ручной вклад менеджера главнее.">Авто (Kaspi)</th>`}<th>Ссылка на Reels</th><th>Статус</th><th class="sticky-right"></th>
@@ -6187,7 +6187,7 @@ function tplInfluencerDeals(){
           ${rows.map((r,i)=>{
             const d = r.deal;
             return `<tr${isDealCancelled(d)?' style="opacity:.5" title="Отменена — в суммы, планы и вклад не входит"':''}>
-              <td>${i+1}</td>
+              <td style="color:var(--ink-mute)">${d.id}</td>
               <td class="sticky-col"><b>${escapeHtml(d.blogerLogin)}</b>${d.instagramLink?` <a href="${escapeHtml(normalizeInstagramUrl(d.instagramLink))}" target="_blank" rel="noopener" title="Ссылка на Instagram">IG</a>`:''}${driveFolderIcon(d)}${d.lastUpdatedFrom==="telegram"?' <span class="badge badge-progress" title="Обновлено через Telegram-бота">TG</span>':''}</td>
               <td>${d.responsible ? escapeHtml(d.responsible) : `<span style="color:var(--ink-mute)">—</span>`}</td>
               <td>${inlineEditSpan(d.bloggerCategory ? escapeHtml(d.bloggerCategory) : `<span style="color:var(--ink-mute)">—</span>`, d.id, 'bloggerCategory', d.bloggerCategory||'', 'select', LARGE_BLOGGER_CATEGORIES)}</td>
@@ -10935,8 +10935,8 @@ function wireDeskTab(){
       await DataManager.refresh(); render();
     };
     document.getElementById("template-deal-csv-btn").onclick = ()=>{
-      const header = ["блогер","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","статус","категория","instagram","ссылка_на_reels","папка_видео","комментарий"];
-      const example = ["@big_blogger","Instagram Reels","Уход премиум","4650358455500","2026-07-20","2026-07-20","200000","4000","","","400000","400000","Запланирована","Бьюти","https://instagram.com/big_blogger","","",""];
+      const header = ["id","блогер","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","статус","категория","подписчики","instagram","ссылка_на_reels","папка_видео","комментарий"];
+      const example = ["","@big_blogger","Instagram Reels","Уход премиум","4650358455500","2026-07-20","2026-07-20","200000","4000","","","400000","400000","Запланирована","Бьюти","850000","https://instagram.com/big_blogger","","",""];
       const csv = [header, example].map(row=>row.map(csvEscape).join(",")).join("\n");
       downloadFile("barter-box-influencer-deals-template.csv", "﻿" + csv, "text/csv;charset=utf-8");
       toast("Шаблон скачан");
@@ -10950,7 +10950,7 @@ function wireDeskTab(){
         const rows = parseCsv(String(reader.result));
         try{
           const res = await Api.importDeals(rows);
-          toast(`Добавлено новых: ${res.added}, обновлено существующих: ${res.updated||0}`);
+          toast(`Добавлено новых: ${res.added}, обновлено: ${res.updated||0}` + (res.byLogin ? ` (из них ${res.byLogin} без id — узнали по блогеру и дате)` : ""));
         }
         catch(e){ toast(e.message, true); }
         e.target.value = "";
@@ -10966,12 +10966,12 @@ function wireDeskTab(){
       const rows = filteredInfluencerDealRows().filter(r=> exportMine(r.deal));
       // "id" первой колонкой — чтобы "Импорт CSV" мог узнать в строке уже существующую
       // интеграцию и обновить её, а не завести дубль (см. /api/influencer-deals/import).
-      const header = ["id","блогер","ответственный","категория","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","план_вклад","вклад_в_продажи","romi","статус","instagram","ссылка_на_reels","папка_видео"];
+      const header = ["id","блогер","ответственный","категория","подписчики","платформа","продукт","шк","план_дата","факт_дата","план_охват","план_клики","охват","клики","план_расход","расход","план_вклад","вклад_в_продажи","romi","статус","instagram","ссылка_на_reels","папка_видео"];
       const lines = [header.map(csvEscape).join(",")];
       rows.forEach(r=>{
         const d = r.deal;
         lines.push([
-          d.id, d.blogerLogin, d.responsible||"", d.bloggerCategory||"", d.platform, d.product, d.barcode||"",
+          d.id, d.blogerLogin, d.responsible||"", d.bloggerCategory||"", d.followers||0, d.platform, d.product, d.barcode||"",
           d.plannedDate||"", d.publishedDate||"",
           d.plannedReach||0, d.plannedClicks||0, d.reach||0, d.clicks||0,
           d.plannedCost||0, d.cost||0, d.plannedContribution||0,
