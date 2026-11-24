@@ -692,6 +692,57 @@ function mount(app, { getState, requireAuth, kostPool, persist, env = process.en
     } catch (e) { console.error('Оплаты CRM → уведомления:', e.message); } finally { payWatching = false; }
   }
   if (pool) { setInterval(() => payWatch().catch(() => {}), 60 * 1000); setTimeout(() => payWatch().catch(() => {}), 40000); }
+
+  // 24.11.2026 Нина: «у 99.aiym видео вышли, а стоит „не оплачено“ — хотя ей оплатили». В Blogger CRM оплату заводят на блогера
+  // (часто сразу за несколько видео), а не на интеграцию. Сверка раз в 10 минут: идём по оплаченным заявкам CRM по порядку дат и
+  // «раскладываем» сумму на интеграции этого блогера у того же менеджера (−45…+35 дней от даты оплаты): сначала уже оплаченные,
+  // потом остальные — пока хватает суммы. Покрытые целиком → «оплачено» (paidSkip: уведомление блогеру не шлём — оплата прошлая).
+  const nickOk = (v) => { const n = nickOf(v); return n && /^[a-z0-9._]+$/.test(n) ? n : null; };
+  let reconBusy = false;
+  async function payReconcile() {
+    if (!pool || reconBusy) return; reconBusy = true;
+    try {
+      const st = getState() || {}; const deals = st.microInfluencerDeals || [];
+      const r = await pool.query("select p.id, p.blogger_id, p.manager, p.created_at, p.updated_at, p.data->>'amount' amount, p.data->>'bb_deal_id' bb, p.data->'flow_integration_ids' fi, b.nick, b.data->>'instagram_url' ig, b.data->>'tiktok_url' tt from crm.payments p left join crm.bloggers b on b.id = p.blogger_id where not p.deleted and p.status = 'paid' order by p.created_at");
+      const byKey = new Map(); const add = (k, d) => { let a = byKey.get(k); if (!a) byKey.set(k, a = []); if (!a.includes(d)) a.push(d); };
+      for (const d of deals) { if (d.crmBloggerId) add('id:' + d.crmBloggerId, d); for (const v of [d.blogerName, d.instagramAccount, d.tiktokAccount]) { const n = nickOk(v); if (n) add('n:' + n, d); } }
+      const dateOf = (d) => String(d.publishDate || d.plannedDate || d.createdAt || '').slice(0, 10);
+      const used = new Set(); let changed = 0;
+      for (const p of r.rows) {
+        if (p.bb || (Array.isArray(p.fi) && p.fi.length)) continue;
+        let rem = Number(p.amount) || 0; if (rem <= 0) continue;
+        const pd = new Date(p.created_at).getTime(), mg = managerName(p.manager), only = mg && !['Нина', 'бот'].includes(mg) ? mg : null;
+        const cand = new Set(byKey.get('id:' + p.blogger_id) || []);
+        for (const v of [p.nick, p.ig, p.tt]) { const n = nickOk(v); if (n) (byKey.get('n:' + n) || []).forEach((d) => cand.add(d)); }
+        const list = [...cand].filter((d) => !used.has(d.id) && (Number(d.cost) || 0) > 0 && !/отмен/i.test(String(d.problemStatus || '')) && (!only || d.responsible === only))
+          .filter((d) => { const t = Date.parse(dateOf(d) + 'T12:00:00'); if (!Number.isFinite(t)) return false; const days = (t - pd) / 864e5; return days >= -45 && days <= 35; })
+          .sort((a, b) => dateOf(a).localeCompare(dateOf(b)) || a.id - b.id);
+        for (const d of list) if (d.paymentStatus === 'оплачено' && Number(d.cost) <= rem + 1) { used.add(d.id); rem -= Number(d.cost); }
+        for (const d of list) if (d.paymentStatus !== 'оплачено' && !used.has(d.id) && Number(d.cost) <= rem + 1) {
+          used.add(d.id); rem -= Number(d.cost); changed++;
+          Object.assign(d, { paymentStatus: 'оплачено', paidAt: new Date(p.updated_at || p.created_at).toISOString(), paidBy: 'Blogger CRM (сверка)', crmPaymentId: p.id, paidSkip: true });
+        }
+      }
+      if (changed) { console.log('Сверка оплат CRM → интеграции: «оплачено» у ' + changed); if (persist) persist(); }
+    } catch (e) { console.error('Сверка оплат CRM:', e.message); } finally { reconBusy = false; }
+  }
+  if (pool) { setInterval(() => payReconcile().catch(() => {}), 10 * 60 * 1000); setTimeout(() => payReconcile().catch(() => {}), 90000); }
+
+  // 24.11.2026 Нина: «Подать на оплату» из «Блогеров» / «Оплат» — прошлые реквизиты блогера (ФИО, ИИН, Kaspi, сумма) подтягиваются по памяти.
+  app.get('/api/crm/pay-history', requireAuth, async (req, res) => {
+    if (!need(res)) return; if (!canStaff(req) || req.session.readOnly) return res.status(403).json({ error: 'Нет доступа' });
+    const id = String(req.query.bloggerId || '').trim(), nick = nickOk(req.query.nick || '') || '';
+    if (!id && !nick) return res.json({ blogger: null, items: [] });
+    try {
+      const b = await pool.query("select id, nick, data from crm.bloggers where not deleted and ((id = $1 and $1 <> '') or ($2 <> '' and (lower(nick) = $2 or lower(data->>'instagram_url') ~ ('instagram\\.com/' || $2 || '([/?#]|$)') or lower(data->>'tiktok_url') ~ ('@' || $2 || '([/?#]|$)')))) limit 5", [id, nick]);
+      const ids = b.rows.map((x) => x.id); const bb = b.rows.find((x) => x.id === id) || b.rows[0] || null;
+      const r = ids.length ? await pool.query("select id from crm.payments where not deleted and blogger_id = any($1) order by created_at desc nulls last limit 8", [ids]) : { rows: [] };
+      const items = r.rows.length ? (await payRows(r.rows.map((x) => x.id))) : [];
+      const dd = (bb && bb.data) || {};
+      res.json({ blogger: bb ? { id: bb.id, nick: bb.nick || nickOf(dd.instagram_url), whatsapp: dd.blogger_whatsapp || '', price: { reels: num(dd.price_reels), tiktok: num(dd.price_tiktok), both: num(dd.price_both), stories: num(dd.price_stories) } } : null,
+        items: items.map((p) => ({ createdAt: p.createdAt, status: p.status, statusLabel: p.statusLabel, amount: p.amount, amountVideo: p.amountVideo, amountProduct: p.amountProduct, recipient: p.recipient, iin: p.iin, kaspi: p.kaspi, isIp: p.isIp, name: p.name })) });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
 }
 
 module.exports = { mount, nickOf, statusLabels: { TALK, DECLINE, PAY_STATUS } };
