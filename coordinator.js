@@ -1090,14 +1090,72 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   app.get("/api/bitrix/pay-discover", requireAuth, async (req, res) => {
     if (!staff(req, res)) return;
     try {
-      const t = await bitrix("crm.type.list", {}); const types = ((t && t.types) || []).map((x) => ({ id: x.entityTypeId, title: x.title }));
+      const t = await bxPay("crm.type.list", {}); const types = ((t && t.types) || []).map((x) => ({ id: x.entityTypeId, title: x.title }));
       const want = types.filter((x) => new RegExp(String(req.query.q || "оплат"), "i").test(x.title));
       const out = [];
       for (const ty of want.slice(0, 4)) {
-        const f = await bitrix("crm.item.fields", { entityTypeId: ty.id }); const fields = (f && f.fields) || {};
+        const f = await bxPay("crm.item.fields", { entityTypeId: ty.id }); const fields = (f && f.fields) || {};
         out.push({ type: ty, fields: Object.entries(fields).map(([k, v]) => ({ code: k, title: v.title, type: v.type, required: !!v.isRequired, multiple: !!v.isMultiple, items: (v.items || []).slice(0, 40).map((i) => ({ id: i.ID, value: i.VALUE })) })) });
       }
       res.json({ types, details: out });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+  // 24.11.2026 Нина: заявка на оплату по ИП (со счётом) → карточка «Согласование оплаты» в Битриксе через вебхук.
+  // Вебхук — BITRIX_PAY_WEBHOOK_URL (права crm и user), иначе BITRIX_WEBHOOK_URL. Поля ищем по названиям, значения списков — по тексту,
+  // поэтому ID полей в коде нет. Название: «Оплата блогеру @ник за рекламу в Instagram»; Организация — ИП Нигай; Подразделение — Миксит;
+  // Статус бюджета — В рамках бюджета; Направление — Маркетинг; Описание — сколько видео и за какой месяц; счёт — файлом.
+  async function bxPay(method, params) {
+    let base = String(process.env.BITRIX_PAY_WEBHOOK_URL || process.env.BITRIX_WEBHOOK_URL || "").trim();
+    if (!base) throw new Error("в Render не задан BITRIX_PAY_WEBHOOK_URL");
+    if (!base.endsWith("/")) base += "/";
+    const r = await fetch(base + method + ".json", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(params || {}) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error) throw new Error(`Битрикс ${method}: ${j.error_description || j.error || r.status}`);
+    return j.result;
+  }
+  let bxPayMeta = null;
+  async function bxPayType() {
+    if (bxPayMeta && Date.now() - bxPayMeta.at < 3600e3) return bxPayMeta;
+    let id = Number(process.env.BITRIX_PAY_ENTITY_TYPE_ID) || 0;
+    if (!id) { const t = await bxPay("crm.type.list", {}); const ty = ((t && t.types) || []).find((x) => /согласован[а-яё]*\s+оплат/i.test(x.title)) || ((t && t.types) || []).find((x) => /оплат/i.test(x.title)); if (!ty) throw new Error("в Битриксе не найден смарт-процесс «Согласование оплаты»"); id = ty.entityTypeId; }
+    const f = await bxPay("crm.item.fields", { entityTypeId: id });
+    bxPayMeta = { at: Date.now(), id, fields: (f && f.fields) || {} }; return bxPayMeta;
+  }
+  const bxUpload = require("multer")({ storage: require("multer").memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }).single("invoice");
+  app.post("/api/bitrix/pay-request", requireAuth, (req, res, next) => bxUpload(req, res, (e) => (e ? res.status(400).json({ error: "Счёт до 10 МБ" }) : next())), async (req, res) => {
+    if (!staff(req, res)) return;
+    try {
+      const b = req.body || {}; const nick = String(b.nick || "").replace(/^@/, "").trim(); if (!nick) throw new Error("нет ника блогера");
+      const amount = Math.round(Number(String(b.amount || "").replace(/\s/g, "")) || 0); if (!(amount > 0)) throw new Error("нет суммы");
+      if (!req.file) throw new Error("прикрепите счёт на оплату");
+      const meta = await bxPayType(); const F = meta.fields;
+      const byTitle = (re) => Object.entries(F).find(([k, v]) => k.startsWith("uf") && re.test(String(v.title || v.listLabel || v.formLabel || "")));
+      const fields = {}, missed = [];
+      const setList = (re, valRe, label) => { const hit = byTitle(re); if (!hit) { missed.push(label + " (нет поля)"); return; } const [code, v] = hit;
+        if (Array.isArray(v.items) && v.items.length) { const it = v.items.find((i) => valRe.test(String(i.VALUE))); if (it) fields[code] = v.isMultiple ? [it.ID] : it.ID; else missed.push(label + " (нет варианта)"); }
+        else if (/string|text/.test(v.type)) fields[code] = label.split(": ")[1] || ""; else missed.push(label + " (тип поля " + v.type + ")"); };
+      const platform = /tiktok/i.test(b.platform || "") && !/insta/i.test(b.platform || "") ? "TikTok" : /tiktok/i.test(b.platform || "") ? "Instagram и TikTok" : "Instagram";
+      fields.title = `Оплата блогеру @${nick} за рекламу в ${platform}`;
+      fields.opportunity = amount; fields.currencyId = "KZT";
+      setList(/организац/i, /нигай/i, "Организация: ИП Нигай");
+      setList(/подразделен/i, /микс|mixit/i, "Подразделение: Миксит");
+      setList(/статус\s*бюджет/i, /в\s*рамках/i, "Статус бюджета: В рамках бюджета");
+      setList(/направлен/i, /маркет/i, "Направление: Маркетинг");
+      const videos = Math.round(Number(b.videos) || 0), stories = Math.round(Number(b.stories) || 0);
+      const what = [videos ? `${videos} видео` : "", stories ? `${stories} сторис` : ""].filter(Boolean).join(" + ") || "реклама";
+      const desc = `Прошу оплатить блогеру @${nick} за рекламу в ${platform}: ${what}${b.month ? ` за ${b.month}` : ""}.${b.contract ? ` Договор № ${b.contract}.` : ""}${b.notes ? " " + String(b.notes).slice(0, 500) : ""}`;
+      const dHit = byTitle(/описани|назначени|комментар/i); if (dHit) fields[dHit[0]] = desc; else missed.push("Описание платежа (нет поля)");
+      const fHit = byTitle(/сч[её]т/i) || Object.entries(F).find(([k, v]) => k.startsWith("uf") && v.type === "file");
+      if (fHit) { const val = { fileData: [String(req.file.originalname || "счёт.pdf").slice(0, 150), req.file.buffer.toString("base64")] }; fields[fHit[0]] = fHit[1].isMultiple ? [val] : val; } else missed.push("Счёт на оплату (нет поля)");
+      // ответственный: BITRIX_USER_MAP_JSON {"Мадина": 123} или поиск сотрудника по имени (нужно право user)
+      const me = String(b.manager || (req.session && req.session.name) || "").trim();
+      let uid = 0; try { uid = Number((JSON.parse(process.env.BITRIX_USER_MAP_JSON || "{}") || {})[me]) || 0; } catch (e) {}
+      if (!uid && me) { try { const u = await bxPay("user.search", { NAME: me, ACTIVE: true }); if (Array.isArray(u) && u.length === 1) uid = Number(u[0].ID); } catch (e) {} }
+      if (uid) fields.assignedById = uid; else missed.push("Ответственный (не нашла «" + me + "» в Битриксе)");
+      const r = await bxPay("crm.item.add", { entityTypeId: meta.id, fields });
+      const itemId = r && r.item && r.item.id;
+      const st = getState(); for (const id of String(b.dealIds || "").split(",").map(Number).filter(Boolean)) { const d = (st.microInfluencerDeals || []).find((x) => x.id === id); if (d) { d.bitrixPayItemId = itemId; d.bitrixPayAt = new Date().toISOString(); } }
+      persist(); res.json({ ok: true, itemId, missed });
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
   app.post("/api/coord/bitrix-bot/register", requireAuth, async (req, res) => {
