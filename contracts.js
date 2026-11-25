@@ -80,6 +80,47 @@ function setParagraph(doc, anchor, text) {
     return p.replace(/(<w:t)(?: [^>]*)?(>)[^<]*(<\/w:t>)/g, (m, a, b, c) => { if (first) { first = false; return `${a} xml:space="preserve"${b}${xml(text)}${c}`; } return `${a}${b}${c}`; });
   });
 }
+// 25.11.2026 Нина: «1 видеоролика — неграмотно». Согласуем числительные во всём договоре: 1 рекламный видеоролик,
+// 2–4 рекламных видеоролика, 5+ рекламных видеороликов; то же для блоков сторис. Абзац с исправлением собирается в один фрагмент текста.
+const plForm = (n, one, few, many) => { const a = n % 100, b = n % 10; return a > 10 && a < 20 ? many : b === 1 ? one : b >= 2 && b <= 4 ? few : many; };
+function plText(t) {
+  return t.replace(/(\d+)\s*\(([а-яё ]+)\)\s+(рекламн(?:ого|ых|ый)\s+)?видеорол(?:иков|ика|ик)/gi, (m, n, w, adj) => { n = +n; return `${n} (${w}) ${adj ? plForm(n, 'рекламный ', 'рекламных ', 'рекламных ') : ''}${plForm(n, 'видеоролик', 'видеоролика', 'видеороликов')}`; })
+    .replace(/(\d+)\s*\(([а-яё ]+)\)\s+блок(?:ов|а)?\s+сторис/gi, (m, n, w) => { n = +n; return `${n} (${w}) ${plForm(n, 'блок', 'блока', 'блоков')} сторис`; });
+}
+function fixPlurals(doc) {
+  const dec = (x) => x.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+  return doc.replace(/<w:p[ >][\s\S]*?<\/w:p>/g, (p) => {
+    const T = []; p.replace(/<w:t(?: [^>]*)?>([^<]*)<\/w:t>/g, (m, t) => { T.push(dec(t)); return m; });
+    const plain = T.join(''); if (plText(plain) === plain) return p;
+    // правим только сами совпадения, форматирование соседних фрагментов (жирный «1.1.» и т.п.) остаётся
+    const re = /(\d+)\s*\(([а-яё ]+)\)\s+(рекламн(?:ого|ых|ый)\s+)?видеорол(?:иков|ика|ик)|(\d+)\s*\(([а-яё ]+)\)\s+блок(?:ов|а)?\s+сторис/gi;
+    const hits = []; let m; while ((m = re.exec(plain))) hits.push([m.index, m.index + m[0].length, plText(m[0])]);
+    const starts = []; let acc = 0; for (const t of T) { starts.push(acc); acc += t.length; }
+    for (const [st, en, rep] of hits.reverse()) {
+      let first = true;
+      for (let i = 0; i < T.length; i++) { const a = starts[i], b2 = a + T[i].length; if (b2 <= st || a >= en) continue;
+        const ls = Math.max(st, a) - a, le = Math.min(en, b2) - a;
+        T[i] = T[i].slice(0, ls) + (first ? rep : '') + T[i].slice(le); first = false; }
+      // длины изменились — пересчитать начала
+      acc = 0; for (let i = 0; i < T.length; i++) { starts[i] = acc; acc += T[i].length; }
+    }
+    let k = 0; return p.replace(/(<w:t)(?: [^>]*)?(>)[^<]*(<\/w:t>)/g, (mm, x, y, z) => `${x} xml:space="preserve"${y}${xml(T[k++])}${z}`);
+  });
+}
+// 25.11.2026: договор блогеру — PDF (LibreOffice в контейнере, по очереди, чтобы не грузить сервер).
+let pdfChain = Promise.resolve();
+function toPdf(buffer) {
+  const run = () => new Promise((resolve, reject) => {
+    const os = require('os'), { execFile } = require('child_process');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bbpdf-')), src = path.join(dir, 'contract.docx');
+    fs.writeFileSync(src, buffer);
+    execFile('soffice', ['--headless', '--norestore', '-env:UserInstallation=file:///tmp/bb-lo-profile', '--convert-to', 'pdf', '--outdir', dir, src], { timeout: 120000 }, (err) => {
+      try { const out = path.join(dir, 'contract.pdf'); if (err || !fs.existsSync(out)) throw fail(503, 'PDF не собрался' + (err && err.code === 'ENOENT' ? ' — на сервере нет LibreOffice' : '')); resolve(fs.readFileSync(out)); }
+      catch (e) { reject(e); } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} }
+    });
+  });
+  const pr = pdfChain.then(run, run); pdfChain = pr.catch(() => {}); return pr;
+}
 function applyFormat(doc, fmt, p, count) {
   if (fmt === 'reels_tt' || !FORMATS[fmt]) return doc;
   const places = fmt === 'tiktok' ? `в социальной сети TikTok: ${p.tiktok} (далее - “Площадка”)` : `в социальной сети Instagram: ${p.instagram} (далее - “Площадка”)`;
@@ -124,6 +165,7 @@ function createContracts({ getState, env = process.env, dataDir, persist = () =>
       'СУММА': money(p.amount), 'СУММА_ПРОПИСЬЮ': numberWords(p.amount) + ' тенге', 'МАРКИРОВКА': p.c.marking, 'З_ПРЕАМБУЛА': p.c.preamble, 'З_НАЗВАНИЕ': p.c.name, 'З_ИИН': p.c.iin,
       'З_АДРЕС': p.c.address, 'З_IBAN': p.c.iban, 'З_КБЕ': p.c.kbe, 'З_БИК': p.c.bik, 'З_БАНК': p.c.bank, 'З_ТЕЛ': p.c.phone, 'З_EMAIL': p.c.email, 'З_РУК': p.c.head };
     let doc = applyFormat(files['word/document.xml'].toString('utf8'), p.format, p, `${p.videos} (${COUNT_WORDS[p.videos] || numberWords(p.videos)})`).replace(/\{\{([^{}<>]+)\}\}/g, (m, k) => (k in v ? xml(v[k]) : m));
+    doc = fixPlurals(doc);
     if (/\{\{[^{}<>]+\}\}/.test(doc)) throw fail(500, 'В шаблоне остались незаполненные поля');
     files['word/document.xml'] = Buffer.from(doc, 'utf8');
     return { buffer: zip(files), filename: safe(`Договор ${p.number} — ИП ${p.r.name}.docx`) };
@@ -210,8 +252,10 @@ function createContracts({ getState, env = process.env, dataDir, persist = () =>
       } catch (e) { res.status(e.status || 500).json({ error: e.status ? e.message : 'Не удалось собрать договор' }); }
     });
     app.get('/api/contracts/:id/invoice', requireAuth, staff, (req, res) => { try { const c = findC(req), f = fmtOf(c); send(res, invoice({ id: c.id, ipRequisites: c.requisites, instagramAccount: c.instagram, tiktokAccount: c.tiktok, cost: c.amount }, { amount: c.amount, videos: f === 'stories' ? c.stories : c.videos, stories: c.stories, format: f, date: c.date, number: c.number })); } catch (e) { res.status(e.status || 500).json({ error: e.status ? e.message : 'Не удалось собрать счёт' }); } });
+    const sendPdf = async (res, out) => { const pdf = await toPdf(out.buffer); res.set('Content-Type', 'application/pdf'); res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(out.filename.replace(/\.docx$/i, '.pdf'))}`); res.set('Cache-Control', 'no-store'); res.send(pdf); };
+    app.get('/api/contracts/:id/pdf', requireAuth, staff, async (req, res) => { try { await sendPdf(res, docOf(findC(req))); } catch (e) { res.status(e.status || 500).json({ error: e.status ? e.message : 'Не удалось собрать PDF' }); } });
     app.get('/api/contracts/:id/docx', requireAuth, staff, (req, res) => { try { send(res, docOf(findC(req))); } catch (e) { res.status(e.status || 500).json({ error: e.status ? e.message : 'Не удалось собрать договор' }); } });
-    app.get('/c/:id/:sig/:name', (req, res) => { const c = store().find((x) => x.id === +req.params.id); if (!c || c.cancelled || req.params.sig !== sig(c.id)) return res.status(404).send('Ссылка недействительна'); try { send(res, docOf(c)); } catch (e) { res.status(500).send('Не удалось собрать договор'); } });
+    app.get('/c/:id/:sig/:name', async (req, res) => { const c = store().find((x) => x.id === +req.params.id); if (!c || c.cancelled || req.params.sig !== sig(c.id)) return res.status(404).send('Ссылка недействительна'); try { if (/\.pdf$/i.test(req.params.name)) await sendPdf(res, docOf(c)); else send(res, docOf(c)); } catch (e) { res.status(500).send('Не удалось собрать договор'); } });
     app.post('/api/contracts/:id/send', requireAuth, staff, async (req, res) => {
       try {
         const c = findC(req); if (c.cancelled) throw fail(400, 'Договор отменён');
@@ -219,6 +263,7 @@ function createContracts({ getState, env = process.env, dataDir, persist = () =>
         const phone = String((req.body && req.body.phone) || (deal && deal.phone) || '').trim(); if (!phone) throw fail(400, 'Нет телефона блогера — выберите интеграцию или впишите номер');
         if (!req.app.locals.bbSendToBlogger) throw fail(503, 'Отправка в WhatsApp не настроена');
         const out = docOf(c), base = `${req.headers['x-forwarded-proto'] || req.protocol}://${req.get('host')}`;
+        out.filename = out.filename.replace(/\.docx$/i, '.pdf'); await toPdf(docOf(c).buffer); // блогеру — PDF; заранее проверяем, что собирается
         const url = `${base}/c/${c.id}/${sig(c.id)}/${encodeURIComponent(out.filename)}`;
         const via = await req.app.locals.bbSendToBlogger({ phone, dealId: c.dealId, text: `Добрый день! Направляем договор № ${c.number} — проверьте, пожалуйста, и подпишите 🙏`, fileUrl: url, fileName: out.filename });
         c.sentAt = new Date().toISOString(); c.sentVia = String(via || ''); c.sentBy = req.session.name || ''; persist(); res.json(cView(c));
