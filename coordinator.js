@@ -1154,7 +1154,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       const desc = `Прошу оплатить блогеру @${nick} за рекламу в ${platform}: ${what}${b.month ? ` за ${b.month}` : ""}.${b.contract ? ` Договор № ${b.contract}.` : ""}${b.notes ? " " + String(b.notes).slice(0, 500) : ""}`;
       const dHit = byTitle(/описани|назначени|комментар/i); if (dHit) fields[dHit[0]] = desc; else missed.push("Описание платежа (нет поля)");
       const fHit = byTitle(/сч[её]т/i) || Object.entries(F).find(([k, v]) => k.startsWith("uf") && v.type === "file");
-      if (fHit) { const val = { fileData: [String(req.file.originalname || "счёт.pdf").slice(0, 150), req.file.buffer.toString("base64")] }; fields[fHit[0]] = fHit[1].isMultiple ? [val] : val; } else missed.push("Счёт на оплату (нет поля)");
+      if (fHit) { const nm = Buffer.from(String(req.file.originalname || "schet.pdf"), "latin1").toString("utf8").slice(0, 150); const val = [nm, req.file.buffer.toString("base64")]; fields[fHit[0]] = fHit[1].isMultiple ? [val] : val; } else missed.push("Счёт на оплату (нет поля)"); // crm.item.*: файл = [имя, base64]
       // ответственный: BITRIX_USER_MAP_JSON {"Мадина": 123} или поиск сотрудника по имени (нужно право user)
       // 25.11.2026 Нина: ответственный в Битриксе — всегда она (BITRIX_PAY_ASSIGNED_ID или поиск «Нина»).
       const me = String(process.env.BITRIX_PAY_ASSIGNED_NAME || "Нина").trim();
