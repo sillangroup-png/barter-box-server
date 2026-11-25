@@ -8579,7 +8579,7 @@ function modalMicroQuick(d0){
   openModal(`
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
       <h3 style="margin:0;font-size:18px;font-weight:800">${isEdit ? "Интеграция · "+escapeHtml(deskNick(d)) : "Новая интеграция"}</h3>
-      ${isEdit ? `<div style="display:flex;gap:6px"><button class="btn btn-sm" id="mq-card">Переписка и видео</button>${d.phone?`<button class="btn btn-sm" onclick="modalChats('${escapeHtml(String(d.phone).replace(/\D/g,""))}')">Чат WhatsApp</button>`:""}</div>` : ""}
+      ${isEdit ? `<div style="display:flex;gap:6px">${d.phone?`<button class="btn btn-sm" onclick="modalChats('${escapeHtml(String(d.phone).replace(/\D/g,""))}')">Чат WhatsApp</button>`:""}</div>` : ""}
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px">
       ${f("Ник блогера (Instagram)", `<input id="mq-name" class="pv-inp" value="${v(d.blogerName||"")}" placeholder="@nick">`)}
@@ -8835,7 +8835,6 @@ function modalMicroTzQuick(d){
 function modalMicroDeal(existing, prefill){
   // 24.11.2026 (Нина): вернули прежнюю форму интеграции — те же поля и порядок колонок. Новое только: кнопки вверху
   // («Переписка и видео», «Чат WhatsApp») и внизу («Подать на оплату / на доставку / ТЗ»), окно шире.
-  if(existing && prefill && prefill.__card) return modalMicroCard(existing);
   const isEdit = !!existing;
   let flowGoodsDirty = false;
   let flowGoodsInput = [];
@@ -8853,7 +8852,7 @@ function modalMicroDeal(existing, prefill){
   }, prefill||{});
   openModal(`
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h3 style="margin:0">${isEdit?'Изменить':'Новая'} интеграция · Инфлюенс микро/средние</h3>
-      ${isEdit ? `<div style="display:flex;gap:6px"><button type="button" class="btn btn-sm" id="mm-open-card">Переписка и видео</button>${existing.phone?`<button type="button" class="btn btn-sm" onclick="modalChats('${escapeHtml(String(existing.phone).replace(/\D/g,""))}')">Чат WhatsApp</button>`:""}</div>` : ""}</div>
+      ${isEdit ? `<div style="display:flex;gap:6px">${existing.phone?`<button type="button" class="btn btn-sm" onclick="modalChats('${escapeHtml(String(existing.phone).replace(/\D/g,""))}')">Чат WhatsApp</button>`:""}</div>` : ""}</div>
     <div id="mm-problem-warn">${microProblemWarning(d.blogerName, isEdit ? existing.id : null)}</div>
     <div id="mm-history">${microBloggerHistoryHtml(d.blogerName, isEdit ? existing.id : null)}</div>
     <div id="mm-ip-banner">${microIpBannerHtml(d)}</div>
@@ -8907,6 +8906,7 @@ function modalMicroDeal(existing, prefill){
     <div class="form-row">
       <div class="field"><label>Формат</label><select id="mm-format">${MICRO_FORMATS.map(f=>`<option ${microFormatOf(d)===f?'selected':''}>${f}</option>`).join("")}</select></div>
       <div class="field"><label>Статус видео</label><select id="mm-video-status">${MICRO_VIDEO_STATUSES.map(st=>`<option ${st===d.videoStatus?'selected':''}>${st}</option>`).join("")}</select></div>
+      <div class="field"><label>ТЗ</label>${microTzCell(Object.assign({}, d, {id: d.id||0})).replace('class="micro-tz-select"','id="mm-tz"').replace(/style="max-width:190px;font-size:12px"/,'')}</div>
       <div class="field"><label>Язык видео</label><select id="mm-video-lang"><option value="">— не указан —</option>${MICRO_VIDEO_LANGS.map(st=>`<option ${st===microVideoLang(d)?'selected':''}>${st}</option>`).join("")}</select></div>
       <div class="field"><label>Плановая дата</label><input id="mm-planned-date" type="date" value="${d.plannedDate||''}"></div>
       <div class="field"><label>Дата выхода</label><input id="mm-publish-date" type="date" value="${d.publishDate||''}"></div>
@@ -9053,6 +9053,7 @@ function modalMicroDeal(existing, prefill){
       productStatus: document.getElementById("mm-product-status").value,
       videoStatus: (document.getElementById("mm-reels-link").value.trim() || document.getElementById("mm-tt-link").value.trim()) ? "опубликовано" : document.getElementById("mm-video-status").value,
       videoLang: document.getElementById("mm-video-lang").value,
+      ...(()=>{ const t = document.getElementById("mm-tz"); if(!t || !t.value) return {}; const [g, it] = t.value.split("\u0001"); return it ? {tz: it, tzGroup: g||""} : {}; })(),
       reelsLink: document.getElementById("mm-reels-link").value.trim(),
       factReachReels: parseInt(document.getElementById("mm-fact-reach-reels").value,10)||0,
       tiktokVideoLink: document.getElementById("mm-tt-link").value.trim(),
@@ -9715,7 +9716,9 @@ function ipFromPayments(d){ if(!IPB.set){ if(!IPB.loading && UI.role && UI.role!
 function bloggerIsIp(d){ return dealsOfBlogger(d).some(x=> microIsIp(x)) || ipFromPayments(d); }
 function openMicroById(id){ const d = (DataManager.state.microInfluencerDeals||[]).find(x=>x.id===id); if(!d) return; closeModal(); modalMicroDeal(d); }
 function microCardRefresh(id){ const fresh = (DataManager.state.microInfluencerDeals||[]).find(x=> x.id===id); closeModal(); if(fresh) modalMicroCard(fresh); }
-function modalMicroCard(d){
+// 25.11.2026 Нина: окно «Переписка и видео» убрали — везде открывается обычная карточка интеграции (ТЗ выбирается в ней).
+function modalMicroCard(d){ return modalMicroDeal(d); }
+function modalMicroCardOld(d){
   const all = dealsOfBlogger(d).filter(x=> !/отмен/i.test(String(x.problemStatus||"")));
   const others = all.filter(x=> x.id!==d.id && !microDealPublished(x)).sort((a,b)=> String(a.plannedDate).localeCompare(String(b.plannedDate)));
   const past = all.filter(x=> x.id!==d.id && microDealPublished(x)).sort((a,b)=> String(b.publishDate||b.plannedDate).localeCompare(String(a.publishDate||a.plannedDate)));
