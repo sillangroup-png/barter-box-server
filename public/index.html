@@ -6449,7 +6449,8 @@ function tplMicroInfluencers(){
     ${tplMicroPlanProducts(UI.microMonth)}
     ${tplMicroCategorySummary()}
     <div style="font-size:12.5px;color:var(--ink-mute);margin:0 0 10px">Справочник ШК / SKU, себестоимость и базовые ТЗ — во вкладке <a href="#" onclick="UI.tab='crmProducts';render();return false">«Товары»</a>. В карточке интеграции ШК подбирается из него же.</div>
-    <div style="font-size:12.5px;color:var(--ink-mute);margin:0 0 10px">Варианты ТЗ — во вкладке <a href="#" onclick="UI.tab='tzBase';render();return false">«База ТЗ»</a>.</div>
+    ${tplMicroTzCatalog()}
+    <div style="font-size:12.5px;color:var(--ink-mute);margin:0 0 10px">Файлы ТЗ — во вкладке <a href="#" onclick="UI.tab='tzBase';render();return false">«База ТЗ»</a>.</div>
     ${microSkuDatalist()}
 
     <div class="toolbar" style="margin-bottom:8px;align-items:center;flex-wrap:wrap">
@@ -10230,7 +10231,7 @@ function tplTzBase(){
   </div>
   ${tplTzApproved()}
   <!-- 23.11.2026 (Нина): справочник базовых ТЗ скрыт — базовое менеджер выбирает в карточке интеграции -->
-  ${crmIsLeadName() ? `<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;color:#C2306F">Редактировать справочник ТЗ (тимлиды)</summary><div style="margin-top:10px">${(UI.microTzCatalogOpen = true, tplMicroTzCatalog())}</div></details>` : ""}`;
+  <!-- 25.11.2026 (Нина): «Справочник ТЗ» (описания словами) вернули во вкладку «Микро/средние»; здесь — только файлы ТЗ -->`;
 }
 // ===== Утверждённые базовые ТЗ из Blogery Audit (файл Нины 23.11.2026) — открыть и скачать PDF =====
 let TZT = null;
@@ -10285,7 +10286,7 @@ function wireTzBase(){
   const ti = document.getElementById("tzt-import"), tf = document.getElementById("tzt-file");
   if(ti && tf){ ti.onclick = ()=> tf.click(); tf.onchange = async ()=>{ const f = tf.files[0]; if(!f) return; const fd = new FormData(); fd.append("file", f);
     try{ const r = await withBusy(ti, ()=> apiFetch("/api/tz-texts/import", {method:"POST", body:fd})); toast("Загружено утверждённых ТЗ: "+r.count); TZT = null; render(); }catch(e){ toast(e.message, true); } tf.value = ""; }; }
-  if(crmIsLeadName()) wireMicroTz();
+  // справочник ТЗ — во вкладке «Микро/средние»
   const q = document.getElementById("tzb-q"); if(q) q.oninput = ()=>{ TZB.q = q.value; const pos = q.selectionStart; render(); const n = document.getElementById("tzb-q"); if(n){ n.focus(); n.setSelectionRange(pos,pos); } };
   document.querySelectorAll(".tzb-who").forEach(b=> b.onclick = ()=>{ TZB.who = b.dataset.k; render(); });
   document.querySelectorAll(".tzb-f").forEach(b=> b.onclick = ()=>{ TZB.f = b.dataset.f; render(); });
