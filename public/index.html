@@ -9524,6 +9524,9 @@ function crmPayRowText(p){ return [p.recipient||"", p.iin||"", p.kaspi||"", p.am
 const PAY = { tab:"cash", st:"pending", mgr:"", sel:new Set(), open:{}, imp:null };
 const PAY_LABEL = {pending:"К оплате", submitted:"Подано", paid:"Оплачено", rejected:"Отклонено", refunded:"Возврат"};
 const PAY_CLS = {pending:"s-w", submitted:"s-blue", paid:"s-ok", rejected:"s-m", refunded:"s-b"};
+// 25.11.2026: чеки из CRM (Cloudinary) — маленькие превью, по клику открывается оригинал
+const payThumb = u=> String(u).replace("/image/upload/", "/image/upload/c_fill,w_88,h_88,q_auto,f_auto/");
+const payChk = a=> (a&&a.length) ? `<div style="display:flex;gap:4px">${a.map(u=>`<a href="${escapeHtml(u)}" target="_blank" rel="noopener" title="Открыть чек"><img src="${escapeHtml(/res\.cloudinary\.com/.test(u)?payThumb(u):u)}" loading="lazy" alt="чек" style="width:40px;height:40px;object-fit:cover;border-radius:6px;border:1px solid #F1E1E8;display:block"></a>`).join("")}</div>` : `<span class="mut">—</span>`;
 const payMask = (s, keep)=>{ const v = String(s||""); return v.length > 8 ? v.slice(0,4)+" •••• "+v.slice(-(keep||4)) : (v || "—"); };
 crmPayLoad = async function(){ CRM.pay.loading = true; CRM.pay.err = null; CRM.pay.who = myWho(); crmRepaint();
   try{ if(!CRM.meta) CRM.meta = await CrmApi.meta(); CRM.pay.data = crmIsNina() ? await CrmApi.payments("all") : await apiFetch("/api/crm/payments/mine"); }catch(e){ CRM.pay.err = e.message; }
@@ -9548,6 +9551,8 @@ function tplCrmPayments(){
     <td style="text-align:right">${p.amountVideo?fmtNum(p.amountVideo):"—"}</td><td style="text-align:right">${p.amountProduct?fmtNum(p.amountProduct):"—"}</td><td style="text-align:right"><b>${fmtNum(p.amount)} ₸</b></td>
     <td><span class="pv-st ${PAY_CLS[p.status]||"s-m"}">${escapeHtml(PAY_LABEL[p.status]||p.status)}</span></td>
     <td class="mut" style="max-width:180px;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(p.notes||p.name||"")}">${escapeHtml(p.name||p.notes||"")}</td>
+    <td>${/^https?:\/\//.test(p.approvalUrl||"") ? `<a href="${escapeHtml(p.approvalUrl)}" target="_blank" rel="noopener">🔗 Открыть</a>` : `<span class="mut">—</span>`}</td>
+    <td>${payChk(p.chkPay)}</td><td>${payChk(p.chkVideo)}</td>
     <td style="white-space:nowrap;text-align:right"><button class="btn btn-sm pay-copy" data-id="${escapeHtml(p.id)}" title="Скопировать строку для банка">⧉</button>
       ${edit && p.status==="pending" ? `<button class="btn btn-sm pay-set" data-id="${escapeHtml(p.id)}" data-st="submitted">+ Подано</button><button class="btn btn-sm pay-set" data-id="${escapeHtml(p.id)}" data-st="rejected">Отклонить</button>` : ""}
       ${edit && p.status==="submitted" ? `<button class="btn btn-sm btn-primary pay-set" data-id="${escapeHtml(p.id)}" data-st="paid">+ Оплачено</button>` : ""}
@@ -9574,10 +9579,10 @@ function tplCrmPayments(){
   ${selItems.length ? `<div style="background:#FCE4EF;border-radius:12px;padding:10px 14px;margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>Выбрано: ${selItems.length} · Σ ${fmtNum(sum(selItems))} ₸</b>${nina?`<button class="btn btn-sm" id="pay-sel-excel">Excel выбранных</button>`:""}<button class="btn btn-sm" id="pay-sel-copy">Скопировать</button>${edit?`<button class="btn btn-sm pay-bulk" data-st="submitted">Подано</button><button class="btn btn-sm btn-primary pay-bulk" data-st="paid">Оплачено</button><button class="btn btn-sm pay-bulk" data-st="rejected">Отклонить</button>`:""}<button class="btn btn-sm" id="pay-sel-clear">Снять выделение</button></div>` : ""}
   ${CRM.pay.err ? `<div class="empty" style="color:var(--bad)">${escapeHtml(CRM.pay.err)}</div>` : ""}
   <div class="table-wrap" style="${CRM.pay.loading?"opacity:.55":""}"><table>
-    <thead><tr><th style="width:28px"><input type="checkbox" id="pay-sel-all" ${items.length && items.every(p=>PAY.sel.has(p.id))?"checked":""}></th><th>Дата</th><th>Менеджер</th><th>Блогер</th><th>ФИО получателя</th><th>ИИН</th><th>Kaspi</th><th style="text-align:right">Видео ₸</th><th style="text-align:right">Товар ₸</th><th style="text-align:right">Сумма</th><th>Статус</th><th>За что</th><th></th></tr></thead>
+    <thead><tr><th style="width:28px"><input type="checkbox" id="pay-sel-all" ${items.length && items.every(p=>PAY.sel.has(p.id))?"checked":""}></th><th>Дата</th><th>Менеджер</th><th>Блогер</th><th>ФИО получателя</th><th>ИИН</th><th>Kaspi</th><th style="text-align:right">Видео ₸</th><th style="text-align:right">Товар ₸</th><th style="text-align:right">Сумма</th><th>Статус</th><th>За что</th><th>Согласование</th><th>Чек оплаты</th><th>Чек видео</th><th></th></tr></thead>
     <tbody>${items.length ? [...groups].map(([k, list])=>{ const op = PAY.open[k] ?? true; const lab = k==="—" ? "Без даты" : new Date(k+"-15").toLocaleDateString("ru-RU",{month:"long", year:"numeric"});
-      return `<tr class="pay-grp" data-k="${k}" style="cursor:pointer"><td colspan="13" style="background:#FFF9FB"><b>${op?"▾":"▸"} ${escapeHtml(lab)}</b> <span class="mut">· ${list.length} заявок · ${fmtNum(sum(list))} ₸</span></td></tr>${op ? list.slice(0,400).map(row).join("") : ""}`; }).join("")
-      : `<tr><td colspan="13" class="empty">${CRM.pay.loading ? "Загружаю…" : "Пусто"}</td></tr>`}</tbody></table></div>
+      return `<tr class="pay-grp" data-k="${k}" style="cursor:pointer"><td colspan="16" style="background:#FFF9FB"><b>${op?"▾":"▸"} ${escapeHtml(lab)}</b> <span class="mut">· ${list.length} заявок · ${fmtNum(sum(list))} ₸</span></td></tr>${op ? list.slice(0,400).map(row).join("") : ""}`; }).join("")
+      : `<tr><td colspan="16" class="empty">${CRM.pay.loading ? "Загружаю…" : "Пусто"}</td></tr>`}</tbody></table></div>
   <div class="mut" style="font-size:12px;margin-top:8px">«К оплате» — менеджер подал заявку · «Подано» — вы запросили пополнение · «Оплачено» — пополнили (импортом файла или вручную). ИИН и Kaspi скрыты на экране — копируются полностью.</div>`;
 }
 function wireCrmPayments(){
