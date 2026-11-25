@@ -722,6 +722,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     paidAutoBusy = true;
     try {
       for (const d of due.slice(0, 40)) {
+        // 25.11.2026 Нина (@leembrate): бартер «За товар» без суммы — денег блогеру не платили, «оплата прошла» не шлём.
+        if (/за\s*товар|бартер/i.test(String(d.coopType || "")) && !(Number(d.cost) > 0)) { d.paidMsgNote = "бартер (за товар, без суммы) — уведомление об оплате не отправляем"; persist(); continue; }
         const n = waNumber(d.phone);
         if (!n) { d.paidMsgNote = "нет номера WhatsApp — сообщите вручную"; persist(); continue; }
         if (d.paidMsgEver && Date.now() - Date.parse(d.paidMsgEver) < 3 * 24 * H) { d.paidMsgSent = d.paidMsgEver; d.paidMsgAuto = true; persist(); continue; } // статус переключали туда-обратно
