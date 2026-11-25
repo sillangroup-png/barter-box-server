@@ -10671,7 +10671,7 @@ function wireDesk(){
 
 // ===== 24.11.2026 Нина: вкладка «Договоры» — всё в одном месте =====
 // Вставили сообщение блогера с реквизитами → выбрали соцсети, сколько видео / сторис, сумму → «Сохранить договор».
-// Номер даётся сам по дню (01.ДД-ММ-ГГГГ, 02.…), договор фиксируется — тимлид видит. Дальше: скачать Word, счёт или отправить блогеру.
+// Номер даётся сам по дню (01.ДД-ММ-ГГГГ, 02.…), договор фиксируется — тимлид видит. Дальше: скачать PDF или отправить блогеру (тоже PDF).
 const CT = { f:null, list:null, loading:false, last:null };
 function ctBlank(){ return { nick:"", dealId:"", src:"", req:{}, useIg:true, useTt:true, ig:"", tt:"", videos:1, stories:0, amount:"", date:todayStr(), phone:"" }; }
 async function ctLoad(){ CT.loading = true; try{ CT.list = (await apiFetch("/api/contracts/list"+(UI.canExport?"?all=1":""))).items || []; }catch(e){ CT.list = []; CT.err = e.message; } CT.loading = false; if(UI.tab==="contracts") render(); }
@@ -10711,7 +10711,7 @@ function tplContracts(){
       <div class="mut" style="font-size:12px;margin-top:6px">${escapeHtml(fmtHint)}</div>
       <div class="modal-actions" style="margin-top:12px"><button class="btn" id="ct-reset">Очистить</button><button class="btn btn-primary" id="ct-save">Сохранить договор</button></div>
       ${L ? `<div style="margin-top:12px;background:#E2F6EC;border:1px solid #BFE6CF;border-radius:12px;padding:10px 12px;font-size:13px"><b>Договор № ${escapeHtml(L.number)} сохранён</b> · ${escapeHtml(L.blogger||"")} · ${fmtNum(L.amount)} ₸
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn btn-sm btn-primary ct-dl" data-id="${L.id}">Скачать договор</button><button class="btn btn-sm ct-inv" data-id="${L.id}">Счёт на оплату</button><button class="btn btn-sm ct-send" data-id="${L.id}">Отправить блогеру</button></div></div>` : ""}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn btn-sm btn-primary ct-dl" data-id="${L.id}">Скачать договор (PDF)</button><button class="btn btn-sm ct-send" data-id="${L.id}">Отправить блогеру</button></div></div>` : ""}
     </div>
     <div class="panel" style="padding:0;overflow:hidden">
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:15px">Оформленные договоры · ${list.filter(c=>!c.cancelled).length}</b><span class="mut" style="font-size:12px">${UI.canExport?"все":"ваши"+(crmIsLeadName()?" и команды":"")}</span></div>
@@ -10721,7 +10721,7 @@ function tplContracts(){
           <td style="font-size:12px">${escapeHtml(c.platforms)}<div class="mut">${c.videos?c.videos+" видео":""}${c.videos&&c.stories?" + ":""}${c.stories?c.stories+" сторис":""}</div></td>
           <td style="text-align:right"><b>${fmtNum(c.amount)} ₸</b></td><td>${escapeHtml(c.manager||"")}</td>
           <td style="font-size:12px">${c.sentAt?`<span style="color:#1E6B47;font-weight:700">✓ ${escapeHtml(ddmmStr(String(c.sentAt).slice(0,10)))}</span>`:`<span class="mut">нет</span>`}</td>
-          <td style="white-space:nowrap;text-align:right">${c.cancelled?"отменён":`<button class="btn btn-sm ct-dl" data-id="${c.id}" title="Скачать договор (Word)">⬇</button> <button class="btn btn-sm ct-inv" data-id="${c.id}" title="Счёт на оплату (Word)">Счёт</button> <button class="btn btn-sm ct-send" data-id="${c.id}">${c.sentAt?"Ещё раз":"Отправить"}</button> <button class="btn btn-sm ct-cancel" data-id="${c.id}" title="Отменить (номер не переиспользуется)" style="color:#C42B45;padding:0 9px">✕</button>`}</td></tr>`).join("")
+          <td style="white-space:nowrap;text-align:right">${c.cancelled?"отменён":`<button class="btn btn-sm ct-dl" data-id="${c.id}" title="Скачать договор (PDF)">⬇ PDF</button> <button class="btn btn-sm ct-send" data-id="${c.id}">${c.sentAt?"Ещё раз":"Отправить"}</button> <button class="btn btn-sm ct-cancel" data-id="${c.id}" title="Отменить (номер не переиспользуется)" style="color:#C42B45;padding:0 9px">✕</button>`}</td></tr>`).join("")
           : `<tr><td colspan="7" class="empty">${CT.loading?"Загружаю…":"Договоров пока нет"}</td></tr>`}
       </tbody></table></div>
     </div>
@@ -10744,9 +10744,8 @@ function wireContracts(){
   $("ct-reset").onclick = ()=>{ CT.f = ctBlank(); CT.last = null; render(); };
   $("ct-save").onclick = async (e)=>{ keep();
     try{ const c = await withBusy(e.target, ()=> apiFetch("/api/contracts/new", {method:"POST", headers:jsonHeaders, body:JSON.stringify({blogger:f.nick, dealId:f.dealId||null, requisites:f.req, useIg:f.useIg, useTt:f.useTt, instagram:f.ig, tiktok:f.tt, videos:f.videos, stories:f.stories, amount:f.amount, date:f.date, source:f.src})}));
-      CT.last = c; CT.f = ctBlank(); toast("Договор № "+c.number+" сохранён"); await ctLoad(); crmDownload("/api/contracts/"+c.id+"/docx", "Договор "+c.number+".docx"); }catch(err){ toast(err.message, true); } };
-  document.querySelectorAll(".ct-dl").forEach(b=> b.onclick = ()=>{ const c = (CT.list||[]).find(x=> x.id===+b.dataset.id) || CT.last; crmDownload("/api/contracts/"+b.dataset.id+"/docx", "Договор "+((c&&c.number)||"")+".docx"); });
-  document.querySelectorAll(".ct-inv").forEach(b=> b.onclick = ()=>{ const c = (CT.list||[]).find(x=> x.id===+b.dataset.id) || CT.last; crmDownload("/api/contracts/"+b.dataset.id+"/invoice", "Счёт "+((c&&c.number)||"")+".docx"); });
+      CT.last = c; CT.f = ctBlank(); toast("Договор № "+c.number+" сохранён"); await ctLoad(); crmDownload("/api/contracts/"+c.id+"/pdf", "Договор "+c.number+".pdf"); }catch(err){ toast(err.message, true); } };
+  document.querySelectorAll(".ct-dl").forEach(b=> b.onclick = async ()=>{ const c = (CT.list||[]).find(x=> x.id===+b.dataset.id) || CT.last; b.disabled = true; try{ await crmDownload("/api/contracts/"+b.dataset.id+"/pdf", "Договор "+((c&&c.number)||"")+".pdf"); } finally { b.disabled = false; } });
   document.querySelectorAll(".ct-send").forEach(b=> b.onclick = async ()=>{ const c = (CT.list||[]).find(x=> x.id===+b.dataset.id) || CT.last; if(!c) return;
     const d = c.dealId ? (DataManager.state.microInfluencerDeals||[]).find(x=> x.id===c.dealId) : null; let phone = d && d.phone;
     if(!phone){ phone = prompt("Номер WhatsApp блогера (в интеграции его нет):", ""); if(!phone) return; }
