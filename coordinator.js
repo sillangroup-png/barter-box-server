@@ -716,30 +716,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (!c.paidAutoSince) { c.paidAutoSince = new Date().toISOString(); persist(); return; }
     const h = almatyHour(); if (h < 9 || h >= 22) return;
     paidAutoBusy = true; try { await crmPaidSweep(); } catch (e) { console.error("Оплата из CRM → блогеру:", e.message); } finally { paidAutoBusy = false; }
-    const since = Date.parse(c.paidAutoSince), all = getState().microInfluencerDeals || [];
-    const due = all.filter((d) => d.paymentStatus === "оплачено" && d.paidAt && Date.parse(d.paidAt) >= since && !d.paidMsgSent && !d.paidSkip && !d.paidMsgNote && (d.paidMsgTries || 0) < 3);
-    if (!due.length) return;
-    paidAutoBusy = true;
-    try {
-      for (const d of due.slice(0, 40)) {
-        // 25.11.2026 Нина (@leembrate): бартер «За товар» без суммы — денег блогеру не платили, «оплата прошла» не шлём.
-        if (/за\s*товар|бартер/i.test(String(d.coopType || "")) && !(Number(d.cost) > 0)) { d.paidMsgNote = "бартер (за товар, без суммы) — уведомление об оплате не отправляем"; persist(); continue; }
-        const n = waNumber(d.phone);
-        if (!n) { d.paidMsgNote = "нет номера WhatsApp — сообщите вручную"; persist(); continue; }
-        if (d.paidMsgEver && Date.now() - Date.parse(d.paidMsgEver) < 3 * 24 * H) { d.paidMsgSent = d.paidMsgEver; d.paidMsgAuto = true; persist(); continue; } // статус переключали туда-обратно
-        const sib = all.find((x) => x !== d && waNumber(x.phone) === n && x.paidMsgSent && Date.now() - Date.parse(x.paidMsgSent) < 6 * H);
-        if (sib) { d.paidMsgSent = sib.paidMsgSent; d.paidMsgAuto = true; persist(); continue; } // одному блогеру — одно сообщение
-        const w = paidWrote(d);
-        if (w) { d.paidMsgNote = `блогер уже написал: «${String(w.text).slice(0, 80)}»`; persist(); continue; }
-        try {
-          const t = paidText(); const r = await sendNow(d, t);
-          log(d.id, "out", `[оплата, авто] ${r.via}: ${t}`);
-          d.paidMsgSent = d.paidMsgEver = new Date().toISOString(); d.paidMsgAuto = true; d.paidMsgErr = null;
-        } catch (e) { d.paidMsgTries = e.permanent ? 3 : (d.paidMsgTries || 0) + 1; d.paidMsgErr = String(e.message || e).slice(0, 200); }
-        persist();
-        await new Promise((r) => setTimeout(r, 1500));
-      }
-    } finally { paidAutoBusy = false; }
+    // 25.11.2026 Нина: «Оплата прошла» — ТОЛЬКО когда в заявках на оплату поставили «оплачено» (crmPaidSweep выше).
+    // Статус «оплачено» внутри интеграции сообщение больше не отправляет.
   }
   // 24.11.2026: оплата отмечена в Blogger CRM (без связи с интеграцией) → state.crmPaidQueue (crm-bloggers.js).
   // Статус интеграции не трогаем; находим блогера по ID CRM / нику, номер — из его интеграций (иначе WhatsApp из CRM).
@@ -750,8 +728,9 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
     if (!todo.length) return;
     const all = st.microInfluencerDeals || [];
     for (const e of todo.slice(0, 40)) {
-      const his = all.filter((d) => (e.bloggerId && String(d.crmBloggerId || "") === e.bloggerId) || (e.nicks.length && [d.blogerName, d.instagramAccount, d.tiktokAccount].some((v) => v && e.nicks.includes(nickKey(v)))));
-      const withPhone = his.filter((d) => waNumber(d.phone)).sort((a, b) => String(b.plannedDate || b.createdAt || "").localeCompare(String(a.plannedDate || a.createdAt || "")));
+      const linked = (e.dealIds || []).map(String);
+      const his = all.filter((d) => linked.includes(String(d.id)) || (e.bloggerId && String(d.crmBloggerId || "") === e.bloggerId) || (e.nicks.length && [d.blogerName, d.instagramAccount, d.tiktokAccount].some((v) => v && e.nicks.includes(nickKey(v)))));
+      const withPhone = his.filter((d) => waNumber(d.phone)).sort((a, b) => (linked.includes(String(b.id)) - linked.includes(String(a.id))) || String(b.plannedDate || b.createdAt || "").localeCompare(String(a.plannedDate || a.createdAt || "")));
       const deal = withPhone[0] || his[0] || null, target = withPhone[0];
       e.dealId = deal ? deal.id : null; e.blogger = (deal && deal.blogerName) || (e.nicks[0] ? "@" + e.nicks[0] : ""); if (deal && deal.responsible) e.manager = deal.responsible;
       if (!deal) { e.done = new Date().toISOString(); e.note = "блогер не найден в Бартер Боксе — уведомление не отправлено"; persist(); continue; }
@@ -793,7 +772,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   app.get("/api/coord/paid-pending", requireAuth, (req, res) => {
     if (!staff(req, res)) return;
     const inScope = paidScope(req), weekAgo = Date.now() - 21 * 24 * H;
-    const items = (getState().microInfluencerDeals || []).filter((d) => d.paymentStatus === "оплачено" && d.paidAt && Date.parse(d.paidAt) > weekAgo && !d.paidMsgSent && !d.paidSkip && !paidAutoQueued(d) && inScope(d))
+    const items = [].filter((d) => d.paymentStatus === "оплачено" && d.paidAt && Date.parse(d.paidAt) > weekAgo && !d.paidMsgSent && !d.paidSkip && !paidAutoQueued(d) && inScope(d))
       .map((d) => { const w = paidWrote(d); return { id: d.id, blogger: d.blogerName || "", product: d.product || "", manager: d.responsible || "", cost: Number(d.cost) || 0, paidAt: d.paidAt, phone: !!waNumber(d.phone), err: d.paidMsgErr || "", wrote: w ? { at: w.at, text: String(w.text).slice(0, 160) } : null }; });
     res.json({ text: paidText(), items });
   });

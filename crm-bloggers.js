@@ -41,7 +41,7 @@ function declineCode(status, reason) {
 function mount(app, { getState, requireAuth, kostPool, persist, env = process.env }) {
   // 23.11.2026: статус оплаты в интеграции ставится сам — подали заявку → «к оплате», Нина отметила → «оплачено».
   const PAY_TO_DEAL = { pending: 'к оплате', submitted: 'к оплате', approved: 'к оплате', paid: 'оплачено' };
-  const syncDealPay = (dealId, s) => { const v = PAY_TO_DEAL[s]; if (!dealId || !v) return; const d = ((getState() || {}).microInfluencerDeals || []).find((x) => String(x.id) === String(dealId)); if (d && d.paymentStatus !== v) { d.paymentStatus = v; if (v === 'оплачено') { d.paidAt = new Date().toISOString(); d.paidMsgSent = null; d.paidSkip = false; d.paidMsgNote = null; d.paidMsgErr = null; d.paidMsgTries = 0; d.paidMsgAuto = false; } if (persist) persist(); } };
+  const syncDealPay = (dealId, s) => { const v = PAY_TO_DEAL[s]; if (!dealId || !v) return; const d = ((getState() || {}).microInfluencerDeals || []).find((x) => String(x.id) === String(dealId)); if (d && d.paymentStatus !== v) { d.paymentStatus = v; if (v === 'оплачено') { d.paidAt = new Date().toISOString(); d.paidMsgSent = null; d.paidSkip = true; d.paidMsgNote = null; d.paidMsgErr = null; d.paidMsgTries = 0; d.paidMsgAuto = false; } if (persist) persist(); } };
   const URL = env.BB_DB_URL || '';
   const pool = URL ? new Pool({ connectionString: URL, ssl: { rejectUnauthorized: false }, max: 4, idleTimeoutMillis: 30000, connectionTimeoutMillis: 10000 }) : null;
   const need = (res) => { if (!pool) { res.status(503).json({ error: 'База не подключена (BB_DB_URL)' }); return false; } return true; };
@@ -685,9 +685,9 @@ function mount(app, { getState, requireAuth, kostPool, persist, env = process.en
         const was = seen[x.id]; if (was === x.status) continue; changed = true;
         if (x.status !== 'paid') continue;
         if (was === undefined && Date.now() - Date.parse(x.created_at) > 3 * 864e5) continue;
-        if (x.bb || (Array.isArray(x.fi) && x.fi.length)) continue;
+        const dealIds = [x.bb, ...(Array.isArray(x.fi) ? x.fi : [])].filter(Boolean).map(String); // 25.11: и связанные с интеграцией тоже
         if (q.some((e) => e.id === x.id)) continue;
-        q.push({ id: x.id, bloggerId: String(x.blogger_id || ''), nicks: [nickOf(x.ig), nickOf(x.tt)].filter(Boolean), wa: x.wa || '', manager: managerName(x.manager) || '', amount: Number(x.amount) || 0, at: new Date().toISOString() });
+        q.push({ id: x.id, bloggerId: String(x.blogger_id || ''), nicks: [nickOf(x.ig), nickOf(x.tt)].filter(Boolean), wa: x.wa || '', manager: managerName(x.manager) || '', amount: Number(x.amount) || 0, dealIds, at: new Date().toISOString() });
       }
       if (q.length > 400) q.splice(0, q.length - 400);
       st.crmPaySeen = next;
