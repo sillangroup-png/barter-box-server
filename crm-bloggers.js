@@ -494,11 +494,14 @@ function mount(app, { getState, requireAuth, kostPool, persist, env = process.en
   });
 
   // ---------- Оплаты ----------
+  const rcpt = (a) => (Array.isArray(a) ? a : []).map((x) => x && String(x.url || '')).filter((u) => /^https:\/\//.test(u)).slice(0, 6);
   function payView(p) {
     const d = p.data || {};
     return { id: p.id, status: p.status, statusLabel: PAY_STATUS[p.status] || p.status, bloggerId: d.blogger_id || null, blogger: p.blogger_name || null, bloggerInstagram: p.blogger_instagram || null,
       manager: managerName(p.manager) || d.manager_name_bb || null, recipient: d.recipient_name || null, iin: d.iin || null, kaspi: d.kaspi || null, name: d.payment_name || null,
       amount: num(d.amount), amountVideo: num(d.amount_video), amountProduct: num(d.amount_product), isIp: !!d.is_ip, notes: d.notes || null, approvalUrl: d.approval_url || null,
+      // 25.11.2026 Нина: чеки и ссылка на согласование — как в CRM («Чек оплаты» = receipts_video, «Чек видео» = receipts_product)
+      chkPay: rcpt(d.receipts_video).concat(rcpt(d.receipts)), chkVideo: rcpt(d.receipts_product),
       createdAt: d.created_at || null, updatedAt: d.updated_at || null, paidBy: d.paid_by || null };
   }
   app.get('/api/crm/payments', requireAuth, async (req, res) => {
