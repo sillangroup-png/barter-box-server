@@ -3989,8 +3989,10 @@ const VT_METRICS = [
   {k:"romi",    l:"ROMI",                    u:"×",     main:true, ratio:["contrib","cost",1], dec:2},
   {k:"drr",     l:"ДРР · доля расходов",     u:"%",     main:true, ratio:["cost","contrib",100], low:true, dec:1},
   {k:"cost",    l:"Бюджет",                  u:"₸",     main:true},
+  {k:"roas",    l:"ROAS · вклад / бюджет",   u:"%",     main:true, ratio:["contrib","cost",100], dec:0},
+  {k:"avgReach",l:"Средний охват",           u:"просм.", main:true, ratio:["reach","n",1]},
   {k:"cpm",     l:"CPM · цена 1000 просм.",  u:"₸",     ratio:["cost","reach",1000], low:true},
-  {k:"cpi",     l:"Цена интеграции",         u:"₸",     ratio:["cost","n",1], low:true},
+  {k:"cpi",     l:"Средняя стоимость",       u:"₸",     main:true, ratio:["cost","n",1], low:true},
   {k:"clicks",  l:"Клики (крупные)",         u:"шт"},
   {k:"paid",    l:"Оплачено",                u:"шт",    noPlan:true},
   {k:"bloggers",l:"Блогеров",                u:"чел"},
@@ -4139,6 +4141,13 @@ function vtAgg(rows, plan){
   if(plan){ if(!hasReach) a.reach = null; if(!hasContrib) a.contrib = null; if(!hasClicks) a.clicks = null; a.paid = null; }
   return a;
 }
+// 26.11.2026 Нина: «факт по заведению» — интеграции, внесённые в Barter Box в периоде (по дате создания карточки):
+// бюджет — согласованная сумма, охват — факт у вышедших и ожидаемый у остальных, вклад — что уже посчитан.
+function vtAggBuy(rows){
+  const a = {cost:0, reach:0, n:rows.length, pub:0, contrib:0, clicks:0, paid:0, bloggers:new Set(rows.map(r=>r.type+"|"+r.blogger.toLowerCase())).size};
+  for(const r of rows){ a.cost += r.published ? r.cost : (r.planCost || r.cost); a.reach += r.published ? r.reach : (r.planReach || 0); a.contrib += r.contrib || 0; a.clicks += r.clicks || 0; if(r.published) a.pub++; if(r.paid) a.paid++; }
+  return a;
+}
 function vtVal(m, a){
   if(!a) return null;
   if(m.ratio){ const [x, y, mult] = m.ratio, num = vtVal(vtMetric(x), a), den = vtVal(vtMetric(y), a); return num!=null && den ? num / den * mult : null; }
@@ -4180,7 +4189,8 @@ function vtCell(rows, col, st, m){
   if(st.mode==="plan" || st.mode==="planonly"){ if(!m.noPlan){ const pr = rows.filter(r=> bs.has(String(r.planDate).slice(0,L))); base = pr.length ? vtVal(m, vtAgg(pr, true)) : null; } }
   else if(st.mode==="yoy" || st.mode==="mom"){ const br = rows.filter(r=> r.factDate && bs.has(String(r.factDate).slice(0,L))); base = br.length ? vtVal(m, vtAgg(br, false)) : null; }
   // по плану было, а ничего не вышло — факт 0 (для сумм и штук; у отношений вроде CPV факта нет)
-  return {fact: fr.length ? fact : (base != null && !m.ratio ? 0 : null), base, any: fr.length > 0 || base != null};
+  const brs = rows.filter(r=> r.buy && fs.has(String(r.buy).slice(0,L))), bought = brs.length ? vtVal(m, vtAggBuy(brs)) : (base != null && !m.ratio ? 0 : null);
+  return {fact: fr.length ? fact : (base != null && !m.ratio ? 0 : null), base, bought, any: fr.length > 0 || base != null || brs.length > 0};
 }
 function vtPct(m, fact, base){ if(fact==null || base==null || !base) return null; return m.low ? (fact ? base / fact * 100 : null) : fact / base * 100; }
 function vtFmt(m, v){
@@ -4224,6 +4234,7 @@ function tplVitrina(){
   const baseLbl = st.mode==="yoy" ? "Прошл. год" : st.mode==="mom" ? "Прошл. период" : "План";
   const showBase = !allMode && st.mode!=="fact", showFact = allMode || st.mode!=="planonly", showDev = !allMode && (st.mode==="plan" || st.mode==="yoy" || st.mode==="mom");
   const devAbs = showDev && st.dev!=="rel", devRel = showDev && st.dev!=="abs";
+  const showBuy = st.buyCol!==false && (st.mode==="plan" || st.mode==="fact");
   const metrics = allMode ? st.show.map(vtMetric) : [m];
   const totCol = cols[cols.length-1];
   // Видимые строки дерева
@@ -4267,15 +4278,23 @@ function tplVitrina(){
     : `${escapeHtml(m.l)} — ${st.mode==="plan"?"план-факт":st.mode==="yoy"?"год к году":st.mode==="mom"?"к прошлому периоду":st.mode==="planonly"?"план":"факт"}, за ${periodText}`;
   // Шапка таблицы
   let head1 = `<th rowspan="2" style="text-align:left;min-width:220px">Строка</th>`, head2 = "";
-  if(allMode){ metrics.forEach(mm=>{ head1 += `<th rowspan="2" style="text-align:right">${escapeHtml(mm.l)}<br><small style="font-weight:400;opacity:.8">${escapeHtml(mm.u||"")}</small></th>`; }); }
-  else cols.forEach(col=>{ const sub = [showBase&&baseLbl, showFact&&"Факт", devAbs&&"Абс.", devRel&&"Отн."].filter(Boolean);
+  const multiPF = allMode && (st.mode==="plan" || st.mode==="planonly");
+  if(multiPF){ metrics.forEach(mm=>{ const sub = ["План", st.buyCol!==false&&"Заведено", "Вышло", "Вып."].filter(Boolean);
+      head1 += `<th colspan="${sub.length}" style="text-align:center">${escapeHtml(mm.l.split(" · ")[0])}${mm.u?`<br><small style="font-weight:400;opacity:.8">${escapeHtml(mm.u)}</small>`:""}</th>`; head2 += sub.map(x=>`<th style="text-align:right">${x}</th>`).join(""); }); }
+  else if(allMode){ metrics.forEach(mm=>{ head1 += `<th rowspan="2" style="text-align:right">${escapeHtml(mm.l)}<br><small style="font-weight:400;opacity:.8">${escapeHtml(mm.u||"")}</small></th>`; }); }
+  else cols.forEach(col=>{ const sub = [showBase&&baseLbl, showBuy&&"Заведено", showFact&&"Вышло", devAbs&&"Абс.", devRel&&"Отн."].filter(Boolean);
     head1 += `<th colspan="${sub.length}" style="text-align:center;${col.total?'background:#3d7a90':''}">${escapeHtml(col.label)}</th>`; head2 += sub.map(s=>`<th style="text-align:right">${s}</th>`).join(""); });
   const tdNum = (txt, style)=> `<td style="text-align:right;white-space:nowrap;${style||""}">${txt}</td>`;
   const body = visible.map(node=>{
     const pad = node.depth * 16, isRoot = node.depth===0;
     const lbl = `<td style="padding-left:${8+pad}px;white-space:nowrap;${isRoot?'font-weight:700':''}">${node.canOpen ? `<button class="link-btn vt-tog" data-key="${escapeHtml(node.key)}" style="width:18px;display:inline-block">${node.isOpen?"−":"+"}</button>` : `<span style="display:inline-block;width:18px"></span>`}${escapeHtml(node.label)}${node.dim==="type"||isRoot?"":""}</td>`;
     let tds = "";
-    if(allMode){ metrics.forEach(mm=>{ const c = cell(node, totCol, mm); let style = "";
+    if(multiPF){ metrics.forEach(mm=>{ const c = cell(node, totCol, mm), p = vtPct(mm, c.fact, c.base);
+        tds += tdNum(vtFmt(mm, c.base), "color:var(--ink-soft)");
+        if(st.buyCol!==false) tds += tdNum(vtFmt(mm, c.bought), "color:#6b4fa0");
+        tds += tdNum(`<b>${vtFmt(mm, c.fact)}</b>`, !isRoot && st.hl==="perf" ? vtColor(vtClass(p, st), p, st) : "");
+        tds += tdNum(p==null ? "" : Math.round(p)+"%", p==null ? "" : `color:${p>=st.good?'var(--ok)':p<st.bad?'var(--bad)':'#9a6400'}`); }); }
+    else if(allMode){ metrics.forEach(mm=>{ const c = cell(node, totCol, mm); let style = "";
         if(!isRoot && st.hl==="heat"){ const r = heatRange[mm.k+"#"+totCol.label+"#"+node.depth]; if(r) style = vtHeat(c.fact, r[0], r[1], mm.low); }
         else if(!isRoot && st.hl==="perf"){ const pc = vtCell(node.rows, totCol, Object.assign({}, st, {mode:"plan"}), mm); const p = vtPct(mm, c.fact, pc.base); style = vtColor(vtClass(p, st), p, st); }
         tds += tdNum(vtFmt(mm, c.fact), style); }); }
@@ -4284,6 +4303,7 @@ function tplVitrina(){
       if(!isRoot && st.hl==="perf" && showBase) fs = vtColor(cls, p, st);
       if(!isRoot && st.hl==="heat"){ const r = heatRange[m.k+"#"+col.label+"#"+node.depth]; if(r) fs = vtHeat(c.fact, r[0], r[1], m.low); }
       if(showBase) tds += tdNum(vtFmt(m, c.base), "color:var(--ink-soft)");
+      if(showBuy) tds += tdNum(vtFmt(m, c.bought), "color:#6b4fa0");
       if(showFact) tds += tdNum(`<b>${vtFmt(m, c.fact)}</b>`, fs);
       const d = c.fact!=null && c.base!=null ? c.fact - c.base : null, good = d==null ? null : (m.low ? d<=0 : d>=0), col2 = d==null ? "" : `color:${good?'var(--ok)':'var(--bad)'}`;
       if(devAbs) tds += tdNum(d==null ? "" : (d>0?"+":"")+vtFmt(m, d)+(m.u==="%"?" п.п.":""), col2);
@@ -4316,7 +4336,10 @@ function tplVitrina(){
   const table = `<div class="table-wrap" style="max-height:${st.full?'none':'560px'};overflow:auto"><table class="vt-table"><thead><tr>${head1}</tr>${head2?`<tr>${head2}</tr>`:""}</thead><tbody>${body || `<tr><td colspan="99" class="empty">Нет данных</td></tr>`}</tbody></table></div>`;
   const chartPanel = `<div style="margin-top:12px"><div class="panel-title" style="font-size:13px">Диаграмма</div>${chart}</div>`;
   return `
-  <style>.vt-table th{position:sticky;top:0;background:#4e8fa6;color:#fff;font-size:11.5px;z-index:1}.vt-table thead tr:nth-child(2) th{top:31px}
+  <style>.vt-dd{position:relative}.vt-dd>summary{list-style:none;cursor:pointer}.vt-dd>summary::-webkit-details-marker{display:none}
+    .vt-dd-box{position:absolute;z-index:50;top:34px;left:0;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.12);min-width:260px;display:flex;flex-direction:column;gap:4px}
+    .vt-dd-box label{font-size:12.5px;display:flex;gap:6px;align-items:center;white-space:nowrap}
+    .vt-table th{position:sticky;top:0;background:#4e8fa6;color:#fff;font-size:11.5px;z-index:1}.vt-table thead tr:nth-child(2) th{top:31px}
     .vt-table td{font-size:12.5px;padding:6px 8px}.vt-full{position:fixed;inset:0;z-index:900;overflow:auto;margin:0!important;border-radius:0!important}
     .vt-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px}.vt-bar .lbl2{font-size:12px;color:var(--ink-mute);margin:0 2px 0 6px}
     .vt-bar input[type=number]{width:58px}</style>
@@ -4330,8 +4353,12 @@ function tplVitrina(){
       </span></div>
     ${vtViewBar(st)}
     ${kpi}
-    <div class="vt-bar">${st.show.map(k=>chip(k, vtMetric(k).l.split(" · ")[0])).join("")}<span style="width:8px"></span>${chip("__all", "Все показатели")}</div>
-    ${allMode?`<div style="font-size:11.5px;color:var(--ink-mute);margin:-4px 0 6px">— режим сравнения не применяется, таблица показывает факт по всем показателям</div>`:""}
+    <div class="vt-bar"><details class="vt-dd" id="vt-dd"><summary class="btn btn-sm btn-primary">Показатели: ${allMode ? st.show.length+" ▾" : escapeHtml(m.l.split(" · ")[0])+" ▾"}</summary>
+      <div class="vt-dd-box">${VT_METRICS.map(x=>`<label><input type="checkbox" class="vt-mchk" value="${x.k}" ${(allMode ? st.show.includes(x.k) : st.metric===x.k)?"checked":""}> ${escapeHtml(x.l)}</label>`).join("")}
+        <div style="display:flex;gap:6px;margin-top:6px"><button class="btn btn-ghost btn-sm" id="vt-m-all">Все</button><button class="btn btn-ghost btn-sm" id="vt-m-main">Основные</button><button class="btn btn-primary btn-sm" id="vt-m-ok">Показать</button></div></div></details>
+      ${st.show.slice(0, 8).map(k=>chip(k, vtMetric(k).l.split(" · ")[0])).join("")}${chip("__all", "Все отмеченные вместе")}
+      <span class="lbl2">Факт</span><button class="btn btn-sm ${st.buyCol!==false?'btn-primary':'btn-ghost'}" data-vt="buyCol" data-v="${st.buyCol!==false?'false':'true'}" title="Интеграции, внесённые в Barter Box в периоде (по дате заведения)">${st.buyCol!==false?"✓ ":""}по заведению</button><span style="font-size:11.5px;color:var(--ink-mute)">+ по вышедшим</span></div>
+    ${allMode && !multiPF?`<div style="font-size:11.5px;color:var(--ink-mute);margin:-4px 0 6px">— в этом режиме таблица показывает факт по отмеченным показателям; для плана выберите «План-факт»</div>`:""}
     <div class="vt-bar">${seg("mode","fact","Только факт")}${seg("mode","plan","План-факт")}${seg("mode","yoy","Год к году")}${seg("mode","mom","К прошлому периоду")}
       ${opt("type")}${opt("manager")}${opt("cat")}</div>
     ${showDev?`<div class="vt-bar"><span class="lbl2">Отклонение</span>${seg("dev","rel","Отн.")}${seg("dev","abs","Абс.")}${seg("dev","both","Оба")}
@@ -4346,7 +4373,7 @@ function tplVitrina(){
     <div class="vt-bar"><span class="lbl2">Раскрыть до</span><button class="btn btn-sm ${st.expandTo===0?'btn-primary':'btn-ghost'}" data-vt="expandTo" data-v="0">Свернуть</button>
       ${root.lv.map((k, i)=>`<button class="btn btn-sm ${st.expandTo===i+1?'btn-primary':'btn-ghost'}" data-vt="expandTo" data-v="${i+1}">${escapeHtml(dimTitle(k))}</button>`).join("")}</div>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0">
-      <div><b style="font-size:14px">${title}</b><div style="font-size:11.5px;color:var(--ink-mute)">Строки — ${root.lv.map(dimTitle).join(" → ").toLowerCase()} (раскрывайте «+»). Факт — вышедшие интеграции по дате выхода, план — по плановой дате. ${!allMode&&cols.length>1?"Столбцы — "+(st.perPeriod==="day"?"дни (только те, где есть план или факт)":"месяцы")+" и итог.":""} ${m.low&&!allMode?"Для этого показателя меньше — лучше, шкала выполнения обратная.":""}</div></div>
+      <div><b style="font-size:14px">${title}</b><div style="font-size:11.5px;color:var(--ink-mute)">Строки — ${root.lv.map(dimTitle).join(" → ").toLowerCase()} (раскрывайте «+»). «Вышло» — вышедшие интеграции по дате выхода, «Заведено» — внесённые в Barter Box в периоде (по дате заведения), план — по плановой дате. ${!allMode&&cols.length>1?"Столбцы — "+(st.perPeriod==="day"?"дни (только те, где есть план или факт)":"месяцы")+" и итог.":""} ${m.low&&!allMode?"Для этого показателя меньше — лучше, шкала выполнения обратная.":""}</div></div>
       <span style="display:flex;gap:6px"><button class="btn btn-sm ${!st.chartFirst?'btn-primary':'btn-ghost'}" data-vt="chartFirst" data-v="false">Таблица → график</button><button class="btn btn-sm ${st.chartFirst?'btn-primary':'btn-ghost'}" data-vt="chartFirst" data-v="true">График → таблица</button>
         <button class="btn btn-primary btn-sm" id="vt-excel">⬇ Excel</button><button class="btn btn-ghost btn-sm" id="vt-full">${st.full?"✕ Свернуть":"⤢ На весь экран"}</button></span></div>
     ${st.chartFirst ? chartPanel + table : table + chartPanel}
@@ -4358,8 +4385,9 @@ function tplVitrina(){
 const VT_BUDGET_CFG = { "2026-11": { plan:{"Микро/средние":41000000, "Крупные":15000000}, extra:{from:"2026-11-20", limit:10000000, label:"Дополнительные 10 млн"} } };
 const VT_SEG = {"Микро/средние":"Мелкие/средние", "Крупные":"Крупные"};
 function vtViewBar(st){
+  if(UI.tab==="dashboard") return "";
   const b = (v, l)=> `<button class="btn btn-sm ${ (st.view||"table")===v ? "btn-primary" : "btn-ghost"}" data-vt="view" data-v="${v}">${l}</button>`;
-  return `<div class="vt-bar" style="border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:10px">${b("table","План-факт")}${b("matrix","Товар × размер блогера")}${b("cmp","Сравнение периодов")}${b("budget","Бюджет месяца и доп. лимит")}</div>`;
+  return `<div class="vt-bar" style="border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:10px">${b("budget","Бюджет месяца и доп. лимит")}${b("table","План-факт")}${b("matrix","Товар × размер блогера")}${b("cmp","Сравнение периодов")}</div>`;
 }
 const vtMln = v=> (v/1e6).toLocaleString("ru-RU", {minimumFractionDigits:2, maximumFractionDigits:2});
 const vtTg = v=> Math.round(v||0).toLocaleString("ru-RU");
@@ -4387,10 +4415,21 @@ function vtMatrixHtml(st, rows){
   body += ratioRow("ROMI — вклад ÷ бюджет с товаром", x=> x.cost ? (x.contrib / x.cost).toFixed(2).replace(".", ",") : "—");
   body += ratioRow("CPV — бюджет с товаром ÷ охват, ₸", x=> x.reach ? (x.cost / x.reach).toFixed(2).replace(".", ",") : "—");
   const chip = (k)=> `<button class="btn btn-sm ${mk===k?"btn-primary":"btn-ghost"}" data-vt="mxMetric" data-v="${k}">${MX[k][0]}</button>`;
+  // 26.11.2026 Нина: подбор размера блогера под товар — где дешевле просмотр и выше отдача; сколько роликов и бюджета до цели по охвату.
+  const goal = Number(st.mxGoal) || 1000000;
+  const pick = [];
+  byCat.forEach(m=> m.forEach((rs, p)=>{ const a = agg(rs); const cand = sizes.map(([k])=> [k, a[k]]).filter(([, x])=> x.n >= 2 && x.reach > 0 && x.cost > 0);
+    if(!cand.length) return; cand.sort((x, y)=> (x[1].cost / x[1].reach) - (y[1].cost / y[1].reach)); const [bk, bx] = cand[0], avgR = bx.reach / bx.n, avgC = bx.cost / bx.n, need = Math.ceil(goal / avgR);
+    pick.push({p, k:bk, cpv:bx.cost / bx.reach, roas: bx.cost ? bx.contrib / bx.cost : null, n:bx.n, avgR, avgC, need, budget:need * avgC, alt: cand[1] ? cand[1][0] : ""}); }));
+  pick.sort((a, b)=> a.cpv - b.cpv);
+  const pickHtml = pick.length ? `<div style="margin-top:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:14px">Подбор размера блогера под товар</b>
+      <span class="lbl2">цель по охвату на товар</span><input type="number" id="vt-mxgoal" value="${goal}" step="100000" style="width:110px"><span style="font-size:11.5px;color:var(--ink-mute)">просмотров · размер — где дешевле просмотр (не меньше 2 выходов); роликов и бюджет — сколько нужно, чтобы набрать цель</span></div>
+    <div class="table-wrap"><table class="vt-table"><thead><tr><th style="text-align:left">Товар</th><th style="text-align:left">Брать блогеров</th><th style="text-align:right">CPV, ₸</th><th style="text-align:right">ROMI</th><th style="text-align:right">Ср. охват</th><th style="text-align:right">Ср. стоимость, ₸</th><th style="text-align:right">Нужно роликов</th><th style="text-align:right">Бюджет до цели, ₸</th><th style="text-align:left">Запасной вариант</th></tr></thead>
+    <tbody>${pick.map(x=> `<tr><td>${escapeHtml(x.p)}</td><td><b>${escapeHtml(x.k)}</b> <span style="font-size:11px;color:var(--ink-mute)">${x.n} вых.</span></td><td style="text-align:right">${x.cpv.toFixed(2).replace(".", ",")}</td><td style="text-align:right">${x.roas==null?"—":x.roas.toFixed(2).replace(".", ",")}</td><td style="text-align:right">${vtTg(x.avgR)}</td><td style="text-align:right">${vtTg(x.avgC)}</td><td style="text-align:right">${x.need}</td><td style="text-align:right">${vtTg(x.budget)}</td><td>${escapeHtml(x.alt)}</td></tr>`).join("")}</tbody></table></div>` : "";
   return `<div class="vt-bar">${Object.keys(MX).map(chip).join("")}</div>
     <b style="font-size:14px">Товар × размер блогера, ${escapeHtml(mu)} · ${escapeHtml(ml.toLowerCase())}</b>
     <div style="font-size:11.5px;color:var(--ink-mute);margin:2px 0 8px">Вышедшие интеграции за выбранный период (по дате выхода). В ячейке — ${escapeHtml(ml.toLowerCase())} и число выходов; чем темнее, тем больше. Размер: мелкие — до 30 тыс. подписчиков, средние — 30–100 тыс., средние+ — от 100 тыс. (больший из Instagram и TikTok), крупные — интеграции из плана крупных.</div>
-    <div class="table-wrap" style="max-height:${st.full?"none":"620px"};overflow:auto"><table class="vt-table"><thead><tr><th style="text-align:left;min-width:260px">Товар</th>${sizes.map(([k, s])=> `<th style="text-align:right">${k}<br><small style="font-weight:400;opacity:.85">${s}</small></th>`).join("")}<th style="text-align:right">Итого</th><th style="text-align:right">Доля</th></tr></thead><tbody>${fr.length ? body : `<tr><td colspan="99" class="empty">Нет вышедших интеграций за период</td></tr>`}</tbody></table></div>`;
+    <div class="table-wrap" style="max-height:${st.full?"none":"620px"};overflow:auto"><table class="vt-table"><thead><tr><th style="text-align:left;min-width:260px">Товар</th>${sizes.map(([k, s])=> `<th style="text-align:right">${k}<br><small style="font-weight:400;opacity:.85">${s}</small></th>`).join("")}<th style="text-align:right">Итого</th><th style="text-align:right">Доля</th></tr></thead><tbody>${fr.length ? body : `<tr><td colspan="99" class="empty">Нет вышедших интеграций за период</td></tr>`}</tbody></table></div>${pickHtml}`;
 }
 function vtBudgetHtml(st, rows){
   const M = st.bMonth || todayStr().slice(0,7), cfg = VT_BUDGET_CFG[M] || {}, ex = cfg.extra || null, today = todayStr();
@@ -4400,14 +4439,14 @@ function vtBudgetHtml(st, rows){
   const bucket = r=>{
     if(r.published) return String(r.factDate).slice(0,7)===M ? "out" : "";
     const p = String(r.planDate||"");
-    if(p.slice(0,7)===M) return p >= today ? "plan" : "late";
+    if(p.slice(0,7)===M) return "plan"; // 26.11.2026 Нина: «Просрочено» убрали — всё невышедшее в месяце считается планом
     if((!p || p > mEnd) && r.buy && r.buy.slice(0,7)===M) return "next";
     return "";
   };
   const mon = rows.filter(r=> !isExtra(r)).map(r=> Object.assign({}, r, {b:bucket(r)})).filter(r=> r.b);
   const exr = ex ? rows.filter(isExtra) : [];
   const sum = (rs, f)=> rs.reduce((s, r)=> s + (f ? f(r) : r.fee), 0);
-  const B = {out:"Вышло", plan:`План ${ddmm(today)}–${ddmm(mEnd)}`, late:"Просрочено (дата прошла, не вышло)", next:"Следующий месяц / без даты"};
+  const B = {out:"Вышло", plan:"План (ещё не вышло)", next:"Следующий месяц / без даты"};
   const segs = ["Микро/средние", "Крупные"];
   const cellNB = rs=> `<td style="text-align:right">${rs.length}</td><td style="text-align:right">${vtTg(sum(rs))}</td>`;
   // 1) Сводка по сегментам
@@ -4415,7 +4454,7 @@ function vtBudgetHtml(st, rows){
   let segRows = "";
   for(const k of segs.concat(["__all"])){
     const rs = k==="__all" ? mon : mon.filter(r=> r.type===k), pl = k==="__all" ? planTot : (cfg.plan||{})[k]||0, tot = sum(rs);
-    segRows += `<tr style="${k==="__all"?"font-weight:700;background:var(--action-soft)":""}"><td>${k==="__all"?"ИТОГО":VT_SEG[k]}</td>${["out","plan","late","next"].map(b=> cellNB(rs.filter(r=> r.b===b))).join("")}<td style="text-align:right">${vtTg(sum(rs.filter(r=> r.b==="out"), r=> r.goods))}</td><td style="text-align:right"><b>${vtTg(tot)}</b></td><td style="text-align:right">${pl?vtTg(pl):"—"}</td><td style="text-align:right">${pl?Math.round(tot/pl*100)+"%":"—"}</td></tr>`;
+    segRows += `<tr style="${k==="__all"?"font-weight:700;background:var(--action-soft)":""}"><td>${k==="__all"?"ИТОГО":VT_SEG[k]}</td>${["out","plan","next"].map(b=> cellNB(rs.filter(r=> r.b===b))).join("")}<td style="text-align:right">${vtTg(sum(rs.filter(r=> r.b==="out"), r=> r.goods))}</td><td style="text-align:right"><b>${vtTg(tot)}</b></td><td style="text-align:right">${pl?vtTg(pl):"—"}</td><td style="text-align:right">${pl?Math.round(tot/pl*100)+"%":"—"}</td></tr>`;
   }
   const h2 = Object.values(B).map(l=> `<th colspan="2" style="text-align:center">${escapeHtml(l)}</th>`).join("");
   const segTable = `<table class="vt-table"><thead><tr><th rowspan="2" style="text-align:left">Сегмент</th>${h2}<th rowspan="2" style="text-align:right">Товар блогерам (вышедшие), ₸</th><th rowspan="2" style="text-align:right">Итого бюджет, ₸</th><th rowspan="2" style="text-align:right">План месяца, ₸</th><th rowspan="2" style="text-align:right">Освоение, если всё выйдет</th></tr><tr>${Object.keys(B).map(()=>`<th style="text-align:right">вых.</th><th style="text-align:right">₸</th>`).join("")}</tr></thead><tbody>${segRows}</tbody></table>`;
@@ -4425,7 +4464,7 @@ function vtBudgetHtml(st, rows){
   const bg = BG[st.bGroup] ? st.bGroup : "cat", [k1, k2, bgTitle] = BG[bg];
   const byCat = new Map(); mon.concat(exr.map(r=> Object.assign({}, r, {b:"extra"}))).forEach(r=>{ const a = k1(r), b2 = k2(r); if(!byCat.has(a)) byCat.set(a, new Map()); const m = byCat.get(a); if(!m.has(b2)) m.set(b2, []); m.get(b2).push(r); });
   const prodLine = (label, rs, opt)=>{ const own = rs.filter(r=> r.b!=="extra"), t = sum(own);
-    return `<tr style="${opt.bg||""}"><td style="padding-left:${opt.pad||8}px;${opt.bold?"font-weight:700":""}">${escapeHtml(label)}</td>${["out","plan","late","next"].map(b=> cellNB(own.filter(r=> r.b===b))).join("")}<td style="text-align:right"><b>${vtTg(t)}</b></td><td style="text-align:right">${monTot ? (t/monTot*100).toFixed(1).replace(".", ",")+"%" : ""}</td>${ex ? cellNB(rs.filter(r=> r.b==="extra")) : ""}</tr>`; };
+    return `<tr style="${opt.bg||""}"><td style="padding-left:${opt.pad||8}px;${opt.bold?"font-weight:700":""}">${escapeHtml(label)}</td>${["out","plan","next"].map(b=> cellNB(own.filter(r=> r.b===b))).join("")}<td style="text-align:right"><b>${vtTg(t)}</b></td><td style="text-align:right">${monTot ? (t/monTot*100).toFixed(1).replace(".", ",")+"%" : ""}</td>${ex ? cellNB(rs.filter(r=> r.b==="extra")) : ""}</tr>`; };
   let prodBody = prodLine("ВСЕГО", [...byCat.values()].flatMap(m=> [...m.values()].flat()), {bold:true, bg:"background:var(--action-soft)"});
   [...byCat].map(([c, m])=> [c, m, [...m.values()].flat()]).sort((a, b)=> sum(b[2]) - sum(a[2])).forEach(([c, m, all])=>{
     prodBody += prodLine(c, all, {bold:true, bg:"background:#faf6f8"});
@@ -4437,9 +4476,9 @@ function vtBudgetHtml(st, rows){
   for(let i = 1; i <= Number(mEnd.slice(8)); i++){
     const d = M + "-" + String(i).padStart(2,"0"), o = mon.filter(r=> r.b==="out" && String(r.factDate).slice(0,10)===d), p = mon.filter(r=> (r.b==="plan"||r.b==="late") && String(r.planDate).slice(0,10)===d);
     cumOut += sum(o); if(!o.length && !p.length) continue;
-    dayBody += `<tr style="${d===today?"background:#fff8e1":""}"><td>${ddmm(d)}${d===today?" · сегодня":""}</td>${cellNB(o)}<td style="text-align:right">${vtTg(sum(o, r=> r.goods))}</td><td style="text-align:right">${vtTg(cumOut)}</td>${cellNB(p.filter(r=> r.b==="plan"))}${cellNB(p.filter(r=> r.b==="late"))}</tr>`;
+    dayBody += `<tr style="${d===today?"background:#fff8e1":""}"><td>${ddmm(d)}${d===today?" · сегодня":""}</td>${cellNB(o)}<td style="text-align:right">${vtTg(sum(o, r=> r.goods))}</td><td style="text-align:right">${vtTg(cumOut)}</td>${cellNB(p.filter(r=> r.b==="plan"))}</tr>`;
   }
-  const dayTable = `<table class="vt-table"><thead><tr><th rowspan="2" style="text-align:left">День</th><th colspan="2" style="text-align:center">Вышло</th><th rowspan="2" style="text-align:right">Товар, ₸</th><th rowspan="2" style="text-align:right">Вышло нарастающим, ₸</th><th colspan="2" style="text-align:center">Стоит в плане</th><th colspan="2" style="text-align:center">Просрочено</th></tr><tr>${[1,2,3].map(()=>`<th style="text-align:right">вых.</th><th style="text-align:right">₸</th>`).join("")}</tr></thead><tbody>${dayBody || `<tr><td colspan="99" class="empty">Нет данных</td></tr>`}</tbody></table>`;
+  const dayTable = `<table class="vt-table"><thead><tr><th rowspan="2" style="text-align:left">День</th><th colspan="2" style="text-align:center">Вышло</th><th rowspan="2" style="text-align:right">Товар, ₸</th><th rowspan="2" style="text-align:right">Вышло нарастающим, ₸</th><th colspan="2" style="text-align:center">Стоит в плане</th></tr><tr>${[1,2].map(()=>`<th style="text-align:right">вых.</th><th style="text-align:right">₸</th>`).join("")}</tr></thead><tbody>${dayBody || `<tr><td colspan="99" class="empty">Нет данных</td></tr>`}</tbody></table>`;
   // 4) Доп. лимит
   let extraHtml = "";
   if(ex){
@@ -4469,15 +4508,46 @@ function vtBudgetHtml(st, rows){
       <div class="kpi"><div class="num" style="font-size:18px">${vtTg(monTot)}</div><div class="lbl">Бюджет ${VT_MON[mm-1].toLowerCase()} (куплено ${ex?"до "+ddmm(ex.from):"в месяце"}), ₸</div></div>
       ${planTot?`<div class="kpi"><div class="num" style="font-size:18px">${vtTg(planTot)}</div><div class="lbl">План месяца, ₸</div></div><div class="kpi ${monTot>planTot?"bad":"ok"}"><div class="num" style="font-size:18px">${Math.round(monTot/planTot*100)}%</div><div class="lbl">Освоение, если всё выйдет</div></div>`:""}
       <div class="kpi ok"><div class="num" style="font-size:18px">${vtTg(sum(mon.filter(r=> r.b==="out")))}</div><div class="lbl">Уже вышло: ${mon.filter(r=> r.b==="out").length}</div></div>
-      <div class="kpi warn"><div class="num" style="font-size:18px">${vtTg(sum(mon.filter(r=> r.b==="late")))}</div><div class="lbl">Просрочено: ${mon.filter(r=> r.b==="late").length}</div></div>
+      <div class="kpi"><div class="num" style="font-size:18px">${vtTg(sum(mon.filter(r=> r.b==="plan")))}</div><div class="lbl">Ещё выйдет в месяце: ${mon.filter(r=> r.b==="plan").length}</div></div>
     </div>
     <div style="font-size:11.5px;color:var(--ink-mute);margin-bottom:6px">Бюджет — гонорары без товара (у крупных: вышедшие — факт, остальные — план расхода). ${ex?`Куплено с ${ddmm(ex.from)} — в «${escapeHtml(ex.label)}», независимо от даты выхода.`:""} Дата покупки — когда интеграцию завели в Barter Box.${feeMiss?` У ${feeMiss} вышедших крупных не проставлена фактическая стоимость — в факт не вошли.`:""}${noBuy?` У ${noBuy} интеграций месяца нет даты покупки (заведены до журнала изменений) — считаются бюджетом месяца.`:""}</div>
     <div class="table-wrap">${segTable}</div>
+    ${vtBudgetHeat(rows, M, mEnd, ex)}
+    ${vtBudgetSizes(rows, M)}
     <div style="margin-top:14px"><b style="font-size:14px">По дням</b></div><div class="table-wrap" style="max-height:${st.full?"none":"420px"};overflow:auto">${dayTable}</div>
     <div style="margin-top:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:14px">Как расходуется бюджет</b>${Object.entries(BG).map(([k, v])=> `<button class="btn btn-sm ${bg===k?"btn-primary":"btn-ghost"}" data-vt="bGroup" data-v="${k}">${v[2]}</button>`).join("")}</div><div class="table-wrap" style="max-height:${st.full?"none":"560px"};overflow:auto">${prodTable}</div>
     ${extraHtml}`;
 }
 
+// 26.11.2026 Нина: тепловая карта расходования бюджета — дни месяца × менеджеры; сумма интеграций, заведённых в этот день
+// (гонорары; доп. лимит тоже), цвет — от светлого к тёмному по сумме. Траты по сегментам — размер блогера.
+function vtBudgetHeat(rows, M, mEnd, ex){
+  const days = []; for(let i = 1; i <= Number(mEnd.slice(8)); i++) days.push(M + "-" + String(i).padStart(2,"0"));
+  const rs = rows.filter(r=> r.buy && r.buy.slice(0,7)===M);
+  if(!rs.length) return "";
+  const mgr = new Map(); rs.forEach(r=>{ if(!mgr.has(r.manager)) mgr.set(r.manager, {}); const o = mgr.get(r.manager); o[r.buy] = (o[r.buy]||0) + (r.fee||0); });
+  const list = [...mgr].map(([m, o])=> [m, o, Object.values(o).reduce((a, b)=> a + b, 0)]).sort((a, b)=> b[2] - a[2]);
+  const max = Math.max(1, ...list.flatMap(([, o])=> Object.values(o)));
+  const col = v=> !v ? "" : `background:rgba(194,48,111,${(.1 + .75 * Math.sqrt(v / max)).toFixed(2)});${v / max > .45 ? "color:#fff;" : ""}`;
+  const k = v=> !v ? "" : v >= 1e6 ? (v/1e6).toFixed(1).replace(".", ",") + "м" : Math.round(v/1000) + "к";
+  const dayTot = d=> list.reduce((s, [, o])=> s + (o[d]||0), 0);
+  const today = todayStr();
+  return `<div style="margin-top:14px"><b style="font-size:14px">Тепловая карта расходования бюджета</b> <span style="font-size:11.5px;color:var(--ink-mute)">дни × менеджеры · сумма гонораров интеграций, заведённых в этот день${ex?` (с ${ex.from.slice(8,10)}.${ex.from.slice(5,7)} — доп. лимит)`:""}; к = тыс. ₸, м = млн ₸</span></div>
+    <div class="table-wrap" style="overflow:auto"><table class="vt-table" style="font-size:11px"><thead><tr><th style="text-align:left">Менеджер</th>${days.map(d=> `<th style="text-align:center;padding:4px 3px;${ex && d>=ex.from?"background:#7a3e6b":""}">${d.slice(8,10)}</th>`).join("")}<th style="text-align:right">Итого, ₸</th></tr></thead>
+    <tbody>${list.map(([m, o, t])=> `<tr><td style="white-space:nowrap">${escapeHtml(m)}</td>${days.map(d=> `<td title="${escapeHtml(m)} · ${d.slice(8,10)}.${d.slice(5,7)}: ${vtTg(o[d]||0)} ₸" style="text-align:center;padding:4px 3px;${col(o[d])}${d===today?"outline:2px solid #f0b400;":""}">${k(o[d])}</td>`).join("")}<td style="text-align:right"><b>${vtTg(t)}</b></td></tr>`).join("")}
+    <tr style="font-weight:700;background:var(--action-soft)"><td>Итого</td>${days.map(d=> `<td style="text-align:center;padding:4px 3px">${k(dayTot(d))}</td>`).join("")}<td style="text-align:right">${vtTg(list.reduce((s, x)=> s + x[2], 0))}</td></tr></tbody></table></div>`;
+}
+function vtBudgetSizes(rows, M){
+  const bought = rows.filter(r=> r.buy && r.buy.slice(0,7)===M), out = rows.filter(r=> r.published && String(r.factDate).slice(0,7)===M);
+  if(!bought.length && !out.length) return "";
+  const sizes = VT_SIZES.map(x=> x[0]).filter(k=> bought.some(r=> r.size===k) || out.some(r=> r.size===k));
+  const tot = bought.reduce((s, r)=> s + (r.fee||0), 0) || 1, sum = rs=> rs.reduce((s, r)=> s + (r.fee||0), 0);
+  const line = (l, b, o, bold)=> `<tr style="${bold?"font-weight:700;background:var(--action-soft)":""}"><td>${escapeHtml(l)}</td><td style="text-align:right">${b.length}</td><td style="text-align:right">${vtTg(sum(b))}</td><td style="text-align:right">${(sum(b)/tot*100).toFixed(1).replace(".", ",")}%</td><td style="text-align:right">${b.length ? vtTg(sum(b)/b.length) : ""}</td><td style="text-align:right">${o.length}</td><td style="text-align:right">${vtTg(sum(o))}</td><td style="text-align:right">${(()=>{ const re = o.reduce((s, r)=> s + (r.reach||0), 0); return re ? vtTg(re / o.length) : ""; })()}</td><td style="text-align:right">${(()=>{ const re = o.reduce((s, r)=> s + (r.reach||0), 0), c = sum(o); return re && c ? (c/re).toFixed(2).replace(".", ",") : ""; })()}</td></tr>`;
+  return `<div style="margin-top:14px"><b style="font-size:14px">Траты по сегментам (размер блогера)</b></div>
+    <div class="table-wrap"><table class="vt-table"><thead><tr><th rowspan="2" style="text-align:left">Сегмент</th><th colspan="4" style="text-align:center">Заведено в месяце</th><th colspan="4" style="text-align:center">Вышло в месяце</th></tr>
+    <tr><th style="text-align:right">шт</th><th style="text-align:right">₸</th><th style="text-align:right">доля</th><th style="text-align:right">ср. чек, ₸</th><th style="text-align:right">шт</th><th style="text-align:right">₸</th><th style="text-align:right">ср. охват</th><th style="text-align:right">CPV, ₸</th></tr></thead>
+    <tbody>${line("Все", bought, out, true)}${sizes.map(k=> line(k + ((VT_SIZES.find(x=> x[0]===k)||[])[1] ? " · " + VT_SIZES.find(x=> x[0]===k)[1] : ""), bought.filter(r=> r.size===k), out.filter(r=> r.size===k))).join("")}</tbody></table></div>`;
+}
 function vtDaysBar(st){
   const t = todayStr(), y = vtShiftDay(t, -1), w = vtShiftDay(t, -6), ms = t.slice(0,8) + "01";
   const q = (a, b, l)=> `<button class="btn btn-sm ${st.dFrom===a&&st.dTo===b?"btn-primary":"btn-ghost"} vt-dq" data-a="${a}" data-b="${b}">${l}</button>`;
@@ -4491,12 +4561,15 @@ function vtCompareHtml(st, rows){
   const t = todayStr(), curM = t.slice(0,7), prevM = vtShiftMonth(curM, -1);
   const lastDay = ym=>{ const [y, m] = ym.split("-").map(Number); return ym + "-" + String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2,"0"); };
   const A1 = st.cA1 || prevM + "-01", A2 = st.cA2 || lastDay(prevM), B1 = st.cB1 || curM + "-01", B2 = st.cB2 || t;
-  const G = {size:["Группа блогеров", vtCmpSize], manager:["Менеджер", r=> r.manager], team:["Команда", r=> r.team||"Без команды"], product:["Товар", r=> r.product], pcat:["Категория товара", r=> r.pcat], type:["Крупные / микро", r=> r.type]};
+  const G = {size:["Группа блогеров", vtCmpSize], manager:["Менеджер", r=> r.manager], team:["Команда", r=> r.team||"Без команды"], product:["Товар", r=> r.product], pcat:["Категория товара", r=> r.pcat], type:["Крупные / микро", r=> r.type], cat:["Категория блогера", r=> r.cat], coop:["Тип сотрудничества", r=> r.coop], pmeth:["Способ оплаты", r=> r.pmeth||"—"]};
   const gk = G[st.cGroup] ? st.cGroup : "size", [gTitle, gf] = G[gk];
   const inR = (r, a, b)=> r.published && r.factDate && String(r.factDate).slice(0,10) >= a && String(r.factDate).slice(0,10) <= b;
   const agg = rs=>{ const n = rs.length, views = rs.reduce((s, r)=> s + r.reach, 0), fee = rs.reduce((s, r)=> s + r.fee, 0), sales = rs.reduce((s, r)=> s + r.contrib, 0), bl = new Set(rs.map(r=> r.type + "|" + r.blogger.toLowerCase())).size;
-    return {n, views:views/1e6, fee:fee/1e6, sales:sales/1e6, perRoll: n ? sales/n/1000 : null, perBl: bl ? sales/bl/1000 : null, roas: fee ? sales/fee : null}; };
-  const M = [["n","Роликов вышло, шт",0,false],["views","Просмотры, млн",1,true],["fee","Гонорары блогерам, млн ₸",1,false],["sales","Продажи от блогеров, млн ₸",1,true],["perRoll","Продажи на 1 ролик, тыс. ₸",0,true],["perBl","Продажи на 1 блогера, тыс. ₸",0,true],["roas","ROAS: ₸ продаж на 1 ₸ гонорара",2,true]];
+    const cost = rs.reduce((s, r)=> s + (r.cost||0), 0), fl = rs.filter(r=> r.fol > 0);
+    return {n, views:views/1e6, fee:fee/1e6, cost:cost/1e6, check: n ? fee/n/1000 : null, fol: fl.length ? fl.reduce((s, r)=> s + r.fol, 0)/fl.length/1000 : null, avgViews: n ? views*1e6/1e6/n/1000 : null,
+      sales:sales/1e6, perRoll: n ? sales/n/1000 : null, perBl: bl ? sales/bl/1000 : null, roas: fee ? sales/fee : null}; };
+  // 26.11.2026 Нина: + бюджет с товаром, средний чек, средний охват, подписчики
+  const M = [["n","Роликов вышло, шт",0,false],["views","Просмотры, млн",1,true],["avgViews","Средний охват ролика, тыс.",1,true],["fol","Подписчиков в среднем, тыс.",1,false],["fee","Гонорары блогерам, млн ₸",1,false],["cost","Бюджет с товаром, млн ₸",1,false],["check","Средний чек (гонорар за ролик), тыс. ₸",0,false],["sales","Продажи от блогеров, млн ₸",1,true],["perRoll","Продажи на 1 ролик, тыс. ₸",0,true],["perBl","Продажи на 1 блогера, тыс. ₸",0,true],["roas","ROAS: ₸ продаж на 1 ₸ гонорара",2,true]];
   const fmt = (v, dc)=> v==null || !isFinite(v) ? "—" : v.toLocaleString("ru-RU", {minimumFractionDigits:dc, maximumFractionDigits:dc});
   const ra = rows.filter(r=> inR(r, A1, A2)), rb = rows.filter(r=> inR(r, B1, B2));
   const keys = [...new Set(ra.concat(rb).map(gf))];
@@ -4522,7 +4595,7 @@ function vtCompareHtml(st, rows){
     <div class="vt-bar"><span class="lbl2">Строки</span>${gBtns}${(()=>{ const sel = (k, l)=>{ const vals = [...new Set(rows.map(r=>r[k]))].sort((a, b)=>String(a).localeCompare(String(b), "ru")), cur = (st.filters[k]||[]); return `<select class="vt-filter" data-k="${k}" style="max-width:190px"><option value="">${l}</option>${vals.map(v=>`<option value="${escapeHtml(v)}"${cur.length===1&&cur[0]===v?" selected":""}>${escapeHtml(v)}</option>`).join("")}</select>`; }; return sel("type","Все типы") + sel("manager","Все менеджеры"); })()}</div>
     <div style="font-size:11.5px;color:var(--ink-mute);margin-bottom:6px">Вышедшие интеграции по дате выхода. Продажи — вклад в продажи Kaspi. Гонорары — без товара. Зелёный — стало лучше, красный — хуже (для роликов и гонораров не красим). Нано — до 10 тыс., микро — 10–100 тыс., макро — от 100 тыс. подписчиков.</div>
     <div class="table-wrap" style="overflow:auto"><table class="vt-table vt-cmp"><thead>
-      <tr><th rowspan="2" style="text-align:left;min-width:170px">${gTitle}</th><th colspan="7" style="text-align:center">А: ${lbl(A1, A2)}</th><th colspan="7" style="text-align:center">Б: ${lbl(B1, B2)}</th><th colspan="7" style="text-align:center">Изменение Б к А, абсолютное</th><th colspan="7" style="text-align:center">Изменение Б к А, %</th></tr>
+      <tr><th rowspan="2" style="text-align:left;min-width:170px">${gTitle}</th><th colspan="${M.length}" style="text-align:center">А: ${lbl(A1, A2)}</th><th colspan="${M.length}" style="text-align:center">Б: ${lbl(B1, B2)}</th><th colspan="${M.length}" style="text-align:center">Изменение Б к А, абсолютное</th><th colspan="${M.length}" style="text-align:center">Изменение Б к А, %</th></tr>
       <tr>${vh}${vh}${vh}${vh}</tr></thead><tbody>${body}</tbody></table></div>
     <style>.vt-cmp thead tr:nth-child(2) th{top:31px;height:170px;vertical-align:bottom}.vt-cmp td{font-size:12px;padding:6px 5px}</style>`;
 }
@@ -4606,15 +4679,22 @@ function wireVitrina(){
   on2("vt-nodays", ()=>{ st.dFrom = st.dTo = ""; redraw(); });
   document.querySelectorAll("#vt-panel .vt-month").forEach(b=> b.onclick = ()=>{ st.dFrom = st.dTo = ""; const m = Number(b.dataset.m); st.months = st.months.includes(m) ? st.months.filter(x=>x!==m) : st.months.concat(m); if(!st.months.length) st.months = [m]; redraw(); });
   document.querySelectorAll("#vt-panel .vt-filter").forEach(s=> s.onchange = ()=>{ st.filters[s.dataset.k] = s.value ? [s.value] : []; redraw(); });
+  { const chk = ()=> [...document.querySelectorAll("#vt-panel .vt-mchk")];
+    const apply = ()=>{ const ks = chk().filter(c=>c.checked).map(c=>c.value); if(!ks.length) return toast("Отметьте хотя бы один показатель", true);
+      if(ks.length===1){ st.metric = ks[0]; if(!st.show.includes(ks[0])) st.show = st.show.concat(ks[0]); } else { st.show = ks; st.metric = "__all"; } redraw(); };
+    const b1 = document.getElementById("vt-m-all"); if(b1) b1.onclick = e=>{ e.preventDefault(); chk().forEach(c=> c.checked = true); };
+    const b2 = document.getElementById("vt-m-main"); if(b2) b2.onclick = e=>{ e.preventDefault(); chk().forEach(c=> c.checked = !!vtMetric(c.value).main); };
+    const b3 = document.getElementById("vt-m-ok"); if(b3) b3.onclick = e=>{ e.preventDefault(); apply(); }; }
   const on = (id, fn)=>{ const el = document.getElementById(id); if(el) el[el.tagName==="SELECT"||el.tagName==="INPUT" ? "onchange" : "onclick"] = fn; };
   on("vt-year", e=>{ st.year = Number(e.target.value); redraw(); });
   on("vt-bmonth", e=>{ st.bMonth = e.target.value; redraw(); });
+  on("vt-mxgoal", e=>{ st.mxGoal = Number(e.target.value)||1000000; redraw(); });
   on("vt-allyear", ()=>{ st.dFrom = st.dTo = ""; st.months = [1,2,3,4,5,6,7,8,9,10,11,12]; redraw(); });
   on("vt-nomonths", ()=>{ st.dFrom = st.dTo = ""; st.months = [Number(todayStr().slice(5,7))]; redraw(); });
   on("vt-good", e=>{ st.good = Number(e.target.value)||90; redraw(); });
   on("vt-bad", e=>{ st.bad = Number(e.target.value)||50; redraw(); });
   on("vt-reset", ()=>{ UI.vt = vtDefault(); vtSave(); renderDeskTab(); });
-  on("vt-close-adv", ()=>{ UI.vtAdv = false; renderDeskTab(); });
+  on("vt-close-adv", ()=>{ UI.vtAdv = false; if(UI.tab==="dashboard"){ UI.dashView = "simple"; try{ localStorage.setItem("bb_dash_view", "simple"); }catch(e){} } renderDeskTab(); });
   on("vt-master", ()=> vtMaster());
   on("vt-excel", ()=> vtExport());
   on("vt-full", ()=>{ st.full = !st.full; renderDeskTab(); });
@@ -4688,6 +4768,7 @@ function tplSimpleStats(){
       <div class="kpi ok"><div class="num">${fmt(tot.reach)}</div><div class="lbl">Охват, просмотров</div></div>
       <div class="kpi"><div class="num">${tot.cpv==null?"—":tot.cpv.toFixed(2).replace(".", ",")+" ₸"}</div><div class="lbl">CPV — цена 1 просмотра<br><span style="color:var(--ink-mute)">бюджет ÷ охват, меньше — лучше</span></div></div>
       <div class="kpi"><div class="num">${fmt(tot.avg)}</div><div class="lbl">Средний охват ролика</div></div>
+      <div class="kpi"><div class="num">${tot.n ? money(tot.cost / tot.n) : "—"}</div><div class="lbl">Средняя стоимость ролика</div></div>
       <div class="kpi ok"><div class="num">${money(tot.contrib)}</div><div class="lbl">Вклад в продажи</div></div>
       <div class="kpi ${tot.romi==null?'':tot.romi>=1?'ok':'warn'}"><div class="num">${tot.romi==null?"—":tot.romi.toFixed(2).replace(".", ",")}</div><div class="lbl">ROMI — вклад ÷ бюджет<br><span style="color:var(--ink-mute)">больше 1 — окупилось</span></div></div>
       <div class="kpi bad"><div class="num">${money(tot.cost)}</div><div class="lbl">Бюджет</div></div>
@@ -4717,12 +4798,25 @@ function wireSimpleStats(){
   document.querySelectorAll("#sv-panel .sv-unf").forEach(b=> b.onclick = e=>{ e.stopPropagation(); delete st.filters[b.dataset.k]; redraw(); });
   const c = document.getElementById("sv-clear"); if(c) c.onclick = ()=>{ st.filters = {}; redraw(); };
 }
+// 26.11.2026 Нина: одна витрина на главной — вкладки: бюджет, показатели, план-факт, товар × размер, сравнение периодов,
+// микро/средние (карточки, лучший/худший, группы блогеров) и план по менеджерам.
+const DASH_VIEWS = [["budget","Бюджет и освоение"],["simple","Показатели"],["table","План-факт"],["matrix","Товар × размер блогера"],["cmp","Сравнение периодов"],["micro","Микро/средние"],["mplan","План по менеджерам"]];
+function dashView(){ if(!UI.dashView){ try{ UI.dashView = localStorage.getItem("bb_dash_view") || "budget"; }catch(e){ UI.dashView = "budget"; } } return DASH_VIEWS.some(x=> x[0]===UI.dashView) ? UI.dashView : "budget"; }
+function tplDashUnified(){
+  const v = dashView();
+  const bar = `<div class="panel" style="padding:10px 14px;margin-bottom:10px"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><b style="margin-right:6px">Витрина</b>${DASH_VIEWS.map(([k, l])=> `<button class="btn btn-sm ${v===k?"btn-primary":"btn-ghost"} dv-tab" data-v="${k}">${l}</button>`).join("")}</div></div>`;
+  let body = "";
+  if(v==="simple") body = tplSimpleStats();
+  else if(v==="micro") body = tplMicroInfluencerBrandDashboard(computeMicroInfluencerRomi()) + tplMicroBloggerGroups();
+  else if(v==="mplan") body = tplMicroResponsibleSummary();
+  else { const st = vtState(); st.view = v; body = tplVitrina(); }
+  return bar + body;
+}
 function tplMarketerDashboard(){
   const f = UI.dashPeriod;
   const ms = marketingSummary(f.from, f.to);
   return `
-    ${tplSimpleStats()}
-    ${UI.vtAdv ? tplVitrina() : `<div class="panel" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div><b>Расширенная витрина</b> <span style="color:var(--ink-mute);font-size:12px">план-факт, год к году, месяцы колонками, дерево строк, Excel — для детального разбора</span></div><button class="btn btn-ghost btn-sm" id="vt-open-adv">Открыть расширенную витрину</button></div>`}
+    ${tplDashUnified()}
     <div class="panel-title">Бартерные рассылки</div>
     ${tplDashPeriodPicker()}
     <div class="grid-kpi">
@@ -10873,9 +10967,20 @@ function wireDeskTab(){
   if(UI.tab==="control"){ wireControl(); return; }
   if(UI.tab==="tzBase"){ wireTzBase(); return; }
   if(UI.tab==="dashboard" && UI.role==="marketer"){
-    wireSimpleStats();
-    { const oa = document.getElementById("vt-open-adv"); if(oa) oa.onclick = ()=>{ UI.vtAdv = true; renderDeskTab(); }; }
-    if(UI.vtAdv) wireVitrina();
+    { const v = dashView();
+      document.querySelectorAll(".dv-tab").forEach(b=> b.onclick = ()=>{ UI.dashView = b.dataset.v; try{ localStorage.setItem("bb_dash_view", UI.dashView); }catch(e){} renderDeskTab(); });
+      if(v==="simple") wireSimpleStats();
+      else if(v==="micro" || v==="mplan"){
+        document.querySelectorAll(".micro-dash-month-tab").forEach(btn=>{ btn.onclick = ()=>{ UI.microDashMonth = btn.dataset.month; renderDeskTab(); }; });
+        const ms = document.getElementById("micro-dash-month-select"); if(ms) ms.onchange = ()=>{ if(ms.value){ UI.microDashMonth = ms.value; renderDeskTab(); } };
+        const mc = document.getElementById("micro-dash-category"); if(mc) mc.onchange = e=>{ UI.microDashCategory = e.target.value; renderDeskTab(); };
+        document.querySelectorAll(".mg-card").forEach(c=>{ c.onclick = ()=>{ UI.microGroupOpen = UI.microGroupOpen===c.dataset.group ? "" : c.dataset.group; renderDeskTab(); }; });
+        document.querySelectorAll(".mbc-open").forEach(b=>{ b.onclick = e=>{ e.stopPropagation(); openMicroBloggerCard(b.dataset.name); }; });
+        const rm = document.getElementById("micro-responsible-summary-month"); if(rm) rm.onchange = e=>{ UI.microResponsibleMonth = e.target.value; renderDeskTab(); };
+        document.querySelectorAll(".responsible-group-toggle-btn").forEach(btn=>{ btn.onclick = ()=>{ const lead = btn.dataset.lead; if(UI.expandedResponsibleGroups.has(lead)) UI.expandedResponsibleGroups.delete(lead); else UI.expandedResponsibleGroups.add(lead); renderDeskTab(); }; });
+        document.querySelectorAll(".responsible-toggle-btn").forEach(btn=>{ btn.onclick = ()=>{ const name = btn.dataset.responsible; if(UI.expandedResponsible.has(name)) UI.expandedResponsible.delete(name); else UI.expandedResponsible.add(name); renderDeskTab(); }; });
+      }
+      else wireVitrina(); }
     // 19.11.2026: блок «Аналитика интеграций» убран с главной — дублировал «Показатели интеграций» и витрину.
     const dpFrom = document.getElementById("dash-period-from");
     if(dpFrom) dpFrom.onchange = e=>{ UI.dashPeriod.from = e.target.value; renderDeskTab(); };
