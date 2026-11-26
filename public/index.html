@@ -4830,7 +4830,7 @@ function dcState(){
 }
 function dcSave(){ try{ localStorage.setItem(DC_KEY, JSON.stringify(UI.dc)); }catch(e){} }
 const DC_METS = {fee:["Бюджет, ₸", true], n:["Интеграции, шт", true], reach:["Охват", true], contrib:["Вклад в продажи, ₸", false], avgReach:["Ср. охват", false], avgCost:["Ср. стоимость, ₸", false], cpv:["CPV, ₸", false], roas:["ROAS", false]};
-const DC_CUTS = [["manager","Менеджеры"],["team","Команды"],["type","Сегменты"],["product","Товары"],["size","Размер блогера"],["cat","Категории блогеров"],["day","Дни"],["heat","Тепловая карта"],["extra","Доп. лимит"],["cmp","Сравнение периодов"],["pick","Подбор блогеров"]];
+const DC_CUTS = [["manager","Менеджеры"],["team","Команды"],["type","Сегменты"],["product","Товары"],["size","Размер блогера"],["cat","Категории блогеров"],["day","Дни"],["heat","Тепловая карта (строки × столбцы)"],["extra","Доп. лимит"],["cmp","Сравнение периодов"],["pick","Подбор блогеров"]];
 function dcMonthEnd(M){ const [y, m] = M.split("-").map(Number); return M + "-" + String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2,"0"); }
 // набор цифр по месяцу: вышло (по дате выхода), заведено (по дате заведения), план (по плановой дате), бюджет месяца
 function dcCalc(R, M, d1, d2){
@@ -4904,11 +4904,34 @@ function tplDashCompact(){
     ${b ? `<span style="font-size:11.5px;color:var(--ink-mute)">${pl(a)} против ${pl(b)}</span>` : ""}</div>`;
   const cut = DC_CUTS.some(x=> x[0]===st.cut) ? st.cut : "manager";
   const cutBar = `<div class="vt-bar" style="margin-top:4px"><span class="lbl2">Разрез</span>${sel("dc-cut", cut, DC_CUTS)}
-    ${["heat","extra","cmp","pick"].includes(cut) ? "" : `<details class="vt-dd" id="dc-mets"><summary class="btn btn-sm btn-ghost">Показатели: ${st.mets.map(k=> DC_METS[k][0].split(",")[0]).join(", ")} ▾</summary><div class="vt-dd-box">${Object.entries(DC_METS).map(([k, x])=> `<label><input type="checkbox" class="dc-met" value="${k}"${st.mets.includes(k)?" checked":""}> ${x[0]}</label>`).join("")}<button class="btn btn-primary btn-sm" id="dc-mets-ok" style="margin-top:6px">Показать</button></div></details>`}
+    ${["extra","cmp","pick"].includes(cut) ? "" : `<details class="vt-dd" id="dc-mets"><summary class="btn btn-sm btn-ghost">Показатели: ${st.mets.map(k=> DC_METS[k][0].split(",")[0]).join(", ")} ▾</summary><div class="vt-dd-box">${Object.entries(DC_METS).map(([k, x])=> `<label><input type="checkbox" class="dc-met" value="${k}"${st.mets.includes(k)?" checked":""}> ${x[0]}</label>`).join("")}<button class="btn btn-primary btn-sm" id="dc-mets-ok" style="margin-top:6px">Показать</button></div></details>`}
     ${["heat","extra","cmp","pick","day"].includes(cut) ? "" : `<span class="lbl2">Столбцы</span>${sel("dc-cols", st.cols||"sum", [["sum","Итог за месяц"],["out","По дням · вышло"],["buy","По дням · заведено"]])}`}
     <span style="flex:1"></span><button class="btn btn-ghost btn-sm" id="dc-excel">⬇ Excel</button></div>`;
   let body = "";
-  if(cut==="heat"){ const ex = (VT_BUDGET_CFG[M]||{}).extra || null; body = vtBudgetHeat(R, M, dcMonthEnd(M), ex); }
+  if(cut==="heat"){
+    // 26.11.2026 Нина: тепловая карта любых двух разрезов — строки × столбцы (товары × размер блогера, менеджеры × дни …)
+    const DIMS = [["manager","Менеджеры"],["team","Команды"],["type","Сегменты"],["product","Товары"],["pcat","Категории товаров"],["size","Размер блогера"],["cat","Категории блогеров"],["day","Дни"]];
+    const hr = DIMS.some(x=> x[0]===st.hr) ? st.hr : "product", hc = DIMS.some(x=> x[0]===st.hc) && st.hc!==hr ? st.hc : (hr==="size" ? "manager" : "size"), hb = st.hb==="buy" ? "buy" : "out";
+    const k0 = st.mets.find(k=> DC_METS[k]) || "fee", src = hb==="buy" ? a.bought : a.out;
+    const kf = d=> d==="day" ? (r=> String(hb==="buy" ? r.buy : r.factDate).slice(0,10)) : d==="type" ? (r=> VT_SEG[r.type] || r.type) : (r=> r[d] || "Не указано");
+    const fr = kf(hr), fc = kf(hc);
+    let cols = [...new Set(src.map(fc))];
+    if(hc==="day"){ cols = []; for(let d = a.A; d <= a.Z; d = vtShiftDay(d, 1)) cols.push(d); }
+    else if(hc==="size") cols = VT_SIZES.map(x=> x[0]).filter(k=> cols.includes(k));
+    else cols.sort((x, y)=> dcVal(k0, src.filter(r=> fc(r)===y), hb) - dcVal(k0, src.filter(r=> fc(r)===x), hb));
+    const rowsK = [...new Set(src.map(fr))].sort((x, y)=> (dcVal(k0, src.filter(r=> fr(r)===y), hb)||0) - (dcVal(k0, src.filter(r=> fr(r)===x), hb)||0));
+    const cellV = (rk, ck)=>{ const rs = src.filter(r=> fr(r)===rk && fc(r)===ck); return rs.length ? dcVal(k0, rs, hb) : null; };
+    const grid = rowsK.map(rk=> cols.map(ck=> cellV(rk, ck)));
+    const max = Math.max(1e-9, ...grid.flat().filter(v=> v!=null).map(Math.abs));
+    const sh = v=> v==null || !v ? "" : `background:rgba(194,48,111,${(.08 + .7 * Math.sqrt(Math.abs(v) / max)).toFixed(2)});${Math.abs(v) / max > .45 ? "color:#fff;" : ""}`;
+    const fm = v=> v==null ? "" : ["n"].includes(k0) ? String(v) : ["cpv","roas"].includes(k0) ? dcFmt(k0, v) : dcShort(v).replace(" млн","м").replace(" тыс.","к");
+    const lbl = c=> hc==="day" ? c.slice(8,10) : escapeHtml(c);
+    body = `<div class="vt-bar"><span class="lbl2">Строки</span>${sel("dc-hr", hr, DIMS)}<span class="lbl2">Столбцы</span>${sel("dc-hc", hc, DIMS.filter(x=> x[0]!==hr))}<span class="lbl2">Считать</span>${sel("dc-hb", hb, [["out","вышедшие (по дате выхода)"],["buy","заведённые (по дате заведения)"]])}</div>
+      <div style="font-size:11.5px;color:var(--ink-mute);margin:2px 0 6px">${DC_METS[k0][0]} — первый отмеченный в «Показатели». Чем темнее, тем больше.</div>
+      <div class="table-wrap" style="max-height:640px;overflow:auto"><table class="vt-table" style="font-size:11.5px"><thead><tr><th style="text-align:left;min-width:160px">${escapeHtml((DIMS.find(x=> x[0]===hr)||[])[1])}</th>${cols.map(c=> `<th style="text-align:center;padding:4px 5px;${hc==="day"?"":"white-space:normal;min-width:70px"}">${lbl(c)}</th>`).join("")}<th style="text-align:right">Итого</th></tr></thead>
+      <tbody><tr style="font-weight:700;background:var(--action-soft)"><td>Итого</td>${cols.map(c=> `<td style="text-align:center">${fm(dcVal(k0, src.filter(r=> fc(r)===c), hb) || null)}</td>`).join("")}<td style="text-align:right">${dcFmt(k0, dcVal(k0, src, hb))}</td></tr>
+      ${rowsK.map((rk, i)=> `<tr><td style="white-space:nowrap">${escapeHtml(rk)}</td>${grid[i].map((v, j)=> `<td style="text-align:center;padding:4px 5px;${sh(v)}${hc==="day" && cols[j]===todayStr()?"outline:2px solid #f0b400;":""}">${fm(v)}</td>`).join("")}<td style="text-align:right"><b>${dcFmt(k0, dcVal(k0, src.filter(r=> fr(r)===rk), hb))}</b></td></tr>`).join("")}</tbody></table></div>`;
+  }
   else if(cut==="cmp" || cut==="pick"){ const vs = vtState(); vs.year = Number(M.slice(0,4)); vs.months = [Number(M.slice(5))]; vs.dFrom = vs.dTo = "";
     body = `<div class="vt-pnl" id="vt-panel">${cut==="cmp" ? vtCompareHtml(vs, R) : vtMatrixHtml(vs, R)}</div>`; }
   else if(cut==="extra"){
@@ -4983,6 +5006,9 @@ function wireDashCompact(){
   on("dc-c2", e=>{ st.c2 = e.target.value; redraw(); });
   { const c = document.getElementById("dc-dclr"); if(c) c.onclick = ()=>{ st.d1 = st.d2 = ""; redraw(); }; }
   on("dc-cut", e=>{ st.cut = e.target.value; redraw(); });
+  on("dc-hr", e=>{ st.hr = e.target.value; redraw(); });
+  on("dc-hc", e=>{ st.hc = e.target.value; redraw(); });
+  on("dc-hb", e=>{ st.hb = e.target.value; redraw(); });
   on("dc-cols", e=>{ st.cols = e.target.value; redraw(); });
   on("vt-hmk", e=>{ vtState().hmK = e.target.value; vtSave(); renderDeskTab(); });
   const ok = document.getElementById("dc-mets-ok"); if(ok) ok.onclick = ()=>{ const ks = [...document.querySelectorAll(".dc-met")].filter(c=> c.checked).map(c=> c.value); if(!ks.length) return toast("Отметьте хотя бы один показатель", true); st.mets = ks; redraw(); };
