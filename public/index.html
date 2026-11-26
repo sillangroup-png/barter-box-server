@@ -4833,18 +4833,20 @@ const DC_METS = {fee:["Бюджет, ₸", true], n:["Интеграции, шт
 const DC_CUTS = [["manager","Менеджеры"],["team","Команды"],["type","Сегменты"],["product","Товары"],["size","Размер блогера"],["cat","Категории блогеров"],["day","Дни"],["heat","Тепловая карта"],["extra","Доп. лимит"],["cmp","Сравнение периодов"],["pick","Подбор блогеров"]];
 function dcMonthEnd(M){ const [y, m] = M.split("-").map(Number); return M + "-" + String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2,"0"); }
 // набор цифр по месяцу: вышло (по дате выхода), заведено (по дате заведения), план (по плановой дате), бюджет месяца
-function dcCalc(R, M){
-  const cfg = VT_BUDGET_CFG[M] || {}, ex = cfg.extra || null, mEnd = dcMonthEnd(M);
-  const out = R.filter(r=> r.published && String(r.factDate||"").slice(0,7)===M);
-  const bought = R.filter(r=> r.buy && r.buy.slice(0,7)===M);
-  const plan = R.filter(r=> String(r.planDate||"").slice(0,7)===M);
+function dcCalc(R, M, d1, d2){
+  // 26.11.2026 Нина: период — месяц целиком или дни «с … по …»
+  const cfg = VT_BUDGET_CFG[M] || {}, ex = cfg.extra || null, mEnd = dcMonthEnd(M), A = d1 || M + "-01", Z = d2 || mEnd;
+  const inR = d=>{ d = String(d||"").slice(0,10); return !!d && d >= A && d <= Z; };
+  const out = R.filter(r=> r.published && inR(r.factDate));
+  const bought = R.filter(r=> inR(r.buy));
+  const plan = R.filter(r=> inR(r.planDate));
   const isExtra = r=> !!(ex && r.buy && r.buy >= ex.from && r.buy.slice(0,7) <= M);
-  const inMonth = r=>{ if(r.published) return String(r.factDate).slice(0,7)===M; const p = String(r.planDate||""); if(p.slice(0,7)===M) return true; return (!p || p > mEnd) && r.buy && r.buy.slice(0,7)===M; };
+  const inMonth = r=>{ if(r.published) return inR(r.factDate); const p = String(r.planDate||""); if(inR(p)) return true; return (!p || p > Z) && inR(r.buy); };
   const bud = R.filter(r=> !isExtra(r) && inMonth(r)).reduce((s, r)=> s + (r.fee||0), 0);
   const planTot = Object.values(cfg.plan||{}).reduce((s, v)=> s + v, 0);
   const sum = (rs, f)=> rs.reduce((s, r)=> s + (f(r)||0), 0);
   const cost = sum(out, r=> r.cost), reach = sum(out, r=> r.reach), contrib = sum(out, r=> r.contrib);
-  return {out, bought, plan, bud, planTot, ex, n:out.length, fee:sum(out, r=> r.fee), cost, reach, contrib,
+  return {A, Z, out, bought, plan, bud, planTot: d1 || d2 ? 0 : planTot, ex, n:out.length, fee:sum(out, r=> r.fee), cost, reach, contrib,
     avgReach: out.length ? reach / out.length : null, avgCost: out.length ? cost / out.length : null, cpv: reach ? cost / reach : null, roas: cost ? contrib / cost * 100 : null,
     boughtN: bought.length, boughtFee: sum(bought, r=> r.fee)};
 }
@@ -4866,14 +4868,21 @@ function dcShort(v){ if(v==null || !isFinite(v)) return "—"; const a = Math.ab
 function tplDashCompact(){
   const st = dcState(), all = vtRows();
   const R = all.filter(r=> (!st.type || r.type===st.type) && (!st.mgr || r.manager===st.mgr));
-  const M = st.m, M2 = st.cmp==="prev" ? vtShiftMonth(M, -1) : st.cmp==="yoy" ? vtShiftMonth(M, -12) : "";
-  const a = dcCalc(R, M), b = M2 ? dcCalc(R, M2) : null;
-  const ml = ym=> VT_MON[Number(ym.slice(5))-1] + " " + ym.slice(0,4);
+  const M = st.m, ml = ym=> VT_MON[Number(ym.slice(5))-1] + " " + ym.slice(0,4);
+  const d1 = st.d1 && st.d1.slice(0,7)===M ? st.d1 : "", d2 = st.d2 && st.d2.slice(0,7)===M ? st.d2 : "";
+  const shiftD = (d, n)=>{ if(!d) return ""; const m2 = vtShiftMonth(d.slice(0,7), n), e = dcMonthEnd(m2); const x = m2 + d.slice(7); return x > e ? e : x; };
+  let M2 = "", e1 = "", e2 = "";
+  if(st.cmp==="prev"){ M2 = vtShiftMonth(M, -1); e1 = shiftD(d1, -1); e2 = shiftD(d2, -1); }
+  else if(st.cmp==="yoy"){ M2 = vtShiftMonth(M, -12); e1 = shiftD(d1, -12); e2 = shiftD(d2, -12); }
+  else if(st.cmp==="same"){ M2 = vtShiftMonth(M, -1); e1 = shiftD(d1 || M + "-01", -1); e2 = shiftD(d2 || (M===todayStr().slice(0,7) ? todayStr() : dcMonthEnd(M)), -1); }
+  else if(st.cmp==="custom" && st.c1 && st.c2 && st.c1 <= st.c2){ M2 = st.c1.slice(0,7); e1 = st.c1; e2 = st.c2; }
+  const a = dcCalc(R, M, d1, st.cmp==="same" && !d2 && M===todayStr().slice(0,7) ? todayStr() : d2), b = M2 ? dcCalc(R, M2, e1, e2) : null;
+  const pl = x=> x.A.slice(0,7)===x.Z.slice(0,7) && x.A.slice(8)==="01" && x.Z===dcMonthEnd(x.A.slice(0,7)) ? ml(x.A.slice(0,7)).toLowerCase() : vtDdmm(x.A) + "–" + vtDdmm(x.Z) + (x.A.slice(0,4)!==todayStr().slice(0,4) ? "." + x.A.slice(0,4) : "");
   const months = [...new Set(all.map(r=> String(r.factDate||r.planDate||"").slice(0,7)).filter(x=> /^\d{4}-\d{2}$/.test(x)).concat([todayStr().slice(0,7)]))].sort().reverse();
   const mgrs = [...new Set(all.map(r=> r.manager))].sort((x, y)=> x.localeCompare(y, "ru"));
   const sel = (id, cur, opts)=> `<select id="${id}">${opts.map(([v, l])=> `<option value="${escapeHtml(v)}"${v===cur?" selected":""}>${escapeHtml(l)}</option>`).join("")}</select>`;
   const delta = (k, low)=>{ if(!b || a[k]==null || b[k]==null || !b[k]) return ""; const p = (a[k] - b[k]) / Math.abs(b[k]) * 100, good = low ? p < 0 : p > 0;
-    return `<div style="font-size:11px;color:${Math.abs(p)<.5?"var(--ink-mute)":good?"var(--ok)":"var(--bad)"}">${p>=0?"▲":"▼"} ${Math.abs(Math.round(p))}% к ${ml(M2).toLowerCase()}</div>`; };
+    return `<div style="font-size:11px;color:${Math.abs(p)<.5?"var(--ink-mute)":good?"var(--ok)":"var(--bad)"}">${p>=0?"▲":"▼"} ${Math.abs(Math.round(p))}% к ${pl(b)}</div>`; };
   const card = (v, l, k, low, cls)=> `<div class="kpi ${cls||""}" style="padding:10px 12px"><div class="num" style="font-size:19px">${v}</div><div class="lbl">${l}</div>${k ? delta(k, low) : ""}</div>`;
   const cards = `<div class="grid-kpi" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin:10px 0">
     ${card(dcShort(a.bud) + " ₸", "Бюджет месяца", "bud")}
@@ -4889,7 +4898,10 @@ function tplDashCompact(){
   const filters = `<div class="vt-bar" style="gap:8px"><span class="lbl2">Месяц</span>${sel("dc-m", M, months.map(x=> [x, ml(x)]))}
     <span class="lbl2">Тип</span>${sel("dc-type", st.type, [["","Все"],["Микро/средние","Микро/средние"],["Крупные","Крупные"]])}
     <span class="lbl2">Менеджер</span>${sel("dc-mgr", st.mgr, [["","Все"]].concat(mgrs.map(x=> [x, x])))}
-    <span class="lbl2">Сравнить с</span>${sel("dc-cmp", st.cmp, [["prev","прошлым месяцем"],["yoy","тем же месяцем год назад"],["none","не сравнивать"]])}</div>`;
+    <span class="lbl2">Дни</span><input type="date" id="dc-d1" value="${d1}" min="${M}-01" max="${dcMonthEnd(M)}"><span class="lbl2">—</span><input type="date" id="dc-d2" value="${d2}" min="${M}-01" max="${dcMonthEnd(M)}">${d1||d2?`<button class="btn btn-ghost btn-sm" id="dc-dclr">весь месяц</button>`:""}
+    <span class="lbl2">Сравнить с</span>${sel("dc-cmp", st.cmp, [["prev","прошлым месяцем (те же даты)"],["same","те же дни прошлого месяца (с 1-го по сегодня)"],["yoy","тем же периодом год назад"],["custom","своими датами…"],["none","не сравнивать"]])}
+    ${st.cmp==="custom" ? `<input type="date" id="dc-c1" value="${st.c1||""}"><span class="lbl2">—</span><input type="date" id="dc-c2" value="${st.c2||""}">` : ""}
+    ${b ? `<span style="font-size:11.5px;color:var(--ink-mute)">${pl(a)} против ${pl(b)}</span>` : ""}</div>`;
   const cut = DC_CUTS.some(x=> x[0]===st.cut) ? st.cut : "manager";
   const cutBar = `<div class="vt-bar" style="margin-top:4px"><span class="lbl2">Разрез</span>${sel("dc-cut", cut, DC_CUTS)}
     ${["heat","extra","cmp","pick"].includes(cut) ? "" : `<details class="vt-dd" id="dc-mets"><summary class="btn btn-sm btn-ghost">Показатели: ${st.mets.map(k=> DC_METS[k][0].split(",")[0]).join(", ")} ▾</summary><div class="vt-dd-box">${Object.entries(DC_METS).map(([k, x])=> `<label><input type="checkbox" class="dc-met" value="${k}"${st.mets.includes(k)?" checked":""}> ${x[0]}</label>`).join("")}<button class="btn btn-primary btn-sm" id="dc-mets-ok" style="margin-top:6px">Показать</button></div></details>`}
@@ -4913,12 +4925,12 @@ function tplDashCompact(){
     const keyOf = cut==="day" ? null : cut==="type" ? (r=> VT_SEG[r.type] || r.type) : (r=> r[cut] || "Не указано");
     const mEnd = dcMonthEnd(M), groups = new Map();
     const add = (k, kind, r)=>{ if(!groups.has(k)) groups.set(k, {out:[], buy:[], plan:[], prev:[]}); groups.get(k)[kind].push(r); };
-    if(cut==="day"){ for(let d = M + "-01"; d <= mEnd; d = vtShiftDay(d, 1)) groups.set(d, {out:[], buy:[], plan:[], prev:[]});
+    if(cut==="day"){ for(let d = a.A; d <= a.Z; d = vtShiftDay(d, 1)) groups.set(d, {out:[], buy:[], plan:[], prev:[]});
       a.out.forEach(r=> add(String(r.factDate).slice(0,10), "out", r)); a.bought.forEach(r=> add(r.buy, "buy", r)); a.plan.forEach(r=> add(String(r.planDate).slice(0,10), "plan", r)); }
     else { a.out.forEach(r=> add(keyOf(r), "out", r)); a.bought.forEach(r=> add(keyOf(r), "buy", r)); a.plan.forEach(r=> add(keyOf(r), "plan", r)); if(b) b.out.forEach(r=> add(keyOf(r), "prev", r)); }
     const mets = st.mets.filter(k=> DC_METS[k]);
     const head1 = mets.map(k=>{ const add3 = DC_METS[k][1]; return `<th colspan="${(add3?4:1) + (b?1:0)}" style="text-align:center;border-left:2px solid rgba(255,255,255,.5)">${DC_METS[k][0]}</th>`; }).join("");
-    const head2 = mets.map(k=> (DC_METS[k][1] ? `<th style="text-align:right;border-left:2px solid rgba(255,255,255,.5)">План</th><th style="text-align:right">Заведено</th><th style="text-align:right">Вышло</th><th style="text-align:right">Вып.</th>` : `<th style="text-align:right;border-left:2px solid rgba(255,255,255,.5)">Вышло</th>`) + (b ? `<th style="text-align:right">к ${ml(M2).slice(0,3).toLowerCase()}.</th>` : "")).join("");
+    const head2 = mets.map(k=> (DC_METS[k][1] ? `<th style="text-align:right;border-left:2px solid rgba(255,255,255,.5)">План</th><th style="text-align:right">Заведено</th><th style="text-align:right">Вышло</th><th style="text-align:right">Вып.</th>` : `<th style="text-align:right;border-left:2px solid rgba(255,255,255,.5)">Вышло</th>`) + (b ? `<th style="text-align:right">к сравн.</th>` : "")).join("");
     const row = (label, g, bold)=>{
       let h = `<tr style="${bold?"font-weight:700;background:var(--action-soft)":""}"><td style="white-space:nowrap">${escapeHtml(label)}</td>`;
       mets.forEach(k=>{ const o = dcVal(k, g.out, "out");
@@ -4932,13 +4944,13 @@ function tplDashCompact(){
     let list = [...groups];
     if(cut!=="day") list.sort((x, y)=> (dcVal(mets[0]||"fee", y[1].out, "out")||0) + (dcVal(mets[0]||"fee", y[1].buy, "buy")||0) - (dcVal(mets[0]||"fee", x[1].out, "out")||0) - (dcVal(mets[0]||"fee", x[1].buy, "buy")||0));
     else list = list.filter(([, g])=> g.out.length || g.buy.length || g.plan.length);
-    body = `<div style="font-size:11.5px;color:var(--ink-mute);margin:2px 0 6px">План — по плановой дате · Заведено — внесено в Barter Box в месяце · Вышло — по дате выхода${b?` · последняя колонка — вышло к ${ml(M2).toLowerCase()}`:""}</div>
+    body = `<div style="font-size:11.5px;color:var(--ink-mute);margin:2px 0 6px">План — по плановой дате · Заведено — внесено в Barter Box в месяце · Вышло — по дате выхода${b?` · «к сравн.» — вышло к ${pl(b)}`:""}</div>
       <div class="table-wrap" style="max-height:640px;overflow:auto"><table class="vt-table"><thead><tr><th rowspan="2" style="text-align:left;min-width:160px">${escapeHtml((DC_CUTS.find(x=> x[0]===cut)||[])[1])}</th>${head1}</tr><tr>${head2}</tr></thead>
       <tbody>${row("Итого", tot, true)}${list.map(([k, g])=> row(cut==="day" ? vtDdmm(k) + (k===todayStr()?" · сегодня":"") : k, g)).join("")}</tbody></table></div>`;
     // 26.11.2026 Нина: «по дням» — строки разреза × дни месяца, по первому выбранному показателю
     if(st.cols && st.cols!=="sum" && cut!=="day"){
       const k0 = mets[0] || "fee", kind = st.cols==="buy" ? "buy" : "out", dOf = r=> kind==="buy" ? r.buy : String(r.factDate||"").slice(0,10);
-      const days = []; for(let d = M + "-01"; d <= mEnd; d = vtShiftDay(d, 1)) days.push(d);
+      const days = []; for(let d = a.A; d <= a.Z; d = vtShiftDay(d, 1)) days.push(d);
       const cell = rs=> dcVal(k0, rs, kind) || 0;
       const lines = [["Итого", tot[kind]]].concat(list.map(([k, g])=> [k, g[kind]])).filter(([, rs], i)=> i===0 || rs.length);
       const max = Math.max(1, ...lines.slice(1).flatMap(([, rs])=> days.map(d=> cell(rs.filter(r=> dOf(r)===d)))));
@@ -4954,6 +4966,8 @@ function tplDashCompact(){
     .vt-dd{position:relative}.vt-dd>summary{list-style:none;cursor:pointer}.vt-dd>summary::-webkit-details-marker{display:none}
     .vt-dd-box{position:absolute;z-index:50;top:34px;left:0;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.12);min-width:240px;display:flex;flex-direction:column;gap:4px}
     .vt-dd-box label{font-size:12.5px;display:flex;gap:6px;align-items:center;white-space:nowrap}</style>
+  <style>#dc-panel .vt-table tr>*:first-child{position:sticky;left:0;z-index:2;background:#fff;box-shadow:2px 0 0 var(--line)}
+    #dc-panel .vt-table thead tr>*:first-child{background:#4e8fa6;z-index:3}#dc-panel .vt-table tbody tr:first-child>td:first-child{background:#fbe9f0}</style>
   <div class="panel" id="dc-panel">${filters}${cards}${cutBar}${body}</div>`;
 }
 function wireDashCompact(){
@@ -4963,6 +4977,11 @@ function wireDashCompact(){
   on("dc-type", e=>{ st.type = e.target.value; redraw(); });
   on("dc-mgr", e=>{ st.mgr = e.target.value; redraw(); });
   on("dc-cmp", e=>{ st.cmp = e.target.value; redraw(); });
+  on("dc-d1", e=>{ st.d1 = e.target.value; if(st.d2 && st.d1 > st.d2) st.d2 = st.d1; redraw(); });
+  on("dc-d2", e=>{ st.d2 = e.target.value; if(st.d1 && st.d2 < st.d1) st.d1 = st.d2; redraw(); });
+  on("dc-c1", e=>{ st.c1 = e.target.value; redraw(); });
+  on("dc-c2", e=>{ st.c2 = e.target.value; redraw(); });
+  { const c = document.getElementById("dc-dclr"); if(c) c.onclick = ()=>{ st.d1 = st.d2 = ""; redraw(); }; }
   on("dc-cut", e=>{ st.cut = e.target.value; redraw(); });
   on("dc-cols", e=>{ st.cols = e.target.value; redraw(); });
   on("vt-hmk", e=>{ vtState().hmK = e.target.value; vtSave(); renderDeskTab(); });
