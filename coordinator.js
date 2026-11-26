@@ -1345,9 +1345,9 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         if(job.videoVersionId && (!retryable || job.tries>=6 || res)) videoFlow.finishReview(getState(),d,job.videoVersionId,res,err);
         if(job.videoVersionId && d.flowCurrentVideoVersionId!==job.videoVersionId){persist();continue;}
         if (res) {
-          d.vreview = { status: "done", at: new Date().toISOString(), url: job.url, text: String(res.text).slice(0, 12000), decision: res.decision, score: res.score, formal: res.formal, model: res.model };
-          const head = `🤖 ИИ: ${res.decision || "разбор готов"}${res.score != null ? ` · ${res.score}/9` : ""}`;
-          log(d.id, "sys", `ИИ разобрал видео: ${res.decision || "?"}${res.score != null ? " " + res.score + "/9" : ""}`);
+          d.vreview = { status: "done", at: new Date().toISOString(), url: job.url, text: String(res.text).slice(0, 12000), decision: res.decision, score: res.score, scale: res.scale || 18, formal: res.formal, model: res.model };
+          const head = `🤖 ИИ: ${res.decision || "разбор готов"}${res.score != null ? ` · ${res.score}/${res.scale || 18}` : ""}`;
+          log(d.id, "sys", `ИИ разобрал видео: ${res.decision || "?"}${res.score != null ? " " + res.score + "/" + (res.scale || 18) : ""}`);
           if (ev && job.mode === "lead") { ev.text = `${ev.text.replace(/ · 🤖 ИИ разбирает…$/, "")} · ${head}`; ev.read = false; }
           else if (ev) { ev.text = `Блогер прислал видео на согласование. ${head} — посмотрите разбор и отправьте тимлиду`; ev.read = false; }
           else event(d, "media", `${head} — посмотрите разбор и отправьте тимлиду`, { url: job.url, review: true });
@@ -1406,7 +1406,7 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       const lead = leadOf(d.responsible);
       d.vstage = "lead"; d.vstageAt = now; d.vleadAt = now; d.vleadComment = comment || null; d.vleadFrom = who; d.vlead = lead;
       closeEvents();
-      const r = d.vreview && d.vreview.status === "done" ? ` · 🤖 ${d.vreview.decision || ""}${d.vreview.score != null ? " " + d.vreview.score + "/9" : ""}` : "";
+      const r = d.vreview && d.vreview.status === "done" ? ` · 🤖 ${d.vreview.decision || ""}${d.vreview.score != null ? " " + d.vreview.score + "/" + (d.vreview.scale || 9) : ""}` : "";
       const media = (Array.isArray(d.coordMedia) ? d.coordMedia : []).slice().reverse().find((m) => m.url);
       // Разбора ещё нет (ключ добавили позже, видео отметили вручную) — запускаем сейчас, тимлид увидит результат в том же уведомлении.
       const needAi = !(d.vreview && (d.vreview.status === "done" || d.vreview.status === "running")) && process.env.GEMINI_API_KEY && media && media.url;

@@ -14,7 +14,7 @@ function queueAmbiguous(st,message,deals){const f=state(st);if(f.pendingMedia.so
 }
 function beginReview(deal,url){return recordVersion(deal,{url,source:'manager',messageId:'manual:'+url+':'+(deal.flowCurrentVideoVersionId||'first')});}
 function finishReview(st,deal,versionId,result,error){const version=(deal.flowVideoVersions||[]).find(v=>v.id===versionId);if(!version)return;
- version.review=result?{status:'done',score:result.score,scale:9,method:'existing-video-review-v1/9',text:String(result.text||'').slice(0,12000),model:result.model||null,at:new Date().toISOString()}:{status:'error',error:String(error||'').slice(0,300),at:new Date().toISOString()};
+ version.review=result?{status:'done',score:result.score,scale:result.scale||9,method:(result.scale||9)===18?'video-review-v2/18':'existing-video-review-v1/9',text:String(result.text||'').slice(0,12000),model:result.model||null,at:new Date().toISOString()}:{status:'error',error:String(error||'').slice(0,300),at:new Date().toISOString()};
  if(result&&deal.flowCurrentVideoVersionId===versionId){const f=state(st);if(!f.reviewOutbox.some(x=>x.videoVersionId===versionId))f.reviewOutbox.push({id:crypto.randomUUID(),dealId:deal.id,videoVersionId:versionId,versionNumber:version.number,url:version.url,review:version.review,responsible:deal.responsible,status:'dry_run',createdAt:new Date().toISOString(),note:'Отправка тимлиду требует проверки контакта, медиа API и ID ответа.'});}
 }
 module.exports={enabled,recordVersion,queueAmbiguous,beginReview,finishReview};
