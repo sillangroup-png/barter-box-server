@@ -4893,6 +4893,7 @@ function tplDashCompact(){
   const cut = DC_CUTS.some(x=> x[0]===st.cut) ? st.cut : "manager";
   const cutBar = `<div class="vt-bar" style="margin-top:4px"><span class="lbl2">Разрез</span>${sel("dc-cut", cut, DC_CUTS)}
     ${["heat","extra","cmp","pick"].includes(cut) ? "" : `<details class="vt-dd" id="dc-mets"><summary class="btn btn-sm btn-ghost">Показатели: ${st.mets.map(k=> DC_METS[k][0].split(",")[0]).join(", ")} ▾</summary><div class="vt-dd-box">${Object.entries(DC_METS).map(([k, x])=> `<label><input type="checkbox" class="dc-met" value="${k}"${st.mets.includes(k)?" checked":""}> ${x[0]}</label>`).join("")}<button class="btn btn-primary btn-sm" id="dc-mets-ok" style="margin-top:6px">Показать</button></div></details>`}
+    ${["heat","extra","cmp","pick","day"].includes(cut) ? "" : `<span class="lbl2">Столбцы</span>${sel("dc-cols", st.cols||"sum", [["sum","Итог за месяц"],["out","По дням · вышло"],["buy","По дням · заведено"]])}`}
     <span style="flex:1"></span><button class="btn btn-ghost btn-sm" id="dc-excel">⬇ Excel</button></div>`;
   let body = "";
   if(cut==="heat"){ const ex = (VT_BUDGET_CFG[M]||{}).extra || null; body = vtBudgetHeat(R, M, dcMonthEnd(M), ex); }
@@ -4934,6 +4935,19 @@ function tplDashCompact(){
     body = `<div style="font-size:11.5px;color:var(--ink-mute);margin:2px 0 6px">План — по плановой дате · Заведено — внесено в Barter Box в месяце · Вышло — по дате выхода${b?` · последняя колонка — вышло к ${ml(M2).toLowerCase()}`:""}</div>
       <div class="table-wrap" style="max-height:640px;overflow:auto"><table class="vt-table"><thead><tr><th rowspan="2" style="text-align:left;min-width:160px">${escapeHtml((DC_CUTS.find(x=> x[0]===cut)||[])[1])}</th>${head1}</tr><tr>${head2}</tr></thead>
       <tbody>${row("Итого", tot, true)}${list.map(([k, g])=> row(cut==="day" ? vtDdmm(k) + (k===todayStr()?" · сегодня":"") : k, g)).join("")}</tbody></table></div>`;
+    // 26.11.2026 Нина: «по дням» — строки разреза × дни месяца, по первому выбранному показателю
+    if(st.cols && st.cols!=="sum" && cut!=="day"){
+      const k0 = mets[0] || "fee", kind = st.cols==="buy" ? "buy" : "out", dOf = r=> kind==="buy" ? r.buy : String(r.factDate||"").slice(0,10);
+      const days = []; for(let d = M + "-01"; d <= mEnd; d = vtShiftDay(d, 1)) days.push(d);
+      const cell = rs=> dcVal(k0, rs, kind) || 0;
+      const lines = [["Итого", tot[kind]]].concat(list.map(([k, g])=> [k, g[kind]])).filter(([, rs], i)=> i===0 || rs.length);
+      const max = Math.max(1, ...lines.slice(1).flatMap(([, rs])=> days.map(d=> cell(rs.filter(r=> dOf(r)===d)))));
+      const sh = v=> !v ? "" : `background:rgba(194,48,111,${(.08 + .7 * Math.sqrt(v / max)).toFixed(2)});${v / max > .45 ? "color:#fff;" : ""}`;
+      const fm = v=> !v ? "" : (k0==="n" ? String(v) : dcShort(v).replace(" млн","м").replace(" тыс.","к"));
+      body = `<div style="font-size:11.5px;color:var(--ink-mute);margin:2px 0 6px">${DC_METS[k0][0]} по дням — ${kind==="buy"?"по дате заведения":"по дате выхода"}. Показатель — первый отмеченный в «Показатели».</div>
+        <div class="table-wrap" style="max-height:640px;overflow:auto"><table class="vt-table" style="font-size:11px"><thead><tr><th style="text-align:left;min-width:140px">${escapeHtml((DC_CUTS.find(x=> x[0]===cut)||[])[1])}</th>${days.map(d=> `<th style="text-align:center;padding:4px 3px">${d.slice(8,10)}</th>`).join("")}<th style="text-align:right">Итого</th></tr></thead>
+        <tbody>${lines.map(([l, rs], i)=> `<tr style="${i?"":"font-weight:700;background:var(--action-soft)"}"><td style="white-space:nowrap">${escapeHtml(l)}</td>${days.map(d=>{ const v = cell(rs.filter(r=> dOf(r)===d)); return `<td style="text-align:center;padding:4px 3px;${i?sh(v):""}${d===todayStr()?"outline:2px solid #f0b400;":""}">${fm(v)}</td>`; }).join("")}<td style="text-align:right"><b>${dcFmt(k0, cell(rs))}</b></td></tr>`).join("")}</tbody></table></div>`;
+    }
   }
   return `<style>.vt-table th{position:sticky;top:0;background:#4e8fa6;color:#fff;font-size:11.5px;z-index:1}.vt-table thead tr:nth-child(2) th{top:31px}.vt-table td{font-size:12.5px;padding:6px 8px}
     .vt-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px}.vt-bar .lbl2{font-size:12px;color:var(--ink-mute);margin:0 2px 0 6px}
@@ -4950,6 +4964,7 @@ function wireDashCompact(){
   on("dc-mgr", e=>{ st.mgr = e.target.value; redraw(); });
   on("dc-cmp", e=>{ st.cmp = e.target.value; redraw(); });
   on("dc-cut", e=>{ st.cut = e.target.value; redraw(); });
+  on("dc-cols", e=>{ st.cols = e.target.value; redraw(); });
   on("vt-hmk", e=>{ vtState().hmK = e.target.value; vtSave(); renderDeskTab(); });
   const ok = document.getElementById("dc-mets-ok"); if(ok) ok.onclick = ()=>{ const ks = [...document.querySelectorAll(".dc-met")].filter(c=> c.checked).map(c=> c.value); if(!ks.length) return toast("Отметьте хотя бы один показатель", true); st.mets = ks; redraw(); };
   const xl = document.getElementById("dc-excel"); if(xl) xl.onclick = ()=>{
