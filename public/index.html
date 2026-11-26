@@ -4821,7 +4821,149 @@ function tplDashUnified(){
   else { const st = vtState(); st.view = v; body = tplVitrina(); }
   return tplDashStrip() + bar + body;
 }
+// 26.11.2026 Нина: «всё в одном компактном дашборде по фильтрам». Один экран: фильтры → карточки → одна таблица с выбором разреза.
+const DC_KEY = "bb_dash_compact";
+function dcState(){
+  if(!UI.dc){ let s = {}; try{ s = JSON.parse(localStorage.getItem(DC_KEY) || "{}"); }catch(e){}
+    UI.dc = Object.assign({m:todayStr().slice(0,7), type:"", mgr:"", cmp:"prev", cut:"manager", mets:["fee","n","reach"]}, s); }
+  return UI.dc;
+}
+function dcSave(){ try{ localStorage.setItem(DC_KEY, JSON.stringify(UI.dc)); }catch(e){} }
+const DC_METS = {fee:["Бюджет, ₸", true], n:["Интеграции, шт", true], reach:["Охват", true], contrib:["Вклад в продажи, ₸", false], avgReach:["Ср. охват", false], avgCost:["Ср. стоимость, ₸", false], cpv:["CPV, ₸", false], roas:["ROAS", false]};
+const DC_CUTS = [["manager","Менеджеры"],["team","Команды"],["type","Сегменты"],["product","Товары"],["size","Размер блогера"],["cat","Категории блогеров"],["day","Дни"],["heat","Тепловая карта"],["extra","Доп. лимит"],["cmp","Сравнение периодов"],["pick","Подбор блогеров"]];
+function dcMonthEnd(M){ const [y, m] = M.split("-").map(Number); return M + "-" + String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2,"0"); }
+// набор цифр по месяцу: вышло (по дате выхода), заведено (по дате заведения), план (по плановой дате), бюджет месяца
+function dcCalc(R, M){
+  const cfg = VT_BUDGET_CFG[M] || {}, ex = cfg.extra || null, mEnd = dcMonthEnd(M);
+  const out = R.filter(r=> r.published && String(r.factDate||"").slice(0,7)===M);
+  const bought = R.filter(r=> r.buy && r.buy.slice(0,7)===M);
+  const plan = R.filter(r=> String(r.planDate||"").slice(0,7)===M);
+  const isExtra = r=> !!(ex && r.buy && r.buy >= ex.from && r.buy.slice(0,7) <= M);
+  const inMonth = r=>{ if(r.published) return String(r.factDate).slice(0,7)===M; const p = String(r.planDate||""); if(p.slice(0,7)===M) return true; return (!p || p > mEnd) && r.buy && r.buy.slice(0,7)===M; };
+  const bud = R.filter(r=> !isExtra(r) && inMonth(r)).reduce((s, r)=> s + (r.fee||0), 0);
+  const planTot = Object.values(cfg.plan||{}).reduce((s, v)=> s + v, 0);
+  const sum = (rs, f)=> rs.reduce((s, r)=> s + (f(r)||0), 0);
+  const cost = sum(out, r=> r.cost), reach = sum(out, r=> r.reach), contrib = sum(out, r=> r.contrib);
+  return {out, bought, plan, bud, planTot, ex, n:out.length, fee:sum(out, r=> r.fee), cost, reach, contrib,
+    avgReach: out.length ? reach / out.length : null, avgCost: out.length ? cost / out.length : null, cpv: reach ? cost / reach : null, roas: cost ? contrib / cost * 100 : null,
+    boughtN: bought.length, boughtFee: sum(bought, r=> r.fee)};
+}
+function dcVal(k, rs, mode){ // mode: out | buy | plan
+  const n = rs.length, sum = f=> rs.reduce((s, r)=> s + (f(r)||0), 0);
+  if(k==="n") return n;
+  if(k==="fee") return mode==="plan" ? sum(r=> r.planCost||r.fee) : sum(r=> r.fee);
+  if(k==="reach") return mode==="out" ? sum(r=> r.reach) : sum(r=> r.published ? r.reach : r.planReach);
+  if(k==="contrib") return sum(r=> r.contrib);
+  const cost = sum(r=> r.cost), reach = sum(r=> r.reach);
+  if(k==="avgReach") return n ? reach / n : null;
+  if(k==="avgCost") return n ? cost / n : null;
+  if(k==="cpv") return reach ? cost / reach : null;
+  if(k==="roas") return cost ? sum(r=> r.contrib) / cost * 100 : null;
+  return null;
+}
+function dcFmt(k, v){ if(v==null || !isFinite(v)) return "—"; if(k==="cpv") return v.toFixed(2).replace(".", ","); if(k==="roas") return Math.round(v) + "%"; return Math.round(v).toLocaleString("ru-RU"); }
+function dcShort(v){ if(v==null || !isFinite(v)) return "—"; const a = Math.abs(v); return a >= 1e6 ? (v/1e6).toFixed(1).replace(".", ",") + " млн" : a >= 1e4 ? Math.round(v/1000).toLocaleString("ru-RU") + " тыс." : Math.round(v).toLocaleString("ru-RU"); }
+function tplDashCompact(){
+  const st = dcState(), all = vtRows();
+  const R = all.filter(r=> (!st.type || r.type===st.type) && (!st.mgr || r.manager===st.mgr));
+  const M = st.m, M2 = st.cmp==="prev" ? vtShiftMonth(M, -1) : st.cmp==="yoy" ? vtShiftMonth(M, -12) : "";
+  const a = dcCalc(R, M), b = M2 ? dcCalc(R, M2) : null;
+  const ml = ym=> VT_MON[Number(ym.slice(5))-1] + " " + ym.slice(0,4);
+  const months = [...new Set(all.map(r=> String(r.factDate||r.planDate||"").slice(0,7)).filter(x=> /^\d{4}-\d{2}$/.test(x)).concat([todayStr().slice(0,7)]))].sort().reverse();
+  const mgrs = [...new Set(all.map(r=> r.manager))].sort((x, y)=> x.localeCompare(y, "ru"));
+  const sel = (id, cur, opts)=> `<select id="${id}">${opts.map(([v, l])=> `<option value="${escapeHtml(v)}"${v===cur?" selected":""}>${escapeHtml(l)}</option>`).join("")}</select>`;
+  const delta = (k, low)=>{ if(!b || a[k]==null || b[k]==null || !b[k]) return ""; const p = (a[k] - b[k]) / Math.abs(b[k]) * 100, good = low ? p < 0 : p > 0;
+    return `<div style="font-size:11px;color:${Math.abs(p)<.5?"var(--ink-mute)":good?"var(--ok)":"var(--bad)"}">${p>=0?"▲":"▼"} ${Math.abs(Math.round(p))}% к ${ml(M2).toLowerCase()}</div>`; };
+  const card = (v, l, k, low, cls)=> `<div class="kpi ${cls||""}" style="padding:10px 12px"><div class="num" style="font-size:19px">${v}</div><div class="lbl">${l}</div>${k ? delta(k, low) : ""}</div>`;
+  const cards = `<div class="grid-kpi" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin:10px 0">
+    ${card(dcShort(a.bud) + " ₸", "Бюджет месяца", "bud")}
+    ${a.planTot ? card(dcShort(a.planTot) + " ₸", "План бюджета") + card(Math.round(a.bud / a.planTot * 100) + "%", "Освоение, если всё выйдет", "", false, a.bud > a.planTot ? "bad" : "ok") : ""}
+    ${card(a.boughtN.toLocaleString("ru-RU") + " · " + dcShort(a.boughtFee) + " ₸", "Заведено в месяце", "boughtN")}
+    ${card(a.n.toLocaleString("ru-RU"), "Вышло роликов", "n")}
+    ${card(dcShort(a.reach), "Охват", "reach")}
+    ${card(dcFmt("avgReach", a.avgReach), "Средний охват", "avgReach")}
+    ${card(dcFmt("avgCost", a.avgCost) + " ₸", "Средняя стоимость", "avgCost", true)}
+    ${card(dcFmt("cpv", a.cpv) + " ₸", "CPV", "cpv", true)}
+    ${card(dcShort(a.contrib) + " ₸", "Вклад в продажи", "contrib")}
+    ${card(dcFmt("roas", a.roas), "ROAS", "roas")}</div>`;
+  const filters = `<div class="vt-bar" style="gap:8px"><span class="lbl2">Месяц</span>${sel("dc-m", M, months.map(x=> [x, ml(x)]))}
+    <span class="lbl2">Тип</span>${sel("dc-type", st.type, [["","Все"],["Микро/средние","Микро/средние"],["Крупные","Крупные"]])}
+    <span class="lbl2">Менеджер</span>${sel("dc-mgr", st.mgr, [["","Все"]].concat(mgrs.map(x=> [x, x])))}
+    <span class="lbl2">Сравнить с</span>${sel("dc-cmp", st.cmp, [["prev","прошлым месяцем"],["yoy","тем же месяцем год назад"],["none","не сравнивать"]])}</div>`;
+  const cut = DC_CUTS.some(x=> x[0]===st.cut) ? st.cut : "manager";
+  const cutBar = `<div class="vt-bar" style="margin-top:4px"><span class="lbl2">Разрез</span>${sel("dc-cut", cut, DC_CUTS)}
+    ${["heat","extra","cmp","pick"].includes(cut) ? "" : `<details class="vt-dd" id="dc-mets"><summary class="btn btn-sm btn-ghost">Показатели: ${st.mets.map(k=> DC_METS[k][0].split(",")[0]).join(", ")} ▾</summary><div class="vt-dd-box">${Object.entries(DC_METS).map(([k, x])=> `<label><input type="checkbox" class="dc-met" value="${k}"${st.mets.includes(k)?" checked":""}> ${x[0]}</label>`).join("")}<button class="btn btn-primary btn-sm" id="dc-mets-ok" style="margin-top:6px">Показать</button></div></details>`}
+    <span style="flex:1"></span><button class="btn btn-ghost btn-sm" id="dc-excel">⬇ Excel</button></div>`;
+  let body = "";
+  if(cut==="heat"){ const ex = (VT_BUDGET_CFG[M]||{}).extra || null; body = vtBudgetHeat(R, M, dcMonthEnd(M), ex); }
+  else if(cut==="cmp" || cut==="pick"){ const vs = vtState(); vs.year = Number(M.slice(0,4)); vs.months = [Number(M.slice(5))]; vs.dFrom = vs.dTo = "";
+    body = `<div class="vt-pnl" id="vt-panel">${cut==="cmp" ? vtCompareHtml(vs, R) : vtMatrixHtml(vs, R)}</div>`; }
+  else if(cut==="extra"){
+    const ex = a.ex;
+    if(!ex) body = `<div class="empty">Доп. лимита в этом месяце нет</div>`;
+    else { const rs = R.filter(r=> r.buy && r.buy >= ex.from && r.buy.slice(0,7) <= M), sum = x=> x.reduce((s, r)=> s + (r.fee||0), 0), tot = sum(rs), byM = new Map();
+      rs.forEach(r=>{ if(!byM.has(r.manager)) byM.set(r.manager, []); byM.get(r.manager).push(r); });
+      const line = (l, x, bold)=>{ const o = x.filter(r=> r.published), left = x.filter(r=> !r.published); return `<tr style="${bold?"font-weight:700;background:var(--action-soft)":""}"><td>${escapeHtml(l)}</td><td style="text-align:right">${x.length}</td><td style="text-align:right">${vtTg(sum(x))}</td><td style="text-align:right">${o.length}</td><td style="text-align:right">${vtTg(sum(o))}</td><td style="text-align:right">${left.length}</td><td style="text-align:right">${vtTg(sum(left))}</td><td style="text-align:right">${(sum(x)/ex.limit*100).toFixed(1).replace(".", ",")}%</td></tr>`; };
+      body = `<div style="font-size:12.5px;margin:4px 0 8px"><b>${escapeHtml(ex.label)}</b> — куплено с ${vtDdmm(ex.from)}: <b>${vtTg(tot)} ₸</b> из ${vtTg(ex.limit)} ₸ (${Math.round(tot/ex.limit*100)}%), остаток <b style="color:${ex.limit-tot<0?"var(--bad)":"var(--ok)"}">${vtTg(ex.limit - tot)} ₸</b></div>
+        <div class="table-wrap"><table class="vt-table"><thead><tr><th style="text-align:left">Менеджер</th><th style="text-align:right">Куплено, шт</th><th style="text-align:right">₸</th><th style="text-align:right">Вышло, шт</th><th style="text-align:right">₸</th><th style="text-align:right">Осталось, шт</th><th style="text-align:right">₸</th><th style="text-align:right">Доля лимита</th></tr></thead>
+        <tbody>${line("Итого", rs, true)}${[...byM].sort((x, y)=> sum(y[1]) - sum(x[1])).map(([m, x])=> line(m, x)).join("")}</tbody></table></div>`; }
+  }
+  else {
+    const keyOf = cut==="day" ? null : cut==="type" ? (r=> VT_SEG[r.type] || r.type) : (r=> r[cut] || "Не указано");
+    const mEnd = dcMonthEnd(M), groups = new Map();
+    const add = (k, kind, r)=>{ if(!groups.has(k)) groups.set(k, {out:[], buy:[], plan:[], prev:[]}); groups.get(k)[kind].push(r); };
+    if(cut==="day"){ for(let d = M + "-01"; d <= mEnd; d = vtShiftDay(d, 1)) groups.set(d, {out:[], buy:[], plan:[], prev:[]});
+      a.out.forEach(r=> add(String(r.factDate).slice(0,10), "out", r)); a.bought.forEach(r=> add(r.buy, "buy", r)); a.plan.forEach(r=> add(String(r.planDate).slice(0,10), "plan", r)); }
+    else { a.out.forEach(r=> add(keyOf(r), "out", r)); a.bought.forEach(r=> add(keyOf(r), "buy", r)); a.plan.forEach(r=> add(keyOf(r), "plan", r)); if(b) b.out.forEach(r=> add(keyOf(r), "prev", r)); }
+    const mets = st.mets.filter(k=> DC_METS[k]);
+    const head1 = mets.map(k=>{ const add3 = DC_METS[k][1]; return `<th colspan="${(add3?4:1) + (b?1:0)}" style="text-align:center;border-left:2px solid rgba(255,255,255,.5)">${DC_METS[k][0]}</th>`; }).join("");
+    const head2 = mets.map(k=> (DC_METS[k][1] ? `<th style="text-align:right;border-left:2px solid rgba(255,255,255,.5)">План</th><th style="text-align:right">Заведено</th><th style="text-align:right">Вышло</th><th style="text-align:right">Вып.</th>` : `<th style="text-align:right;border-left:2px solid rgba(255,255,255,.5)">Вышло</th>`) + (b ? `<th style="text-align:right">к ${ml(M2).slice(0,3).toLowerCase()}.</th>` : "")).join("");
+    const row = (label, g, bold)=>{
+      let h = `<tr style="${bold?"font-weight:700;background:var(--action-soft)":""}"><td style="white-space:nowrap">${escapeHtml(label)}</td>`;
+      mets.forEach(k=>{ const o = dcVal(k, g.out, "out");
+        if(DC_METS[k][1]){ const p = dcVal(k, g.plan, "plan"), bu = dcVal(k, g.buy, "buy"), pct = p ? Math.round(o / p * 100) : null;
+          h += `<td style="text-align:right;border-left:2px solid var(--line);color:var(--ink-soft)">${dcFmt(k, p)}</td><td style="text-align:right;color:#6b4fa0">${dcFmt(k, bu)}</td><td style="text-align:right"><b>${dcFmt(k, o)}</b></td><td style="text-align:right;color:${pct==null?"":pct>=90?"var(--ok)":pct<50?"var(--bad)":"#9a6400"}">${pct==null?"—":pct+"%"}</td>`; }
+        else h += `<td style="text-align:right;border-left:2px solid var(--line)"><b>${dcFmt(k, o)}</b></td>`;
+        if(b){ const pv = dcVal(k, g.prev, "out"), d = o!=null && pv ? Math.round((o - pv) / Math.abs(pv) * 100) : null, low = k==="cpv" || k==="avgCost";
+          h += `<td style="text-align:right;font-size:11.5px;color:${d==null||!d?"var(--ink-mute)":(d>0)!==low?"var(--ok)":"var(--bad)"}">${d==null?"—":(d>0?"+":"")+d+"%"}</td>`; } });
+      return h + "</tr>"; };
+    const tot = {out:a.out, buy:a.bought, plan:a.plan, prev:b ? b.out : []};
+    let list = [...groups];
+    if(cut!=="day") list.sort((x, y)=> (dcVal(mets[0]||"fee", y[1].out, "out")||0) + (dcVal(mets[0]||"fee", y[1].buy, "buy")||0) - (dcVal(mets[0]||"fee", x[1].out, "out")||0) - (dcVal(mets[0]||"fee", x[1].buy, "buy")||0));
+    else list = list.filter(([, g])=> g.out.length || g.buy.length || g.plan.length);
+    body = `<div style="font-size:11.5px;color:var(--ink-mute);margin:2px 0 6px">План — по плановой дате · Заведено — внесено в Barter Box в месяце · Вышло — по дате выхода${b?` · последняя колонка — вышло к ${ml(M2).toLowerCase()}`:""}</div>
+      <div class="table-wrap" style="max-height:640px;overflow:auto"><table class="vt-table"><thead><tr><th rowspan="2" style="text-align:left;min-width:160px">${escapeHtml((DC_CUTS.find(x=> x[0]===cut)||[])[1])}</th>${head1}</tr><tr>${head2}</tr></thead>
+      <tbody>${row("Итого", tot, true)}${list.map(([k, g])=> row(cut==="day" ? vtDdmm(k) + (k===todayStr()?" · сегодня":"") : k, g)).join("")}</tbody></table></div>`;
+  }
+  return `<style>.vt-table th{position:sticky;top:0;background:#4e8fa6;color:#fff;font-size:11.5px;z-index:1}.vt-table thead tr:nth-child(2) th{top:31px}.vt-table td{font-size:12.5px;padding:6px 8px}
+    .vt-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px}.vt-bar .lbl2{font-size:12px;color:var(--ink-mute);margin:0 2px 0 6px}
+    .vt-dd{position:relative}.vt-dd>summary{list-style:none;cursor:pointer}.vt-dd>summary::-webkit-details-marker{display:none}
+    .vt-dd-box{position:absolute;z-index:50;top:34px;left:0;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.12);min-width:240px;display:flex;flex-direction:column;gap:4px}
+    .vt-dd-box label{font-size:12.5px;display:flex;gap:6px;align-items:center;white-space:nowrap}</style>
+  <div class="panel" id="dc-panel">${filters}${cards}${cutBar}${body}</div>`;
+}
+function wireDashCompact(){
+  const st = dcState(), redraw = ()=>{ dcSave(); renderDeskTab(); };
+  const on = (id, fn)=>{ const el = document.getElementById(id); if(el) el.onchange = fn; };
+  on("dc-m", e=>{ st.m = e.target.value; redraw(); });
+  on("dc-type", e=>{ st.type = e.target.value; redraw(); });
+  on("dc-mgr", e=>{ st.mgr = e.target.value; redraw(); });
+  on("dc-cmp", e=>{ st.cmp = e.target.value; redraw(); });
+  on("dc-cut", e=>{ st.cut = e.target.value; redraw(); });
+  on("vt-hmk", e=>{ vtState().hmK = e.target.value; vtSave(); renderDeskTab(); });
+  const ok = document.getElementById("dc-mets-ok"); if(ok) ok.onclick = ()=>{ const ks = [...document.querySelectorAll(".dc-met")].filter(c=> c.checked).map(c=> c.value); if(!ks.length) return toast("Отметьте хотя бы один показатель", true); st.mets = ks; redraw(); };
+  const xl = document.getElementById("dc-excel"); if(xl) xl.onclick = ()=>{
+    if(!exportAllowed("")){ toast("Выгрузка доступна только Нине и Сае", true); return; }
+    const t = document.querySelector("#dc-panel table"); if(!t) return;
+    const rows = [...t.querySelectorAll("tr")].map(tr=> [...tr.children].map(c=>{ const s = '"' + c.innerText.replace(/\s+/g, " ").trim().replace(/"/g, '""') + '"'; const sp = Number(c.getAttribute("colspan"))||1; return [s].concat(Array(sp-1).fill('""')).join(";"); }).join(";"));
+    const blob = new Blob([String.fromCharCode(0xFEFF) + rows.join("\r\n")], {type:"text/csv;charset=utf-8"}), a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "Дашборд_" + st.m + "_" + st.cut + ".csv"; a.click(); };
+  if(st.cut==="cmp" || st.cut==="pick") wireVitrina();
+}
 function tplMarketerDashboard(){
+  // 26.11.2026 Нина: главная — один компактный дашборд (фильтры → цифры → одна таблица с выбором разреза).
+  // Бартерные рассылки, «Инфлюенс крупные/микро», микро-дашборд и группы с главной убраны (код ниже не выполняется).
+  return tplDashCompact();
   const f = UI.dashPeriod;
   const ms = marketingSummary(f.from, f.to);
   return `
@@ -10976,9 +11118,8 @@ function wireDeskTab(){
   if(UI.tab==="control"){ wireControl(); return; }
   if(UI.tab==="tzBase"){ wireTzBase(); return; }
   if(UI.tab==="dashboard" && UI.role==="marketer"){
-    { const v = dashView();
-      document.querySelectorAll(".dv-tab").forEach(b=> b.onclick = ()=>{ UI.dashView = b.dataset.v; try{ localStorage.setItem("bb_dash_view", UI.dashView); }catch(e){} renderDeskTab(); });
-      wireVitrina();
+    wireDashCompact();
+    { const v = "";
       if(v==="bloggers"){
         document.querySelectorAll(".micro-dash-month-tab").forEach(btn=>{ btn.onclick = ()=>{ UI.microDashMonth = btn.dataset.month; renderDeskTab(); }; });
         const ms = document.getElementById("micro-dash-month-select"); if(ms) ms.onchange = ()=>{ if(ms.value){ UI.microDashMonth = ms.value; renderDeskTab(); } };
