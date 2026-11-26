@@ -4422,6 +4422,7 @@ function vtMatrixHtml(st, rows){
       <span class="lbl2">цель по охвату на товар</span><input type="number" id="vt-mxgoal" value="${goal}" step="100000" style="width:110px"><span style="font-size:11.5px;color:var(--ink-mute)">просмотров · размер — где дешевле просмотр (не меньше 2 выходов); роликов и бюджет — сколько нужно, чтобы набрать цель</span></div>
     <div class="table-wrap"><table class="vt-table"><thead><tr><th style="text-align:left">Товар</th><th style="text-align:left">Брать блогеров</th><th style="text-align:right">CPV, ₸</th><th style="text-align:right">ROMI</th><th style="text-align:right">Ср. охват</th><th style="text-align:right">Ср. стоимость, ₸</th><th style="text-align:right">Нужно роликов</th><th style="text-align:right">Бюджет до цели, ₸</th><th style="text-align:left">Запасной вариант</th></tr></thead>
     <tbody>${pick.map(x=> `<tr><td>${escapeHtml(x.p)}</td><td><b>${escapeHtml(x.k)}</b> <span style="font-size:11px;color:var(--ink-mute)">${x.n} вых.</span></td><td style="text-align:right">${x.cpv.toFixed(2).replace(".", ",")}</td><td style="text-align:right">${x.roas==null?"—":x.roas.toFixed(2).replace(".", ",")}</td><td style="text-align:right">${vtTg(x.avgR)}</td><td style="text-align:right">${vtTg(x.avgC)}</td><td style="text-align:right">${x.need}</td><td style="text-align:right">${vtTg(x.budget)}</td><td>${escapeHtml(x.alt)}</td></tr>`).join("")}</tbody></table></div>` : "";
+  if(st.pickOnly) return pickHtml || `<div class="empty">Мало вышедших роликов за период для подбора</div>`; // на главной таблица товар × размер — в «Тепловой карте»
   return `${pickHtml}<details open style="margin-top:12px"><summary style="cursor:pointer;font-weight:600;font-size:13px">Товар × размер блогера (тепловая карта)</summary><div class="vt-bar" style="margin-top:8px">${Object.keys(MX).map(chip).join("")}</div>
     <b style="font-size:14px">Товар × размер блогера, ${escapeHtml(mu)} · ${escapeHtml(ml.toLowerCase())}</b>
     <div style="font-size:11.5px;color:var(--ink-mute);margin:2px 0 8px">Вышедшие интеграции за выбранный период (по дате выхода). В ячейке — ${escapeHtml(ml.toLowerCase())} и число выходов; чем темнее, тем больше. Размер: мелкие — до 30 тыс. подписчиков, средние — 30–100 тыс., средние+ — от 100 тыс. (больший из Instagram и TikTok), крупные — интеграции из плана крупных.</div>
@@ -4830,6 +4831,7 @@ function dcState(){
 }
 function dcSave(){ try{ localStorage.setItem(DC_KEY, JSON.stringify(UI.dc)); }catch(e){} }
 const DC_METS = {fee:["Бюджет, ₸", true], n:["Интеграции, шт", true], reach:["Охват", true], contrib:["Вклад в продажи, ₸", false], avgReach:["Ср. охват", false], avgCost:["Ср. стоимость, ₸", false], cpv:["CPV, ₸", false], roas:["ROAS", false]};
+const DC_SUBS = [["","—"],["manager","Менеджеры"],["team","Команды"],["type","Сегменты"],["product","Товары"],["size","Размер блогера"],["cat","Категории блогеров"]];
 const DC_CUTS = [["manager","Менеджеры"],["team","Команды"],["type","Сегменты"],["product","Товары"],["size","Размер блогера"],["cat","Категории блогеров"],["day","Дни"],["heat","Тепловая карта (строки × столбцы)"],["extra","Доп. лимит"],["cmp","Сравнение периодов"],["pick","Подбор блогеров"]];
 function dcMonthEnd(M){ const [y, m] = M.split("-").map(Number); return M + "-" + String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2,"0"); }
 // набор цифр по месяцу: вышло (по дате выхода), заведено (по дате заведения), план (по плановой дате), бюджет месяца
@@ -4905,6 +4907,7 @@ function tplDashCompact(){
   const cut = DC_CUTS.some(x=> x[0]===st.cut) ? st.cut : "manager";
   const cutBar = `<div class="vt-bar" style="margin-top:4px"><span class="lbl2">Разрез</span>${sel("dc-cut", cut, DC_CUTS)}
     ${["extra","cmp","pick"].includes(cut) ? "" : `<details class="vt-dd" id="dc-mets"><summary class="btn btn-sm btn-ghost">Показатели: ${st.mets.map(k=> DC_METS[k][0].split(",")[0]).join(", ")} ▾</summary><div class="vt-dd-box">${Object.entries(DC_METS).map(([k, x])=> `<label><input type="checkbox" class="dc-met" value="${k}"${st.mets.includes(k)?" checked":""}> ${x[0]}</label>`).join("")}<button class="btn btn-primary btn-sm" id="dc-mets-ok" style="margin-top:6px">Показать</button></div></details>`}
+    ${["heat","extra","cmp","pick","day"].includes(cut) || (st.cols && st.cols!=="sum") ? "" : `<span class="lbl2">Внутри</span>${sel("dc-sub", st.sub && st.sub!==cut ? st.sub : "", DC_SUBS.filter(x=> x[0]!==cut))}`}
     ${["heat","extra","cmp","pick","day"].includes(cut) ? "" : `<span class="lbl2">Столбцы</span>${sel("dc-cols", st.cols||"sum", [["sum","Итог за месяц"],["out","По дням · вышло"],["buy","По дням · заведено"]])}`}
     <span style="flex:1"></span><button class="btn btn-ghost btn-sm" id="dc-excel">⬇ Excel</button></div>`;
   let body = "";
@@ -4933,7 +4936,7 @@ function tplDashCompact(){
       ${rowsK.map((rk, i)=> `<tr><td style="white-space:nowrap">${escapeHtml(rk)}</td>${grid[i].map((v, j)=> `<td style="text-align:center;padding:4px 5px;${sh(v)}${hc==="day" && cols[j]===todayStr()?"outline:2px solid #f0b400;":""}">${fm(v)}</td>`).join("")}<td style="text-align:right"><b>${dcFmt(k0, dcVal(k0, src.filter(r=> fr(r)===rk), hb))}</b></td></tr>`).join("")}</tbody></table></div>`;
   }
   else if(cut==="cmp" || cut==="pick"){ const vs = vtState(); vs.year = Number(M.slice(0,4)); vs.months = [Number(M.slice(5))]; vs.dFrom = vs.dTo = "";
-    body = `<div class="vt-pnl" id="vt-panel">${cut==="cmp" ? vtCompareHtml(vs, R) : vtMatrixHtml(vs, R)}</div>`; }
+    vs.pickOnly = true; body = `<div class="vt-pnl" id="vt-panel">${cut==="cmp" ? vtCompareHtml(vs, R) : vtMatrixHtml(vs, R)}</div>`; vs.pickOnly = false; }
   else if(cut==="extra"){
     const ex = a.ex;
     if(!ex) body = `<div class="empty">Доп. лимита в этом месяце нет</div>`;
@@ -4964,12 +4967,18 @@ function tplDashCompact(){
           h += `<td style="text-align:right;font-size:11.5px;color:${d==null||!d?"var(--ink-mute)":(d>0)!==low?"var(--ok)":"var(--bad)"}">${d==null?"—":(d>0?"+":"")+d+"%"}</td>`; } });
       return h + "</tr>"; };
     const tot = {out:a.out, buy:a.bought, plan:a.plan, prev:b ? b.out : []};
+    // 26.11.2026 Нина: «внутри» — второй разрез под каждой строкой (например, товары → менеджеры)
+    const subK = st.sub && st.sub!==cut && DC_SUBS.some(x=> x[0]===st.sub) ? st.sub : "";
+    const subOf = subK==="type" ? (r=> VT_SEG[r.type] || r.type) : (r=> r[subK] || "Не указано");
+    const subRows = g=>{ if(!subK) return ""; const m = new Map(); ["out","buy","plan","prev"].forEach(kind=> g[kind].forEach(r=>{ const k = subOf(r); if(!m.has(k)) m.set(k, {out:[], buy:[], plan:[], prev:[]}); m.get(k)[kind].push(r); }));
+      return [...m].sort((x, y)=> (dcVal(mets[0]||"fee", y[1].out, "out")||0) + (dcVal(mets[0]||"fee", y[1].buy, "buy")||0) - (dcVal(mets[0]||"fee", x[1].out, "out")||0) - (dcVal(mets[0]||"fee", x[1].buy, "buy")||0))
+        .map(([k, sg])=> row("\u00a0\u00a0\u00a0· " + k, sg).replace("<tr style=\"", "<tr style=\"font-size:11.5px;color:var(--ink-soft);")).join(""); };
     let list = [...groups];
     if(cut!=="day") list.sort((x, y)=> (dcVal(mets[0]||"fee", y[1].out, "out")||0) + (dcVal(mets[0]||"fee", y[1].buy, "buy")||0) - (dcVal(mets[0]||"fee", x[1].out, "out")||0) - (dcVal(mets[0]||"fee", x[1].buy, "buy")||0));
     else list = list.filter(([, g])=> g.out.length || g.buy.length || g.plan.length);
     body = `<div style="font-size:11.5px;color:var(--ink-mute);margin:2px 0 6px">План — по плановой дате · Заведено — внесено в Barter Box в месяце · Вышло — по дате выхода${b?` · «к сравн.» — вышло к ${pl(b)}`:""}</div>
       <div class="table-wrap" style="max-height:640px;overflow:auto"><table class="vt-table"><thead><tr><th rowspan="2" style="text-align:left;min-width:160px">${escapeHtml((DC_CUTS.find(x=> x[0]===cut)||[])[1])}</th>${head1}</tr><tr>${head2}</tr></thead>
-      <tbody>${row("Итого", tot, true)}${list.map(([k, g])=> row(cut==="day" ? vtDdmm(k) + (k===todayStr()?" · сегодня":"") : k, g)).join("")}</tbody></table></div>`;
+      <tbody>${row("Итого", tot, true)}${list.map(([k, g])=> row(cut==="day" ? vtDdmm(k) + (k===todayStr()?" · сегодня":"") : k, g) + subRows(g)).join("")}</tbody></table></div>`;
     // 26.11.2026 Нина: «по дням» — строки разреза × дни месяца, по первому выбранному показателю
     if(st.cols && st.cols!=="sum" && cut!=="day"){
       const k0 = mets[0] || "fee", kind = st.cols==="buy" ? "buy" : "out", dOf = r=> kind==="buy" ? r.buy : String(r.factDate||"").slice(0,10);
@@ -5007,6 +5016,7 @@ function wireDashCompact(){
   { const c = document.getElementById("dc-dclr"); if(c) c.onclick = ()=>{ st.d1 = st.d2 = ""; redraw(); }; }
   on("dc-cut", e=>{ st.cut = e.target.value; redraw(); });
   on("dc-hr", e=>{ st.hr = e.target.value; redraw(); });
+  on("dc-sub", e=>{ st.sub = e.target.value; redraw(); });
   on("dc-hc", e=>{ st.hc = e.target.value; redraw(); });
   on("dc-hb", e=>{ st.hb = e.target.value; redraw(); });
   on("dc-cols", e=>{ st.cols = e.target.value; redraw(); });
