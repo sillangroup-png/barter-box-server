@@ -6609,7 +6609,7 @@ function tplMicroInfluencers(){
             return `<tr${rowStyle}>
               <td class="rowcheck"><input type="checkbox" class="micro-row-check" data-id="${d.id}" ${UI.selectedMicroIds.has(d.id)?'checked':''}></td>
               <td>${pageOffset+i+1}</td>
-              <td class="sticky-col">${pb && pb.status==="Отказ от блогера" ? '<span title="Отказ от блогера">⛔ </span>' : ""}${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')} <button type="button" class="mbc-open" data-name="${escapeHtml(d.blogerName||'')}" title="Карточка блогера: история интеграций, новая интеграция"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="11" r="2.2"/><path d="M5.8 16.5c.6-1.6 1.8-2.4 3.2-2.4s2.6.8 3.2 2.4M15 10h3M15 13.5h3"/></svg></button>${microHasStories(d) ? ` <span style="font-size:10.5px;padding:1px 6px;border-radius:8px;background:var(--canvas);border:1px solid var(--line);white-space:nowrap" title="${escapeHtml(microFormatOf(d))}">📱 сторис</span>` : ""}${(()=>{ const k = microIpTodo(d); return k === "marking" ? ` <span style="font-size:10.5px;padding:1px 7px;border-radius:8px;background:#fff4e0;color:#7a4a00;white-space:nowrap" title="Оплата через ИП: на видео нужна надпись «${escapeHtml(MICRO_AD_MARKING)}»">ИП · маркировка</span>` : k === "avr" ? ` <span style="font-size:10.5px;padding:1px 7px;border-radius:8px;background:#fde8ee;color:#9b1c3c;white-space:nowrap" title="Видео вышло — блогер должен прислать АВР">ждём АВР</span>` : ""; })()}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
+              <td class="sticky-col">${pb && pb.status==="Отказ от блогера" ? '<span title="Отказ от блогера">⛔ </span>' : ""}${UI.readOnly ? "" : `<button class="btn btn-ghost btn-sm micro-more" data-id="${d.id}" title="Ещё интеграции этому блогеру — несколько строк сразу" style="padding:0 6px;margin-right:4px">＋</button>`}${inlineEditSpan(`<b>${escapeHtml(d.blogerName)}</b>`, d.id, 'blogerName', d.blogerName||'', 'text')} <button type="button" class="mbc-open" data-name="${escapeHtml(d.blogerName||'')}" title="Карточка блогера: история интеграций, новая интеграция"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="11" r="2.2"/><path d="M5.8 16.5c.6-1.6 1.8-2.4 3.2-2.4s2.6.8 3.2 2.4M15 10h3M15 13.5h3"/></svg></button>${microHasStories(d) ? ` <span style="font-size:10.5px;padding:1px 6px;border-radius:8px;background:var(--canvas);border:1px solid var(--line);white-space:nowrap" title="${escapeHtml(microFormatOf(d))}">📱 сторис</span>` : ""}${(()=>{ const k = microIpTodo(d); return k === "marking" ? ` <span style="font-size:10.5px;padding:1px 7px;border-radius:8px;background:#fff4e0;color:#7a4a00;white-space:nowrap" title="Оплата через ИП: на видео нужна надпись «${escapeHtml(MICRO_AD_MARKING)}»">ИП · маркировка</span>` : k === "avr" ? ` <span style="font-size:10.5px;padding:1px 7px;border-radius:8px;background:#fde8ee;color:#9b1c3c;white-space:nowrap" title="Видео вышло — блогер должен прислать АВР">ждём АВР</span>` : ""; })()}${d.phone?`<br><span style="color:var(--ink-mute);font-size:11px">${escapeHtml(d.phone)}</span>`:""}</td>
               <td>${microProblemCell(d, pb)}</td>
               <td>${inlineEditSpan(escapeHtml(d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : "—"), d.id, 'bloggerCategory', d.bloggerCategory ? normalizeBloggerCategory(d.bloggerCategory) : '', 'select', MICRO_BLOGGER_CATEGORIES)}</td>
               <td>${inlineEditSpan(microCoopTypeOf(d) ? `<span style="white-space:nowrap${microCoopTypeOf(d)==="За товар" ? ";color:var(--accent,#c2185b)" : ""}">${escapeHtml(microCoopTypeOf(d))}</span>` : '<span style="color:var(--ink-mute)">—</span>', d.id, 'coopType', microCoopTypeOf(d), 'select', MICRO_COOP_TYPES)}</td>
@@ -9106,6 +9106,62 @@ function modalMicroDeal(existing, prefill){
   };
 }
 
+// 26.11.2026 Нина: «пакет» на одного блогера — ＋ у строки → сколько видео → строки: товар, дата, сумма.
+// Данные блогера (ник, аккаунты, телефон, город, ведёт, тип, способ оплаты, формат) копируются из этой интеграции.
+function modalMicroMore(src){
+  const addDays = (iso, n)=>{ const t = Date.parse((iso||"")+"T00:00:00Z"); const b = isFinite(t) ? t : Date.now(); return new Date(b + n*864e5).toISOString().slice(0,10); };
+  const today = new Date(Date.now()+5*3600e3).toISOString().slice(0,10);
+  const start = (src.plannedDate && src.plannedDate > today) ? src.plannedDate : today;
+  let rows = [];
+  const fill = n=>{ while(rows.length < n){ const k = rows.length + 1; rows.push({product:"", date: addDays(rows.length ? rows[rows.length-1].date : start, 3), cost: Number(src.cost)||0}); } rows.length = n; };
+  fill(3);
+  const rowHtml = (r, i)=> `<tr><td style="color:var(--ink-mute)">${i+1}</td>
+    <td><input class="mo-prod" data-i="${i}" list="mo-prod-list" placeholder="товар: название или ШК" autocomplete="off" value="${escapeHtml(r.product)}" style="width:100%;min-width:220px"></td>
+    <td><input class="mo-date" data-i="${i}" type="date" value="${escapeHtml(r.date)}"></td>
+    <td><input class="mo-cost" data-i="${i}" type="number" min="0" value="${r.cost}" style="width:110px"></td></tr>`;
+  const draw = ()=>{ document.getElementById("mo-rows").innerHTML = rows.map(rowHtml).join(""); wire(); };
+  const wire = ()=>{
+    document.querySelectorAll(".mo-prod").forEach(el=> el.oninput = ()=>{ rows[+el.dataset.i].product = el.value; });
+    document.querySelectorAll(".mo-date").forEach(el=> el.oninput = ()=>{ rows[+el.dataset.i].date = el.value; });
+    document.querySelectorAll(".mo-cost").forEach(el=> el.oninput = ()=>{ rows[+el.dataset.i].cost = Number(el.value)||0; });
+  };
+  openModal(`<h3>Ещё интеграции: ${escapeHtml(src.blogerName||"")}</h3>
+    <div class="login-hint" style="margin-bottom:8px">Блогер, аккаунты, телефон, город, менеджер (${escapeHtml(src.responsible||"—")}), тип (${escapeHtml(microCoopTypeOf(src)||"—")}), способ оплаты и формат — как в этой интеграции. Расставьте товар, дату и сумму по строкам. Пустые строки (без товара) не сохраняются.</div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><label style="font-weight:600">Сколько видео</label>
+      <input id="mo-n" type="number" min="1" max="15" value="3" style="width:70px">
+      <span style="color:var(--ink-mute);font-size:12px">даты сами через 3 дня — можно поправить</span></div>
+    <div style="max-height:52vh;overflow:auto"><table class="tbl" style="width:100%"><thead><tr><th>#</th><th>Товар</th><th>Дата выхода</th><th>Сумма, ₸</th></tr></thead><tbody id="mo-rows"></tbody></table></div>
+    <datalist id="mo-prod-list">${microSkuAll().map(x=>`<option value="${escapeHtml(x.name+" — "+x.code)}">`).join("")}</datalist>
+    <div class="modal-actions" style="margin-top:12px"><button class="btn btn-ghost" id="mo-cancel">Отмена</button><button class="btn btn-primary" id="mo-save">Добавить</button></div>`);
+  bbModalWidth(760);
+  draw();
+  if(typeof prodLoad==="function" && !PROD.list && !PROD.loading) prodLoad().catch(()=>{});
+  document.getElementById("mo-n").oninput = e=>{ const n = Math.max(1, Math.min(15, parseInt(e.target.value,10)||1)); fill(n); draw(); };
+  document.getElementById("mo-cancel").onclick = closeModal;
+  document.getElementById("mo-save").onclick = async e=>{
+    const btn = e.currentTarget, ready = rows.filter(r=> String(r.product||"").trim());
+    if(!ready.length) return toast("Укажите товар хотя бы в одной строке", true);
+    if(ready.some(r=> !r.date)) return toast("У каждой строки с товаром нужна дата выхода", true);
+    const keep = ["responsible","blogerName","bloggerCategory","coopType","phone","city","address","instagramAccount","followers","er","avgReach","tiktokAccount","followersTT","erTT","avgReachTT","paymentMethod","iin","conditions","contentFormat","crmBloggerId","flowBriefAutoSend"];
+    const base = {}; keep.forEach(k=>{ if(src[k] !== undefined && src[k] !== null) base[k] = src[k]; });
+    const all = microSkuAll(); let ok = 0;
+    try{
+      await withBusy(btn, async ()=>{
+        for(const r of ready){
+          const v = String(r.product).trim(); let name = v, code = "";
+          const hit = all.find(x=> v === x.name+" — "+x.code) || all.find(x=> v === x.code);
+          if(hit){ name = hit.name; code = hit.code; }
+          const pr = code && PROD.list ? PROD.list.find(p=> String(p.article||"").trim()===code || String(p.sku||"").trim()===code) : null;
+          await Api.createMicroDeal(Object.assign({}, base, { product:name, barcode:code, productCost: pr && Number(pr.cost)>0 ? Math.round(Number(pr.cost)) : 0,
+            cost: Number(r.cost)||0, plannedDate:r.date, paymentStatus:"не оплачено", videoStatus: MICRO_VIDEO_STATUSES[0], productStatus: MICRO_PRODUCT_STATUSES[0] }));
+          ok++;
+        }
+      });
+      closeModal(); toast(`Добавлено интеграций: ${ok}`); await DataManager.refresh(); render();
+    }catch(err){ toast((ok ? `Добавлено ${ok}, дальше ошибка: ` : "") + err.message, true); if(ok){ await DataManager.refresh(); render(); } }
+  };
+}
+
 /* =========================================================================
    8b. БЛОГЕРЫ И ОПЛАТЫ ИЗ BLOGGER CRM (22.11.2026)
    Данные — в базе (crm.*), а не в общем состоянии: 13 000+ блогеров грузим постранично.
@@ -11373,6 +11429,7 @@ function wireDeskTab(){
 
   else if(UI.tab==="microInfluencers"){
     document.getElementById("new-micro-btn").onclick = ()=> modalMicroDeal(null);
+    document.querySelectorAll(".micro-more").forEach(b=> b.onclick = e=>{ e.stopPropagation(); const d = ((DataManager.state||{}).microInfluencerDeals||[]).find(x=> String(x.id)===b.dataset.id); if(d) modalMicroMore(d); });
     document.querySelectorAll(".mg-card").forEach(c=>{ c.onclick = ()=>{ UI.microGroupOpen = UI.microGroupOpen===c.dataset.group ? "" : c.dataset.group; renderDeskTab(); }; });
     document.querySelectorAll(".mbc-open").forEach(b=>{ b.onclick = e=>{ e.stopPropagation(); openMicroBloggerCard(b.dataset.name); }; });
     wirePlanCells();
