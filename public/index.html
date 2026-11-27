@@ -10529,7 +10529,15 @@ const tzbLeadOf = d=>{ const n = String(d&&d.responsible||"").trim(); for(const 
 const tzbCanApprove = d=> TZB_ALL.includes(UI.actorName) || UI.actorName===tzbLeadOf(d);
 const tzbFrom = v=>{ const m = String(v.approvedBy||"").match(/Claude\s*·\s*(.+)$/i); return m ? "от "+m[1].trim()+" через Claude, ждёт проверки" : String(v.approvedBy||""); };
 const tzbNeedsLead = v=> /^(на проверке|Claude)/i.test(String(v&&v.approvedBy||"")) && !(v&&v.leadApprovedBy);
-async function tzbLoad(){ TZB.loading = true; try{ TZB.data = await apiFetch("/api/automation/brief-requests"); TZB.err = null; }catch(e){ TZB.err = e.message; TZB.data = {requests:[], sent:[]}; } TZB.loading = false; if(UI.tab==="tzBase") render(); }
+async function tzbLoad(){ TZB.loading = true; try{ TZB.data = await apiFetch("/api/automation/brief-requests"); TZB.err = null; }catch(e){ TZB.err = e.message; TZB.data = {requests:[], sent:[]}; }
+  try{ TZB.unl = ((await apiFetch("/api/automation/brief-unlinked")) || {}).items || []; }catch(e){ TZB.unl = []; } TZB.loading = false; if(UI.tab==="tzBase") render(); }
+// 27.11.2026 (Нина): ТЗ из Claude без интеграции — «на рассмотрении» по блогеру; менеджер выбирает интеграцию и привязывает
+const TZB_AUTHOR = {nadira:"Надира", anastasia:"Анастасия", saya:"Сая", oksana:"Оксана", sabrina:"Сабрина", kamila:"Камила", zarina:"Зарина", marina:"Марина", madina:"Мадина", nina:"Нина", anelya:"Анеля", anelia:"Анеля", azhar:"Ажар", saule:"Сауле"};
+const tzbAuthor = a=> TZB_AUTHOR[String(a||"").toLowerCase()] || String(a||"—");
+const tzbH = v=>{ let s = String(v||"").trim().toLowerCase(); if(s.includes("instagram.com/")) s = s.split("instagram.com/")[1].split(/[/?#]/)[0]; if(s.includes("tiktok.com/")) s = s.split("tiktok.com/")[1].split(/[/?#]/)[0]; return s.replace(/^@/,"").replace(/\s+.*$/,""); };
+function tzbCands(handle){ const h = tzbH(handle); if(!h) return [];
+  return (DataManager.state.microInfluencerDeals||[]).filter(d=> tzbH(d.instagramAccount)===h || tzbH(d.blogerName)===h || tzbH(d.tiktokAccount)===h)
+    .sort((a,b)=> (microDealPublished(a)?1:0) - (microDealPublished(b)?1:0) || String(b.plannedDate||"").localeCompare(String(a.plannedDate||""))); }
 function tzbDeal(iid){ const s = String(iid||""); if(/^L/.test(s)) return null; return (DataManager.state.microInfluencerDeals||[]).find(d=> String(d.id)===s); }
 function tzbStats(){
   const m = new Map();
@@ -10552,6 +10560,7 @@ function tplTzBase(){
   const sentSet = new Set(sent.filter(j=> j.status==="sent").map(j=> String(j.integrationId)+":"+j.versionId));
   const review = deals.filter(d=> (d.flowBriefHistory||[]).some(v=> v.status==="approved" && !sentSet.has(String(d.id)+":"+v.versionId))).map(d=> ({d, v: (d.flowBriefHistory||[]).filter(v=> v.status==="approved").slice(-1)[0]})).sort((a,b)=> (tzbNeedsLead(b.v) && tzbCanApprove(b.d) ? 1 : 0) - (tzbNeedsLead(a.v) && tzbCanApprove(a.d) ? 1 : 0));
   const reviewWait = review.filter(x=> tzbNeedsLead(x.v)), reviewOk = review.filter(x=> !tzbNeedsLead(x.v));
+  const unl = (TZB.unl||[]);
   const sentToday = sent.filter(j=> String(j.sentAt||j.createdAt||"").slice(0,10)===today).map(j=> ({j, d: tzbDeal(j.integrationId)})).filter(x=> x.d);
   const st = tzbStats(), cat = microTzCatalog();
   const lib = []; for(const g of cat) for(const it of (g.items||[])){ const s = st.get(it) || {n:0, cost:0, reach:0}; lib.push({group:g.group, item:it, all:!!g.all, n:s.n, cpv: s.reach ? s.cost/s.reach : null}); }
@@ -10583,10 +10592,13 @@ function tplTzBase(){
       : `<div class="mut" style="padding:12px 16px">Запросов нет</div>`}
   </div>
   <div class="panel" style="padding:0;margin-bottom:14px;overflow:hidden">
-    <div style="padding:14px 16px"><b style="font-size:15px">На рассмотрении · ${reviewWait.length}</b> <span class="mut" style="font-size:12px">ТЗ от Claude ждут тимлида менеджера (Нина, Сая, Анеля; Нина и Сауле — любые) — откройте PDF и нажмите «Утвердить»</span></div>
+    <div style="padding:14px 16px"><b style="font-size:15px">На рассмотрении · ${reviewWait.length + unl.length}</b> <span class="mut" style="font-size:12px">ТЗ от Claude ждут тимлида менеджера (Нина, Сая, Анеля; Нина и Сауле — любые) — откройте PDF и нажмите «Утвердить»</span></div>
     ${reviewWait.length ? reviewWait.map(({d,v})=> row(`<div>${nick(d)}</div><span>${escapeHtml(d.responsible||"—")}</span><span><span class="pv-st s-w">На рассмотрении</span></span><span class="mut">«${escapeHtml(v.title||"ТЗ")}» · <span style="color:#B7791F;font-weight:700">${escapeHtml(tzbFrom(v))}</span></span>`,
         `${v.files && v.files.pdf ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(v.files.pdf)}">Открыть</a>` : ""}${tzbCanApprove(d) ? `<button class="btn btn-sm btn-primary tzb-approve" data-id="${d.id}" data-v="${escapeHtml(v.versionId)}">Утвердить</button>` : `<span class="pv-st s-w">ждёт: ${escapeHtml(tzbLeadOf(d))}</span>`}`)).join("")
-      : `<div class="mut" style="padding:0 16px 14px">Пусто</div>`}
+      : (unl.length ? "" : `<div class="mut" style="padding:0 16px 14px">Пусто</div>`)}
+    ${unl.map(u=>{ const c = tzbCands(u.handle), mgr = tzbAuthor(u.author);
+      return row(`<div><a href="https://www.instagram.com/${escapeHtml(tzbH(u.handle))}/" target="_blank" rel="noopener" style="font-weight:800;color:#2B2228">@${escapeHtml(tzbH(u.handle))}</a> <span class="mut">· ${escapeHtml(String(u.product||"").slice(0,30))}</span></div><span>${escapeHtml(mgr)}</span><span><span class="pv-st s-w">Без интеграции</span></span><span class="mut">${u.hook?"«"+escapeHtml(String(u.hook).slice(0,70))+"» · ":""}<span style="color:#B7791F;font-weight:700">от ${escapeHtml(mgr)} через Claude ${u.createdAt?"· "+new Date(u.createdAt).toLocaleDateString("ru-RU",{day:"2-digit",month:"2-digit"}):""}</span></span>`,
+        `<button class="btn btn-sm tzb-utext" data-b="${escapeHtml(u.briefId)}">Текст</button>${UI.readOnly ? "" : c.length ? `<select class="tzb-uint" data-b="${escapeHtml(u.briefId)}" style="max-width:230px">${c.map(d=> `<option value="${d.id}">№${d.id} · ${escapeHtml(String(d.product||"товар?").slice(0,22))} · ${d.plannedDate?ddmmStr(d.plannedDate):"без даты"} · ${escapeHtml(d.responsible||"—")}${microDealPublished(d)?" · вышло":""}</option>`).join("")}</select><button class="btn btn-sm btn-primary tzb-uattach" data-b="${escapeHtml(u.briefId)}">Привязать</button>` : `<span class="mut" style="font-size:11.5px">интеграции с этим блогером нет — заведите её</span>`}`); }).join("")}
   </div>
   <div class="panel" style="padding:0;margin-bottom:14px;overflow:hidden">
     <div style="padding:14px 16px"><b style="font-size:15px">Утверждено · ${reviewOk.length}</b> <span class="mut" style="font-size:12px">ждёт отправки — «Отправить блогеру», дальше уходит в WhatsApp само</span></div>
@@ -10666,6 +10678,11 @@ function wireTzBase(){
     try{ await Api.updateMicroDeal(id, {tz:it, tzGroup:g}); Object.assign(d, {tz:it, tzGroup:g}); render(); undoBar("ТЗ «"+it+"» → "+deskNick(d), async ()=>{ await Api.updateMicroDeal(id, back); Object.assign(d, back); render(); }); }catch(e){ toast(e.message, true); } };
   document.querySelectorAll(".tzb-take").forEach(s=> s.onchange = ()=>{ const [g,it] = s.value.split("\u0001"); if(it) setTz(+s.dataset.deal, g, it); });
   document.querySelectorAll(".tzb-req").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch('/api/automation/brief-request/'+b.dataset.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:""})})); toast("Запрос персонального ТЗ создан"); tzbLoad(); }catch(e){ toast(e.message,true); } });
+  document.querySelectorAll(".tzb-utext").forEach(b=> b.onclick = ()=>{ const u = (TZB.unl||[]).find(x=> x.briefId===b.dataset.b); if(!u) return;
+    openModal(`<h3 style="margin:0 0 6px">ТЗ @${escapeHtml(tzbH(u.handle))} · ${escapeHtml(u.product||"")}</h3><div class="mut" style="margin-bottom:8px">от ${escapeHtml(tzbAuthor(u.author))} через Claude${u.note?" · "+escapeHtml(u.note):""}</div><pre style="white-space:pre-wrap;font-family:inherit;font-size:12.5px;max-height:65vh;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px">${escapeHtml(u.text||"")}</pre><div style="text-align:right;margin-top:8px"><button class="btn" onclick="closeModal()">Закрыть</button></div>`); });
+  document.querySelectorAll(".tzb-uattach").forEach(b=> b.onclick = async ()=>{ const sel = document.querySelector(`.tzb-uint[data-b="${b.dataset.b}"]`); if(!sel || !sel.value) return;
+    try{ const r = await withBusy(b, ()=> apiFetch("/api/automation/brief-attach", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({briefId:b.dataset.b, integrationId:sel.value})}));
+      toast(r.warning ? "Привязано, но: "+r.warning : "Привязано — через 1–2 минуты ТЗ появится с PDF в «На рассмотрении» у интеграции"); TZB.unl = (TZB.unl||[]).filter(x=> x.briefId!==b.dataset.b); render(); setTimeout(async ()=>{ await DataManager.refresh(); TZB.data = null; render(); }, 90000); }catch(e){ toast(e.message, true); } });
   document.querySelectorAll(".tzb-approve").forEach(b=> b.onclick = async ()=>{ try{ const r = await withBusy(b, ()=> apiFetch('/api/automation/brief-approve/'+b.dataset.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({versionId:b.dataset.v})})); const d = (DataManager.state.microInfluencerDeals||[]).find(x=> String(x.id)===String(b.dataset.id)); const v = d && (d.flowBriefHistory||[]).find(x=> x.versionId===b.dataset.v); if(v) Object.assign(v, {leadApprovedBy:r.leadApprovedBy, leadApprovedAt:r.leadApprovedAt}); toast("ТЗ утверждено — теперь можно отправить блогеру"); render(); }catch(e){ toast(e.message,true); } });
   document.querySelectorAll(".tzb-send").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch('/api/automation/brief-send/'+b.dataset.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({versionId:b.dataset.v})})); toast("ТЗ ушло в очередь WhatsApp"); tzbLoad(); }catch(e){ toast(e.message,true); } });
   document.querySelectorAll(".tzb-give").forEach(b=> b.onclick = ()=>{ const g = b.dataset.g, it = b.dataset.i, today = todayStr();
