@@ -278,6 +278,7 @@ function mount(app, { getState, requireAuth, kostPool, persist, dataDir, env = p
       b.payments = pays.rows.map(p => ({ id: p.id, status: p.status, statusLabel: PAY_STATUS[p.status] || p.status, amount: num(p.data.amount),
         name: p.data.payment_name || null, recipient: p.data.recipient_name || null, isIp: !!p.data.is_ip, createdAt: p.data.created_at || null }));
       b.log = log.rows;
+      b.ipRequisites = r.rows[0].data.ip_requisites || null; // 27.11.2026: реквизиты ИП — только в карточке, не в списке
       res.json(b);
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
