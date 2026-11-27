@@ -186,7 +186,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
         // Менеджер отметил публикацию (ссылка/факт-дата) — один раз спасибо блогеру, только по свежим публикациям.
         const pub = String(d.publishDate || today).slice(0, 10);
         d.vthanksAt = new Date().toISOString(); changed = true;
-        if (daysBetween(pub, today) <= 2) tellBlogger(d, "link_thanks", [nameOf(d), d.product || "", ""]).then(() => persist()).catch(() => {});
+        // 27.11.2026 Нина: статусы в таблице меняют менеджеры — блогеру сам ничего не пишем, «спасибо» менеджер пишет сам.
+        void pub;
       }
       if (d.coordStop) next = { text: "автонапоминания выключены (стоп)" };
       else if (stage === "published") next = { text: "опубликовано — напоминаний нет" };
@@ -1425,7 +1426,8 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       d.vstage = "approved"; d.vstageAt = now; d.vmissed = 0; d.vdueMissed = null;
       const npd = String(d.plannedDate || today).slice(0, 10);
       log(d.id, "sys", `менеджер одобрил видео, публикация ${ddmm(npd)}`);
-      sent = await tellBlogger(d, "approved", [nameOf(d), d.product || "", npd === today ? "сегодня" : ddmm(npd)]);
+      // 27.11.2026 Нина: «Видео согласовано» уходит блогеру, только если менеджер сам выбрал «Одобрить и написать блогеру».
+      if (b.notify === true) sent = await tellBlogger(d, "approved", [nameOf(d), d.product || "", npd === today ? "сегодня" : ddmm(npd)]);
     } else if (action === "revise" || action === "reshoot") {
       const days = Math.max(1, Math.min(10, Number(b.days) || (action === "revise" ? 1 : 2)));
       // Исправленное видео ждём через N рабочих дней от сегодня; публикацию двигаем, только если она раньше,
