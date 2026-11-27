@@ -3687,7 +3687,7 @@ function isMgrOnly(){ return UI.role==="marketer" && UI.lvl==="manager"; }
 // 27.11.2026 (Нина): Ольга и Алтынай — крупные интеграции: всё как раньше + Блогеры, База ТЗ, Оплаты, Доставки (свои).
 function isLargeUser(){ return ["Ольга","Алтынай"].includes(UI.actorName); }
 // 27.11.2026 (Нина): руководство (Сауле, Мария, Константин) видит всё, но без Рабочего стола и без уведомлений от менеджеров.
-function isBoss(){ return UI.role==="marketer" && ["Сауле","Мария","Константин"].includes(UI.actorName); }
+function isBoss(){ return UI.role==="marketer" && ["Сауле","Мария","Константин","Аяужан"].includes(UI.actorName); }
 // Чьи данные видит тимлид: себя и свою команду (null — без ограничений).
 function bbScopeNames(){ return UI.role==="marketer" && UI.lvl==="lead" && UI.actorName ? [UI.actorName].concat(UI.team||[]) : null; }
 function tabsForRole(){
@@ -10103,7 +10103,7 @@ function dateCheckList(){
   return (DataManager.state.microInfluencerDeals||[]).filter(d=> !d.agreedDate && !d.datesChecked && !microDealPublished(d) && !d.publishDate
     && /^\d{4}-\d{2}-\d{2}/.test(d.plannedDate||"") && d.plannedDate >= today && (crmIsLeadName() || !UI.actorName || d.responsible===UI.actorName));
 }
-function crmIsLeadName(){ return ["Нина","Сая","Анеля","Сауле","Мария","Константин"].includes(UI.actorName); }
+function crmIsLeadName(){ return ["Нина","Сая","Анеля","Сауле","Мария","Константин","Аяужан"].includes(UI.actorName); }
 function tplDateCheckBanner(){
   const list = dateCheckList(); if(!list.length) return "";
   return `<div class="login-hint" style="margin:0 0 12px;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;text-align:left;background:#FFF6E3;border-color:#F6E2B8">
