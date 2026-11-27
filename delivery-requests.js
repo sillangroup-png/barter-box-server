@@ -95,9 +95,11 @@ function mount(app, { getState, requireAuth, persist }) {
       const cands = deals.filter((d) => [d.instagramAccount, d.tiktokAccount, d.blogerName].some((v) => norm(v) === nick));
       const deal = cands.filter((d) => d.responsible === manager).sort((a, b) => b.id - a.id)[0] || cands.sort((a, b) => b.id - a.id)[0];
       const at = day + 'T09:00:00.000Z';
+      // 27.11.2026: статус можно задать по строке (колонка «Статус»: Доставлено / Передано в работу / Не доставлено / Новая)
+      const s0 = pick(r, 'статус').toLowerCase(); const rs = !s0 ? status : /не\s*достав/.test(s0) ? 'failed' : /достав/.test(s0) ? 'delivered' : /передан|работ|логист/.test(s0) ? 'sent' : /нов/.test(s0) ? 'new' : status;
       all.push({ id: ++id, dealId: deal ? deal.id : null, createdAt: at, createdBy: manager, manager, blogger: '@' + nick, phone, city: pick(r, 'город'), address: pick(r, 'адрес'),
-        items: [{ name: pick(r, 'товар'), code: '', qty: 1, cost: 0 }], productCost: 0, deliveryCost: 0, note: 'импорт списка логиста ' + today().slice(8, 10) + '.' + today().slice(5, 7), status,
-        sentAt: status === 'sent' ? at : undefined, history: [{ at: new Date().toISOString(), by: req.session.name, status }] });
+        items: [{ name: pick(r, 'товар'), code: '', qty: 1, cost: 0 }], productCost: 0, deliveryCost: 0, note: 'импорт списка логиста ' + today().slice(8, 10) + '.' + today().slice(5, 7), status: rs,
+        sentAt: rs === 'sent' || rs === 'delivered' ? at : undefined, deliveredAt: rs === 'delivered' ? at : undefined, history: [{ at: new Date().toISOString(), by: req.session.name, status: rs }] });
       added++;
     }
     persist(); res.json({ ok: true, added, skipped });

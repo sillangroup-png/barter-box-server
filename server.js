@@ -172,6 +172,8 @@ function requireAuth(req, res, next){
   // (передеплой, автоусыпление Render) больше не разлогинивает людей.
   const session = (token && !revokedTokens.has(token)) ? verifySession(token) : null;
   if(!session) return res.status(401).json({error:"Требуется авторизация"});
+  // 27.11.2026: сессии старого общего входа маркетолога больше не действуют (личные учётки несут lvl; Ольга по своему env-логину).
+  if(session.role === "marketer" && !session.readOnly && !session.lvl && !MARKETER_USERS.some(u=> u.password && u.name === session.name)) return res.status(401).json({error:"Требуется авторизация"});
   // "Только просмотр" (см. MARKETER_VIEWERS) — читать (GET) можно всё как обычному
   // маркетологу, а любой другой метод (создание/правка/удаление/импорт) блокируется
   // здесь же, централизованно, чтобы не забыть проверку на каком-то одном из маршрутов.
@@ -1043,6 +1045,8 @@ app.post("/api/auth/login", (req,res)=>{
       return res.json({ok:true, token, name: user.name, canExport: EXPORT_NAMES.has(user.name)});
     }
   }
+  // 27.11.2026 (Нина): общий вход маркетолога отключён — у всех личные логины.
+  if(role === "marketer" && login === cfg.login){ loginFailed(ip); return res.status(403).json({error:"Общий вход отключён — войдите по своему логину и паролю (спросите у Нины)"}); }
   if(!cfg.login || !cfg.password){
     return res.status(503).json({error:"Логин для этой роли ещё не настроен на сервере (нужны переменные окружения)"});
   }
