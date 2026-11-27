@@ -2050,11 +2050,16 @@ app.get("/api/tz-texts", requireAuth, (req,res)=>{ res.json((state.tzTexts||[]).
 app.get("/api/tz-texts/:id", requireAuth, (req,res)=>{ const x = (state.tzTexts||[]).find(t=> t.id===req.params.id); if(!x) return res.status(404).json({error:"ТЗ не найдено"}); res.json(x); });
 app.post("/api/tz-texts/import", requireAuth, tzTextsUpload.single("file"), (req,res)=>{
   if(!req.session.canExport) return res.status(403).json({error:"Загружают Нина и Сая"});
+  if(/^%PDF/.test(req.file.buffer.slice(0,5).toString("latin1"))) return res.status(400).json({error:"Это PDF — сюда загружается только briefs_clean.json из Blogery Audit. PDF базового ТЗ пришлите Нине в Claude, его добавят в список"});
   let rows; try{ rows = JSON.parse(req.file.buffer.toString("utf8")); }catch(e){ return res.status(400).json({error:"Это не JSON-файл из Blogery Audit"}); }
   if(!Array.isArray(rows)) return res.status(400).json({error:"Нужен список ТЗ (briefs_clean.json)"});
   const ok = rows.filter(b=> b && b.is_template && (b.status==="Утверждено" || b.status_code==="ok") && b.text);
-  state.tzTexts = ok.map(b=> ({ id:String(b.id), family:String(b.family||""), product:String(b.product||""), hook:String(b.hook||""), angle:String(b.angle||""),
-    approved:String(b.approved_at||b.updated_at||"").slice(0,10), text:String(b.text).split(/\n##\s*Для команды/)[0].trimEnd()+"\n" }));
+  // 27.11.2026: файл без утверждённых ТЗ список больше не стирает; новые ТЗ добавляются к старым (одинаковый id — заменяется)
+  if(!ok.length) return res.status(400).json({error:"В файле нет утверждённых базовых ТЗ — список не изменён"});
+  const keep = new Map((state.tzTexts||[]).map(x=> [x.id, x]));
+  for(const b of ok) keep.set(String(b.id), { id:String(b.id), family:String(b.family||""), product:String(b.product||""), hook:String(b.hook||""), angle:String(b.angle||""),
+    approved:String(b.approved_at||b.updated_at||"").slice(0,10), text:String(b.text).split(/\n##\s*Для команды/)[0].trimEnd()+"\n" });
+  state.tzTexts = [...keep.values()];
   state.tzTextsUploadedAt = new Date().toISOString(); state.tzTextsUploadedBy = req.session.name||"";
   persist(); res.json({ok:true, count: state.tzTexts.length});
 });
