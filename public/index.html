@@ -9043,9 +9043,9 @@ function modalPayNew(ctx){
       <div class="field"><label>Заметки</label><input id="pn-notes" value="${escapeHtml(v("notes",""))}" placeholder="необязательно"></div>
       ${bbSec("За какие интеграции")}
       ${open.length ? open.map(d=>`<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:4px 0;cursor:pointer"><input type="checkbox" class="pn-deal" value="${d.id}" data-cost="${Number(d.cost)||0}" ${S.sel.has(d.id)?"checked":""}> <span>${bbDealLine(d)} <span class="mut">· ${escapeHtml(d.responsible||"")}</span></span></label>`).join("")
-        : `<div style="font-size:12.5px;color:#9A6400">У блогера нет неоплаченных интеграций в Barter Box. Сначала заведите интеграцию — к ней привяжется оплата. <button type="button" class="btn btn-sm" id="pn-newdeal">+ Интеграция</button></div>`}
+        : `<div style="font-size:12.5px;color:#9A6400">Неоплаченных интеграций нет — заявку можно подать и без интеграции${crmCutover() ? "" : " (после переезда CRM)"}. Или заведите интеграцию: <button type="button" class="btn btn-sm" id="pn-newdeal">+ Интеграция</button></div>`}
       <div id="pn-msg" style="font-size:12.5px;margin-top:8px"></div>
-      <div class="modal-actions"><button class="btn" onclick="closeModal()">Отмена</button><button class="btn btn-primary" id="pn-send" ${open.length?"":"disabled"}>Подать заявку</button></div>`;
+      <div class="modal-actions"><button class="btn" onclick="closeModal()">Отмена</button><button class="btn btn-primary" id="pn-send">Подать заявку</button></div>`;
     const keep = ()=>{ S.f = {}; [["vcnt","pn-vcnt"],["scnt","pn-scnt"],["month","pn-month"],["rec","pn-rec"],["bank","pn-bank"],["iin","pn-iin"],["kaspi","pn-kaspi"],["amount","pn-amount"],["stage","pn-stage"],["video","pn-video"],["goods","pn-goods"],["notes","pn-notes"]].forEach(([k,id])=>{ const el = $(id); if(el) S.f[k] = el.value; }); };
     const total = ()=>{ const a = (Number($("pn-video").value)||0) + (Number($("pn-goods").value)||0); if(a) $("pn-amount").value = a; };
     const bySel = ()=>{ const s = [...document.querySelectorAll(".pn-deal:checked")].reduce((x,c)=> x+(Number(c.dataset.cost)||0), 0); if(s){ $("pn-video").value = s; total(); } };
@@ -9057,7 +9057,8 @@ function modalPayNew(ctx){
     const nd = $("pn-newdeal"); if(nd) nd.onclick = ()=>{ closeModal(); modalMicroDeal(null, {blogerName:"@"+S.nick, instagramAccount:"https://www.instagram.com/"+S.nick+"/", responsible:UI.actorName||"", crmBloggerId: S.crmId || (S.hist&&S.hist.blogger&&S.hist.blogger.id) || undefined}); };
     $("pn-send").onclick = async ()=>{ const btn = $("pn-send"), msg = (t, bad)=>{ const m = $("pn-msg"); m.textContent = t; m.style.color = bad ? "var(--bad)" : "var(--ok,#1f8a4c)"; };
       try{
-        const ids = [...document.querySelectorAll(".pn-deal:checked")].map(c=> c.value); if(!ids.length) throw new Error("Отметьте, за какие интеграции платим");
+        // 27.11.2026 (Нина): интеграции — по желанию; после переезда заявка идёт прямо в «Оплаты» Barter Box
+        const ids = [...document.querySelectorAll(".pn-deal:checked")].map(c=> c.value); if(!ids.length && !crmCutover()) throw new Error("Без интеграции заявку можно подать после переезда CRM в Barter Box — пока отметьте интеграцию");
         const rec = $("pn-rec").value.trim(); if(!rec) throw new Error(S.ip ? "Укажите получателя (ИП)" : "Укажите ФИО получателя");
         const amount = $("pn-amount").value.trim(); if(!(Number(amount) > 0)) throw new Error("Укажите сумму");
         const f = S.ip ? $("pn-file").files[0] : null; if(S.ip && !f) throw new Error("Для ИП прикрепите счёт на оплату");
@@ -9067,9 +9068,15 @@ function modalPayNew(ctx){
         btn.disabled = true; msg("Отправляю…");
         const pm = S.ip ? "ИП" : "Наличные";
         for(const id of ids){ const d = (DataManager.state.microInfluencerDeals||[]).find(x=> String(x.id)===id); if(d && d.paymentMethod!==pm) await Api.updateMicroDeal(d.id, {paymentMethod: pm}); }
+        if(crmCutover()){
+          const bid = S.crmId || (S.hist && S.hist.blogger && S.hist.blogger.id) || ""; if(!bid) throw new Error("Этого блогера нет в базе «Блогеры» — сначала добавьте его там");
+          await CrmApi.submitPayment({ bloggerId: bid, isIp: !!S.ip, amount, recipient: rec, iin: S.ip ? "" : $("pn-iin").value.trim(), kaspi: S.ip ? "" : $("pn-kaspi").value.trim(), name: $("pn-stage").value,
+            amountVideo: vid || "", amountProduct: gd || "", notes, dealId: ids[0] || "", dealIds: ids });
+        } else {
         const form = new FormData(); if(f) form.append("invoice", f);
         form.append("payload", JSON.stringify({integrationIds: ids, amountKzt: amount, recipientName: rec, settlement: S.ip ? "ip" : "cash", stage: $("pn-stage").value, invoiceConfirmed: !!S.ip, notes}));
         await apiFetch("/api/automation/payment-request", {method:"POST", body: form});
+        }
         // 24.11.2026: ИП со счётом → карточка «Согласование оплаты» в Битриксе (поля по шаблону, счёт файлом)
         let bxMsg = "", bxBad = false;
         if(S.ip && f){ msg("Заявка в CRM подана · создаю согласование в Битриксе…");
@@ -9895,26 +9902,48 @@ function modalCrmPayment(b){
   };
 }
 
+// 27.11.2026 (Нина): форма как в старой CRM — все поля: основное, аудитория, расценки, категория, работа, заметки, реквизиты ИП.
+const CRM_REQ_FIELDS = [["name","Название ИП (без «ИП»)","САРДАРА"],["iin","ИИН / БИН","12 цифр"],["head","ФИО полностью","Фамилия Имя Отчество"],["address","Адрес","город, улица, дом"],["iban","IBAN (счёт)","KZ…"],["bank","Банк","АО \"Kaspi Bank\""],["bik","БИК","CASPKZKA"],["kbe","КБе","19"],["phone","Телефон",""],["email","E-mail",""]];
 function modalCrmNew(){
-  openModal(`<h3>Новый блогер</h3>
-    <div class="form-row">
-      <div class="field"><label>Instagram (ссылка или @ник)</label><input id="cn-ig" placeholder="https://instagram.com/…"></div>
-      <div class="field"><label>TikTok</label><input id="cn-tt"></div>
-      <div class="field"><label>Имя</label><input id="cn-name"></div>
-      <div class="field"><label>WhatsApp</label><input id="cn-wa"></div>
-      <div class="field"><label>Подписчики IG</label><input id="cn-fol" type="number"></div>
-      <div class="field"><label>Охват reels</label><input id="cn-reach" type="number"></div>
-      <div class="field"><label>Цена reels, ₸</label><input id="cn-pr" type="number"></div>
-      <div class="field"><label>Цена TikTok, ₸</label><input id="cn-pt" type="number"></div>
-      <div class="field" style="grid-column:1/-1"><label>Комментарий</label><textarea id="cn-comment" rows="2"></textarea></div>
+  const talk = (CRM.meta && CRM.meta.talk) || {new:"Новый", contacted:"Написали", replied:"Ответили", considering:"На рассмотрении"};
+  const me = UI.actorName || "";
+  const sec = t=> `<div style="grid-column:1/-1;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-mute);border-bottom:1px solid var(--line);padding:10px 0 6px;margin-top:4px">${t}</div>`;
+  const f = (id, label, ph, span, type)=> `<div class="field" style="${span?`grid-column:span ${span}`:""}"><label>${label}</label><input id="${id}" ${type?`type="${type}"`:""} placeholder="${escapeHtml(ph||"")}"></div>`;
+  openModal(`<h3>Добавить блогера</h3>
+    <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px 10px;max-height:66vh;overflow:auto;padding-right:4px">
+      ${sec("Основное")}
+      ${f("cn-name","Ник *","@blogger_name",2)}${f("cn-ig","Ссылка Instagram","https://instagram.com/…",2)}${f("cn-tt","Ссылка TikTok","https://tiktok.com/@…",2)}
+      ${f("cn-wa","ВЦ блогера (номер WhatsApp)","+7 700 000 00 00",6)}
+      ${sec("Аудитория")}
+      ${f("cn-fol","Подп. Инст","",1,"number")}${f("cn-reach","Охват Инст","",1,"number")}${f("cn-sreach","Охват сторис","просмотры",1,"number")}${f("cn-folt","Подп. ТТ","",1,"number")}${f("cn-reacht","Охват ТТ","",2,"number")}
+      ${f("cn-er","ER % (engagement rate)","напр. 3.5",6)}
+      ${sec("Расценки (₸)")}
+      ${f("cn-pr","Рилс","",1,"number")}${f("cn-pt","TikTok","",1,"number")}${f("cn-pb","Рилс+ТТ","",2,"number")}${f("cn-ps","Сторис","",2,"number")}
+      ${sec("Категория")}
+      <div class="field" style="grid-column:1/-1"><label>Категория</label><select id="cn-cat">${CRM_CATS.map(c=>`<option value="${c[0]}">${c[0]?c[1]:"— Не выбрано —"}</option>`).join("")}</select></div>
+      ${sec("Работа")}
+      <div class="field" style="grid-column:span 3"><label>Статус</label><select id="cn-st">${Object.entries(talk).map(([k,v])=>`<option value="${k}">${escapeHtml(v)}</option>`).join("")}</select></div>
+      <div class="field" style="grid-column:span 3"><label>Менеджер</label><select id="cn-mgr"><option value="">— Не назначен —</option>${[...new Set([me].concat(CRM_STAFF))].filter(Boolean).map(n=>`<option ${n===me?"selected":""}>${escapeHtml(n)}</option>`).join("")}</select></div>
+      ${f("cn-mig","Инста менеджера (с какой писали)","@my_account",3)}${f("cn-mwa","ВЦ менеджера (с какого номера)","+7 700 000 00 00",3)}
+      ${f("cn-comment","Последний комментарий","Кратко о статусе…",6)}
+      <div class="field" style="grid-column:1/-1"><label>Заметки</label><textarea id="cn-notes" rows="3" placeholder="Дополнительная информация…"></textarea></div>
+      <details style="grid-column:1/-1;border-top:1px solid var(--line);padding-top:8px"><summary style="cursor:pointer;font-size:12px;font-weight:700;text-transform:uppercase;color:var(--ink-mute)">Реквизиты ИП и документы</summary>
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 10px;margin-top:8px">${CRM_REQ_FIELDS.map(([k,l,ph])=>`<div class="field"><label>${l}</label><input class="cn-req" data-k="${k}" placeholder="${escapeHtml(ph)}"></div>`).join("")}</div></details>
     </div>
-    <div class="login-hint" style="text-align:left">Сначала проверим, нет ли его уже в базе. Ответственным будете вы (${escapeHtml(UI.actorName||"—")}).</div>
+    <div class="login-hint" style="text-align:left">Сначала проверим, нет ли его уже в базе.</div>
     <div class="modal-actions"><button class="btn btn-ghost" id="cn-cancel">Отмена</button><button class="btn btn-primary" id="cn-save">Добавить</button></div>`);
   document.getElementById("cn-cancel").onclick = closeModal;
   document.getElementById("cn-save").onclick = async (e)=>{
     const v = id=> document.getElementById(id).value.trim();
+    const nick = v("cn-name").replace(/^@/,""); if(!nick) return toast("Укажите ник", true);
     let ig = v("cn-ig"); if(ig && !/^https?:/i.test(ig)) ig = "https://www.instagram.com/" + ig.replace(/^@/,"") + "/";
-    try{ const nb = await withBusy(e.target, ()=> CrmApi.create({ instagram: ig, tiktok: v("cn-tt"), name: v("cn-name"), whatsapp: v("cn-wa"), followers: v("cn-fol"), reach: v("cn-reach"), priceReels: v("cn-pr"), priceTiktok: v("cn-pt"), lastComment: v("cn-comment") }));
+    let tt = v("cn-tt"); if(tt && !/^https?:/i.test(tt)) tt = "https://www.tiktok.com/@" + tt.replace(/^@/,"");
+    const ipRequisites = {}; document.querySelectorAll(".cn-req").forEach(i=>{ if(i.value.trim()) ipRequisites[i.dataset.k] = i.value.trim(); });
+    try{ const nb = await withBusy(e.target, ()=> CrmApi.create({ name: "@"+nick, instagram: ig, tiktok: tt, whatsapp: v("cn-wa"),
+        followers: v("cn-fol"), reach: v("cn-reach"), storiesReach: v("cn-sreach"), followersTT: v("cn-folt"), reachTT: v("cn-reacht"), er: v("cn-er"),
+        priceReels: v("cn-pr"), priceTiktok: v("cn-pt"), priceBoth: v("cn-pb"), priceStories: v("cn-ps"), category: v("cn-cat"),
+        status: v("cn-st"), manager: v("cn-mgr"), managerInstagram: v("cn-mig"), managerWhatsapp: v("cn-mwa"), lastComment: v("cn-comment"), notes: v("cn-notes"),
+        ipRequisites: Object.keys(ipRequisites).length ? ipRequisites : undefined }));
       closeModal(); toast("Добавлен"); CRM.meta = null; crmLoad(); modalCrmBlogger(nb.id); }
     catch(err){ toast(err.message, true); }
   };
