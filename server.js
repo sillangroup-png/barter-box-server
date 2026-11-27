@@ -1690,7 +1690,7 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
 });
 // 27.11.2026 (Нина): блогер-«пакетник» — телефон вписали в одну интеграцию, в остальных его нет.
 // Совпадение по нику / ссылке Instagram / TikTok → номер проставляется в интеграции этого блогера, где он пустой.
-function bbNickKeys(d){ return [d && d.instagramAccount, d && d.tiktokAccount, d && d.blogerName].map(v=>{ let x = String(v||"").trim().toLowerCase(); const m = x.match(/(?:instagram\.com|tiktok\.com)\/@?([^/?#\s]+)/); x = m ? m[1] : x.replace(/^@/,"").split(/[\s/?#]/)[0]; return x.replace(/[^\w.]/g,""); }).filter(x=> x.length >= 3); }
+function bbNickKeys(d){ return [d && d.instagramAccount, d && d.tiktokAccount, d && !/\s/.test(String(d.blogerName||"").trim()) ? d.blogerName : ""].map(v=>{ /* имя с пробелом («Айгерим Иванова») — не ник, по нему не сравниваем */ let x = String(v||"").trim().toLowerCase(); const m = x.match(/(?:instagram\.com|tiktok\.com)\/@?([^/?#\s]+)/); x = m ? m[1] : x.replace(/^@/,"").split(/[\s/?#]/)[0]; return x.replace(/[^\w.]/g,""); }).filter(x=> x.length >= 3); }
 function bbFillSiblingPhones(src){
   const ph = String((src && src.phone) || "").trim(); if(!ph || ph.replace(/\D/g,"").length < 10) return 0;
   const keys = new Set(bbNickKeys(src)); if(!keys.size) return 0; let n = 0;
