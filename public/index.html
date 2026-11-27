@@ -9645,7 +9645,7 @@ function tplCrmBloggers(){
   const num = (v)=> v ? fmtNum(v) : `<span class="mut">—</span>`;
   const cpv = (v)=> v==null ? `<span class="mut">—</span>` : `<span class="pv-st ${v<=10?"s-ok":v<=30?"s-a":"s-b"}" style="${v>10&&v<=30?"background:#EFE8FB;color:#6B48C8":""}">${String(v).replace(".",",")} ₸</span>`;
   const cell = (k,b)=>{ switch(k){
-    case "links": return [b.instagram?`<a href="${escapeHtml(b.instagram)}" target="_blank" rel="noopener" title="Instagram">IG</a>`:"", b.tiktok?`<a href="${escapeHtml(b.tiktok)}" target="_blank" rel="noopener" title="TikTok">TT</a>`:""].filter(Boolean).join(" · ")||"—";
+    case "links": return `<span style="white-space:nowrap">${crmSocIcons(b, true)}</span>`; // 27.11.2026: иконки, как в Blogger CRM
     case "followers": return num(b.followers); case "reach": return num(b.reach); case "followersTT": return num(b.followersTT); case "reachTT": return num(b.reachTT);
     case "priceReels": return num(b.price.reels); case "cpvReels": return cpv(b.cpv.reels); case "priceTiktok": return num(b.price.tiktok); case "cpvTiktok": return cpv(b.cpv.tiktok);
     case "priceBoth": return num(b.price.both); case "cpvBoth": return cpv(b.cpv.both); case "storiesReach": return num(b.storiesReach); case "priceStories": return num(b.price.stories); case "cpvStories": return cpv(b.cpv.stories);
