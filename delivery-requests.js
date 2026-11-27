@@ -18,7 +18,10 @@ function mount(app, { getState, requireAuth, persist }) {
   app.get('/api/delivery-requests', requireAuth, (req, res) => {
     if (!isStaff(req)) return res.status(403).json({ error: 'Нет доступа' });
     const all = list(); const name = req.session.name;
-    const items = isLead(req) && req.query.mine !== '1' ? all : all.filter((r) => r.createdBy === name || r.manager === name);
+    // 27.11.2026: тимлид — заявки своей команды, Нина и руководство — все, остальные — свои.
+    const sc = req.app.locals.bbScopeNames ? req.app.locals.bbScopeNames(req) : (isLead(req) ? null : [name]);
+    const own = (r) => r.createdBy === name || r.manager === name;
+    const items = req.query.mine === '1' ? all.filter(own) : (!sc ? all : all.filter((r) => own(r) || sc.includes(r.createdBy) || sc.includes(r.manager)));
     res.json({ lead: isLead(req), items: items.slice().reverse().map(view) });
   });
 

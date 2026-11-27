@@ -985,7 +985,19 @@ require("./contracts").createContracts({getState:()=>state,dataDir:DATA_DIR,pers
 // ---------- state & health ----------
 // /api/state отдаёт ВСЮ базу (заказы, телефоны, адреса, выручку, ROMI) — без
 // requireAuth это было бы публично доступно кому угодно по прямой ссылке.
-app.get("/api/state", requireAuth, (req,res)=> res.json(state));
+// 27.11.2026 (Нина): тимлид (Сая, Анеля) видит интеграции микро/средние только своей команды и свои —
+// отсюда же дашборд, сводный отчёт, рабочий стол и планер. Остальные — всю базу, как раньше.
+function bbScopeNames(req){ const n = req.session && req.session.name; const sc = accountsMod.scopeOf(n); return sc === undefined ? (n ? [n] : null) : sc; }
+app.locals.bbScopeNames = bbScopeNames;
+app.locals.bbScope = (req)=>{ const sc = accountsMod.scopeOf(req.session && req.session.name); if(!sc) return ()=> true; const set = new Set(sc); return (d)=> set.has(String((d && d.responsible) || "").trim()); };
+app.get("/api/state", requireAuth, (req,res)=>{
+  const n = req.session && req.session.name;
+  if(req.session && req.session.role === "marketer" && accountsMod.lvlOf(n) === "lead"){
+    const set = new Set(accountsMod.scopeOf(n));
+    return res.json({...state, microInfluencerDeals: (state.microInfluencerDeals || []).filter(d=> { const r = String(d.responsible || "").trim(); return !r || set.has(r); })});
+  }
+  res.json(state);
+});
 // health-check нарочно без авторизации — по нему Render проверяет, что сервис жив,
 // и данных внутри него нет (только счётчик заказов и время).
 app.get("/api/health", (req,res)=> res.json({ok:true, orders: state.orders.length, time:new Date().toISOString()}));

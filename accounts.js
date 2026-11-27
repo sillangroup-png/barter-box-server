@@ -25,11 +25,21 @@ const LIST = [
   { login: "anastasia", name: "Анастасия", lvl: "manager" },
   { login: "oksana", name: "Оксана", lvl: "manager" },
   { login: "azhar", name: "Ажар", lvl: "manager" },
+  { login: "olga", name: "Ольга", lvl: "large" },
+  { login: "altynay", name: "Алтынай", lvl: "large" },
 ];
 const LVL_BY_NAME = { "Нина": "admin", "Сая": "lead" };
 for (const u of LIST) LVL_BY_NAME[u.name] = u.lvl;
 function lvlOf(name) { return LVL_BY_NAME[name] || null; }
 function teamOf(name) { return lvlOf(name) === "lead" ? (TEAMS[name] || []).slice() : []; }
+// Чьи данные видит человек: null — всё (Нина, руководство); тимлид — себя и свою команду; остальные — только себя.
+// undefined — старый общий вход без личной учётки: каждый модуль ведёт себя по-старому.
+function scopeOf(name) {
+  const l = lvlOf(name); if (!l) return undefined;
+  if (l === "admin") return null;
+  if (l === "lead") return [name].concat(TEAMS[name] || []);
+  return [name];
+}
 function leadOf(name) { for (const [l, m] of Object.entries(TEAMS)) if (m.includes(name)) return l; return null; }
 
 function createAccounts({ dataDir }) {
@@ -109,4 +119,4 @@ function createAccounts({ dataDir }) {
   return { ready, verify, hasPassword, invite, inviteUser, accept, setPassword, setDisabled, list };
 }
 
-module.exports = { createAccounts, lvlOf, teamOf, leadOf, TEAMS };
+module.exports = { createAccounts, lvlOf, teamOf, leadOf, scopeOf, TEAMS };

@@ -800,10 +800,13 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   app.get("/api/inbox", requireAuth, (req, res) => {
     if (!staff(req, res)) return;
     // 24.11.2026: всех видят только Нина, Сая и руководство; роль «маркетолог» есть и у менеджеров (Сабрина видела чужие диалоги).
-    const s = req.session || {}, all = (s.canExport && LEAD_NAMES.has(s.name)) || ["Мария", "Сауле", "Константин"].includes(s.name);
+    // 27.11.2026: тимлид видит диалоги своей команды (кому и что писали), Нина и руководство — все.
+    const s = req.session || {}, sc = req.app.locals.bbScopeNames ? req.app.locals.bbScopeNames(req) : undefined;
+    const scKeys = Array.isArray(sc) && sc.length > 1 ? new Set(sc.map(personKey)) : null;
+    const all = !!scKeys || (sc === null && !!s.name) || (s.canExport && LEAD_NAMES.has(s.name)) || ["Мария", "Сауле", "Константин"].includes(s.name);
     const me = personKey(s.name), mine = req.query.mine === "1" || !all;
     const st = getState(), byId = new Map((st.microInfluencerDeals || []).map((d) => [d.id, d]));
-    const rows = Object.values(IB()).filter((r) => !mine || personKey(r.manager) === me).map((r) => {
+    const rows = Object.values(IB()).filter((r) => mine ? personKey(r.manager) === me : (!scKeys || scKeys.has(personKey(r.manager)))).map((r) => {
       const d = byId.get(r.dealId) || {};
       return { phone: r.phone, dealId: r.dealId, manager: r.manager, blogger: d.blogerName || r.blogger, product: d.product || "", via: r.via,
         lastIn: r.lastIn || "", lastInText: r.lastInText || "", lastInType: r.lastInType || "", lastOut: r.lastOut || "", waiting: waiting(r),

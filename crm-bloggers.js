@@ -544,7 +544,9 @@ function mount(app, { getState, requireAuth, kostPool, persist, env = process.en
   // Мои заявки на оплату — менеджер видит только поданные им (все статусы).
   app.get('/api/crm/payments/mine', requireAuth, async (req, res) => {
     if (!need(res)) return; if (!canStaff(req)) return res.status(403).json({ error: 'Нет доступа' });
-    try { const me = req.session.name; const items = (await payRows()).filter(p => p.manager === me);
+    // 27.11.2026: тимлид — заявки своей команды, Нина и руководство — все, остальные — свои.
+    try { const me = req.session.name; const sc = req.app.locals.bbScopeNames ? req.app.locals.bbScopeNames(req) : [me];
+      const items = (await payRows()).filter(p => !sc || sc.includes(p.manager));
       const counts = {}; for (const p of items) { const c = counts[p.status] || (counts[p.status] = { n: 0, sum: 0 }); c.n++; c.sum += Number(p.amount) || 0; }
       res.json({ items, counts });
     } catch (e) { res.status(500).json({ error: e.message }); }
