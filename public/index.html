@@ -142,6 +142,8 @@ main{flex:1;padding:18px;max-width:1400px;width:100%;margin:0 auto}
 .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius)}
 table{width:100%;border-collapse:collapse;font-size:12.8px;background:#fff}
 th,td{padding:9px 11px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+/* 27.11.2026: в «Доставках» длинный адрес и товары переносятся, а не наезжают на соседнюю колонку */
+.dlv-tbl td{vertical-align:top}.dlv-tbl td.wrap{white-space:normal;overflow-wrap:break-word}
 th{background:var(--canvas);color:var(--ink-soft);font-size:11.3px;text-transform:uppercase;letter-spacing:.03em;position:sticky;top:0;font-weight:700}
 tr:hover td{background:#fef9fc}
 td.wrap{white-space:normal;max-width:220px}
@@ -3691,6 +3693,8 @@ function bbScopeNames(){ return UI.role==="marketer" && UI.lvl==="lead" && UI.ac
 function tabsForRole(){
   const t = tabsForRoleRaw().filter(x=> !(isBoss() && x.id==="desk"));
   if(UI.role==="marketer" && UI.actorName==="Нина") t.push({id:"accounts", label:"Учётки"});
+  // 27.11.2026 (Нина): вкладка «Артикулы» — артикул Kaspi по ШК, подсказка менеджеру при выходе видео
+  if(UI.role==="marketer" || UI.role==="manager"){ const i = t.findIndex(x=> x.id==="tzBase"), at = {id:"articles", label:"Артикулы"}; if(i>=0) t.splice(i+1, 0, at); else t.push(at); }
   if(t.length && !t.some(x=> x.id===UI.tab)) UI.tab = t[0].id;
   return t;
 }
@@ -3801,6 +3805,7 @@ function renderDeskTab(){
   else if(UI.tab==="deliveryReq") main.innerHTML = tplDeliveryReq();
   else if(UI.tab==="contracts") main.innerHTML = tplContracts();
   else if(UI.tab==="accounts") main.innerHTML = tplAccounts();
+  else if(UI.tab==="articles") main.innerHTML = tplArticles();
   else if(UI.tab==="control") main.innerHTML = tplControl();
   wireDeskTab();
   if(scrollPositions.length){
@@ -8523,7 +8528,7 @@ async function videoAction(id, action, after, comment){
   }
   // 27.11.2026 Нина: при одобрении менеджер сам выбирает, писать ли блогеру.
   if(action === "approve" && comment === undefined){
-    openModal(`<h3 style="margin:0 0 8px">✅ Одобрить видео</h3><div class="mut" style="margin-bottom:12px">Написать блогеру «Спасибо! Видео согласовано ✅ … пришлите ссылку»? Если напишете сами — выберите «Только одобрить».</div>
+    openModal(`<h3 style="margin:0 0 8px">✅ Одобрить видео</h3><div class="mut" style="margin-bottom:12px">Написать блогеру «Спасибо! Видео согласовано ✅ … пришлите ссылку»? Если напишете сами — выберите «Только одобрить».</div>${kaspiArtHint(d, true)}
       <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap"><button class="btn" id="va-only">Только одобрить</button><button class="btn btn-primary" id="va-notify">Одобрить и написать блогеру</button></div>`);
     const go = async (notify, b)=>{ try{ const r = await withBusy(b, ()=> apiFetch("/api/coord/deal/"+id+"/video", {method:"POST", headers:jsonHeaders, body:JSON.stringify({action:"approve", notify})})); closeModal();
       const S = VIDEO_STAGE[r.stage] || {}; toast(`${S.icon||""} ${S.label||"готово"}${r.sent ? " · " + r.sent : " · блогеру не писали"}`); await DataManager.refresh(); if(after) after(); else render(); }catch(err){ toast(err.message, true); } };
@@ -9093,15 +9098,18 @@ function modalPayNew(ctx){
   const pickNick = ()=>{ const n = bbNickNorm($("pn-nick").value); if(n===S.nick && S.hist) return; S.nick = n; S.hist = null; S.sel = null; S.f = null; S.ip = undefined; paint();
     if(n || S.crmId) apiFetch("/api/crm/pay-history?"+new URLSearchParams({nick:n, bloggerId:S.crmId||""}).toString()).then(h=>{ if(S.nick!==n) return; S.hist = h || {items:[]}; if(!S.crmId && h && h.blogger) S.crmId = h.blogger.id; S.ip = undefined; paint(); }).catch(()=>{ S.hist = {items:[]}; paint(); }); };
   $("pn-nick").onchange = pickNick; $("pn-nick").addEventListener("keydown", e=>{ if(e.key==="Enter") pickNick(); });
-  S.nick = ""; if(ctx.nick || ctx.deal){ $("pn-nick").value = "@"+(ctx.nick ? bbNickNorm(ctx.nick) : deskNick(ctx.deal).replace(/^@/,"")); pickNick(); } else paint();
+  S.nick = ""; if(ctx.nick || ctx.deal){ $("pn-nick").value = "@"+(ctx.nick ? bbNickNorm(ctx.nick) : deskNick(ctx.deal).replace(/^@/,"")); pickNick();
+    if(ctx.ids && ctx.ids.length) S.sel = new Set(ctx.ids); if(ctx.amount) S.f = Object.assign(S.f||{}, {amount:String(ctx.amount), video:String(ctx.amount)}); paint(); } else paint();
 }
 
 function modalDlvNew(ctx){
   ctx = ctx || {};
   if(!PROD.list && !PROD.loading) prodLoad();
   if(myStale(MYDLV)) myDlvLoad();
-  const S = { nick:"", crmId: ctx.crmId || "", dealId: ctx.deal ? ctx.deal.id : null, goods: [] };
-  openModal(`<h3 style="margin:0 0 2px">📦 Заявка на доставку</h3><div class="mut" style="font-size:12px;margin-bottom:8px">Уйдёт Сае и Нине в «Доставки». Себестоимость считается сама по товарам — блогеру не возмещается, идёт в расходы интеграции.</div>
+  const E = ctx.edit || null; // 27.11.2026: правка существующей заявки
+  const S = { nick:"", crmId: ctx.crmId || "", dealId: E ? (E.dealId||null) : (ctx.deal ? ctx.deal.id : null), goods: [] };
+  if(E){ S.goods = (E.items||[]).map(x=> ({...x})); S.touched = true; S.noDeal = !E.dealId; }
+  openModal(`<h3 style="margin:0 0 2px">📦 ${E ? "Изменить заявку на доставку" : "Заявка на доставку"}</h3><div class="mut" style="font-size:12px;margin-bottom:8px">Уйдёт Сае и Нине в «Доставки». Себестоимость считается сама по товарам — блогеру не возмещается, идёт в расходы интеграции.</div>
     <div class="field"><label>Блогер</label><input id="dn-nick" list="dn-nicks" autocomplete="off" placeholder="начните вводить ник"><datalist id="dn-nicks">${bbNickOptions().map(n=>`<option value="${escapeHtml(n)}">`).join("")}</datalist></div>
     <div id="dn-body"></div>`);
   bbModalWidth(640);
@@ -9133,7 +9141,7 @@ function modalDlvNew(ctx){
       <div style="margin-top:8px">${S.goods.map((x,i)=>`<div style="display:grid;grid-template-columns:minmax(0,1fr) 64px 110px 28px;gap:8px;align-items:center;margin-bottom:6px;font-size:12.5px"><span>${escapeHtml(x.name)} <span class="mut" style="font-size:11px">${escapeHtml(x.code||"")}</span></span><input class="pv-inp dn-qty" data-i="${i}" type="number" min="1" value="${x.qty}"><span style="text-align:right">${x.cost?fmtNum(x.cost*x.qty)+" ₸":`<input class="pv-inp dn-cost" data-i="${i}" type="number" min="0" placeholder="себест." style="width:100%">`}</span><button type="button" class="btn btn-sm dn-rm" data-i="${i}" style="padding:0 8px">✕</button></div>`).join("") || `<div class="mut" style="font-size:12px">Товары не выбраны</div>`}</div>
       <div style="margin-top:6px;font-size:13px">${S.goods.length?`Отправляем: <b>${S.goods.map(x=> escapeHtml(x.name)+(x.qty>1?" ×"+x.qty:"")).join(", ")}</b> · `:""}Себестоимость набора: <b>${fmtNum(sum)} ₸</b></div>
       <div class="field" style="margin-top:8px"><label>Комментарий для логиста</label><input id="dn-note" value="${escapeHtml(S.note||"")}" placeholder="подъезд, время, домофон…"></div>
-      <div class="modal-actions"><button class="btn" onclick="closeModal()">Отмена</button><button class="btn btn-primary" id="dn-save">Отправить заявку</button></div>`;
+      <div class="modal-actions"><button class="btn" onclick="closeModal()">Отмена</button><button class="btn btn-primary" id="dn-save">${E ? "Сохранить" : "Отправить заявку"}</button></div>`;
     const keep = ()=>{ S.city = $("dn-city").value; S.phone = $("dn-phone").value; S.address = $("dn-address").value; S.note = $("dn-note").value; };
     // 24.11.2026: поиск товара со списком (вместо datalist) — клик добавляет товар, можно несколько.
     const q = $("dn-q"), res = $("dn-res");
@@ -9152,12 +9160,14 @@ function modalDlvNew(ctx){
     document.querySelectorAll(".dn-qty").forEach(el=> el.onchange = ()=>{ keep(); S.goods[+el.dataset.i].qty = Math.max(1, parseInt(el.value,10)||1); paint(); });
     document.querySelectorAll(".dn-cost").forEach(el=> el.onchange = ()=>{ keep(); S.goods[+el.dataset.i].cost = Number(el.value)||0; paint(); });
     document.querySelectorAll(".dn-rm").forEach(el=> el.onclick = ()=>{ keep(); S.touched = true; S.goods.splice(+el.dataset.i, 1); paint(); });
-    $("dn-save").onclick = async (e)=>{ keep(); if(!S.goods.length){ toast("Выберите, что отправляем", true); return; } const body = { dealId:S.dealId || null, blogger:"@"+S.nick, city:S.city.trim(), address:S.address.trim(), phone:S.phone.trim(), deliveryCost:0, note:(S.note||"").trim(), items:S.goods };
-      try{ await withBusy(e.target, ()=> apiFetch("/api/delivery-requests", {method:"POST", headers:jsonHeaders, body:JSON.stringify(body)})); closeModal(); toast("Заявка на доставку отправлена"); await DataManager.refresh(); myDlvLoad(); render(); }catch(err){ toast(err.message, true); } };
+    $("dn-save").onclick = async (e)=>{ keep(); if(!S.goods.length){ toast("Выберите, что отправляем", true); return; } const body = { dealId:S.dealId || null, blogger:"@"+S.nick, city:S.city.trim(), address:S.address.trim(), phone:S.phone.trim(), note:(S.note||"").trim(), items:S.goods };
+      if(!E) body.deliveryCost = 0;
+      try{ await withBusy(e.target, ()=> apiFetch("/api/delivery-requests"+(E ? "/"+E.id : ""), {method: E ? "PATCH" : "POST", headers:jsonHeaders, body:JSON.stringify(body)})); closeModal(); toast(E ? "Заявка изменена" : "Заявка на доставку отправлена"); await DataManager.refresh(); myDlvLoad(); render(); }catch(err){ toast(err.message, true); } };
   };
   const pickNick = ()=>{ const n = bbNickNorm($("dn-nick").value); if(n===S.nick) return; S.nick = n; S.goods = []; S.touched = false; S.city = S.phone = S.address = S.dcost = S.wa = undefined; S.noDeal = false; if(!ctx.deal || bbNickNorm(deskNick(ctx.deal))!==n) S.dealId = null; paint(); };
   $("dn-nick").onchange = pickNick; $("dn-nick").addEventListener("keydown", e=>{ if(e.key==="Enter") pickNick(); });
-  if(ctx.nick || ctx.deal){ $("dn-nick").value = "@"+(ctx.nick ? bbNickNorm(ctx.nick) : deskNick(ctx.deal).replace(/^@/,"")); pickNick(); } else paint();
+  if(E){ S.nick = bbNickNorm(E.blogger); S.city = E.city||""; S.phone = E.phone||""; S.address = E.address||""; S.note = E.note||""; $("dn-nick").value = "@"+S.nick; paint(); }
+  else if(ctx.nick || ctx.deal){ $("dn-nick").value = "@"+(ctx.nick ? bbNickNorm(ctx.nick) : deskNick(ctx.deal).replace(/^@/,"")); pickNick(); } else paint();
   if(!PROD.list) { const t = setInterval(()=>{ if(PROD.list || !document.getElementById("dn-body")){ clearInterval(t); if(document.getElementById("dn-body") && S.nick && !S.goods.length && !S.touched) paint(); } }, 400); }
 }
 function modalMicroPayQuick(d){
@@ -9570,6 +9580,10 @@ const CRM_FILTER_KEYS = ["platform","cpv_min","cpv_max","reach_min","followers_m
 crmParams = function(){ const f=CRM.f; const p={page:f.page, limit:50, sort:f.sort}; if(f.col){ p.col=f.col; p.dir=f.dir; } if(f.q) p.q=f.q; if(f.status) p.status=f.status; if(f.who==="mine") p.mine="1"; else if(f.who && f.who!=="all") p.manager=f.who; if(f.worked) p.worked=f.worked;
   for(const k of CRM_FILTER_KEYS){ const v=f[k]; if(v===true) p[k]="1"; else if(v) p[k]=v; } return p; };
 function crmIsLead(){ return !!UI.canExport; }
+// 27.11.2026 (Нина): иконки Instagram и TikTok у ника — клик открывает профиль (как в Blogger CRM)
+const CRM_IG_SVG = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#C13584" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="#C13584"/></svg>`;
+const CRM_TT_SVG = `<svg width="14" height="15" viewBox="0 0 24 24" fill="#111"><path d="M16.6 3c.4 2.3 1.8 3.8 4.1 4v3.2c-1.5.1-2.9-.4-4.1-1.2v6.4c0 3.5-2.6 5.9-5.9 5.9S4.8 18.9 4.8 15.6c0-3.6 3.1-6.2 6.7-5.7v3.3c-1.6-.4-3.4.6-3.4 2.4 0 1.4 1.1 2.5 2.5 2.5s2.6-1.1 2.6-2.8V3h3.4z"/></svg>`;
+function crmSocIcons(b){ const a = (u, svg, t)=> u ? ` <a href="${escapeHtml(u)}" target="_blank" rel="noopener" title="${t}" onclick="event.stopPropagation()" style="display:inline-flex;vertical-align:middle;margin-left:3px">${svg}</a>` : ""; return a(b.instagram, CRM_IG_SVG, "Открыть Instagram") + a(b.tiktok, CRM_TT_SVG, "Открыть TikTok"); }
 function crmCpv(v){ if(v==null) return `<span style="color:var(--ink-mute)">—</span>`; const c = v<=10 ? ["#e6f6ef","#1f8a62"] : v<=30 ? ["#f1ebfb","#7b4fc4"] : ["#fdecef","#c73a58"]; return `<span style="background:${c[0]};color:${c[1]};border-radius:20px;padding:2px 8px;font-weight:700;font-size:11.5px">${v}₸</span>`; }
 function crmMoney(v){ return v ? fmtNum(v)+"₸" : `<span style="color:var(--ink-mute)">—</span>`; }
 function crmNum(v){ return v ? fmtNum(v) : `<span style="color:var(--ink-mute)">—</span>`; }
@@ -9682,7 +9696,7 @@ function tplCrmBloggers(){
       <tbody>${items.length ? items.map(b=>`<tr class="crm-row" data-id="${escapeHtml(b.id)}" style="cursor:pointer">
         <td><input type="checkbox" class="crm-sel" data-id="${escapeHtml(b.id)}" ${sel.has(b.id)?"checked":""}></td>
         <td><button class="crm-star" data-id="${escapeHtml(b.id)}" data-on="${b.exclusive?1:0}" title="${b.exclusive?"Эксклюзив":"Отметить звёздочкой"}" style="background:none;border:0;font-size:15px;line-height:1;cursor:${edit&&crmIsLead()?"pointer":"default"};color:${b.exclusive?"#F2B54A":"#CBB8C2"}">${b.exclusive?"★":"☆"}</button></td>
-        <td><b>${escapeHtml(b.nick ? "@"+b.nick : (b.name||"—"))}</b></td>
+        <td style="white-space:nowrap"><b>${escapeHtml(b.nick ? "@"+b.nick : (b.name||"—"))}</b>${crmSocIcons(b)}</td>
         <td>${crmCatCell(b, edit)}</td>
         <td>${crmStatusCell(b, edit)}</td>
         <td style="max-width:210px;overflow:hidden;text-overflow:ellipsis">${edit ? `<span class="crm-icom" data-id="${escapeHtml(b.id)}" title="${escapeHtml(b.lastComment||"")}" style="cursor:text;${b.lastComment?"color:#6E6168":"color:#D6337E"}">${escapeHtml((b.lastComment||"добавить…").slice(0,40))}${(b.lastComment||"").length>40?"…":""}</span>` : `<span class="mut" title="${escapeHtml(b.lastComment||"")}">${escapeHtml((b.lastComment||"—").slice(0,40))}</span>`}</td>
@@ -9841,6 +9855,13 @@ async function modalCrmBlogger(id){
       ${crmField("Цена TikTok, ₸", "cb-pt", b.price.tiktok, {type:"number"})}
       ${crmField("Цена reels+TikTok, ₸", "cb-pb", b.price.both, {type:"number"})}
       ${crmField("Цена сторис, ₸", "cb-ps", b.price.stories, {type:"number"})}
+      <div id="cb-cpv" style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12.5px"></div>
+      ${crmField("Подписчики TikTok", "cb-folt", b.followersTT, {type:"number"})}
+      ${crmField("ER, %", "cb-er", b.er, {ph:"напр. 3.5"})}
+      ${crmField("Ссылка Instagram", "cb-ig", b.instagram, {ph:"https://instagram.com/…"})}
+      ${crmField("Ссылка TikTok", "cb-tt", b.tiktok, {ph:"https://tiktok.com/@…"})}
+      ${crmField("Инста менеджера (с какой писали)", "cb-mig", b.managerInstagram, {ph:"@my_account"})}
+      ${crmField("ВЦ менеджера (с какого номера)", "cb-mwa", b.managerWhatsapp, {ph:"+7 7xx xxx xx xx"})}
       ${crmField("Последний комментарий", "cb-comment", b.lastComment, {area:true, rows:2})}
       ${crmField("Заметки", "cb-notes", b.notes, {area:true, rows:2})}
     </div>
@@ -9866,11 +9887,18 @@ async function modalCrmBlogger(id){
   if(dsel) dsel.onchange = async ()=>{ if(!dsel.value) return;
     const prev = String(b.status||"").startsWith("declined") ? {status:"declined", declineReason: b.st.code} : {status: b.status};
     try{ const nb = await CrmApi.save(b.id, {status:"declined", declineReason: dsel.value}); closeModal(); done(nb); undoBar(nb.st.label, async ()=>{ const r = await CrmApi.save(b.id, TALK_OR(prev)); done(r); }); }catch(e){ toast(e.message, true); } };
+  // 27.11.2026 (Нина): CPV считается сам, как в Blogger CRM — цена ÷ охват, меняется прямо при вводе
+  const cpvBox = ()=>{ const el = document.getElementById("cb-cpv"); if(!el) return; const n = id=> Number((document.getElementById(id)||{}).value)||0;
+    const c = (p, r)=> p && r ? +(p/r).toFixed(2) : null, ri = n("cb-reach"), rt = n("cb-reachtt"), rs = n("cb-reachst");
+    const L = [["CPV рилс", c(n("cb-pr"), ri)], ["CPV ТТ", c(n("cb-pt"), rt)], ["CPV рилс+ТТ", c(n("cb-pb"), ri + rt)], ["CPV сторис", c(n("cb-ps"), rs || ri)]];
+    el.innerHTML = `<b style="font-size:12px;color:var(--ink-mute)">CPV:</b> ` + L.map(([l, v])=> `<span>${l} ${crmCpv(v)}</span>`).join(" "); };
+  ["cb-reach","cb-reachtt","cb-reachst","cb-pr","cb-pt","cb-pb","cb-ps"].forEach(id=>{ const el = document.getElementById(id); if(el) el.addEventListener("input", cpvBox); }); cpvBox();
   const save = document.getElementById("cb-save");
   if(save) save.onclick = async ()=>{
     const v = id=> document.getElementById(id).value;
     const body = { manager: v("cb-manager"), whatsapp: v("cb-wa"), followers: v("cb-fol"), reach: v("cb-reach"), reachTT: v("cb-reachtt"), storiesReach: v("cb-reachst"),
-      priceReels: v("cb-pr"), priceTiktok: v("cb-pt"), priceBoth: v("cb-pb"), priceStories: v("cb-ps"), lastComment: v("cb-comment"), notes: v("cb-notes") };
+      priceReels: v("cb-pr"), priceTiktok: v("cb-pt"), priceBoth: v("cb-pb"), priceStories: v("cb-ps"), lastComment: v("cb-comment"), notes: v("cb-notes"),
+      followersTT: v("cb-folt"), er: v("cb-er"), instagram: v("cb-ig"), tiktok: v("cb-tt"), managerInstagram: v("cb-mig"), managerWhatsapp: v("cb-mwa") };
     try{ const nb = await withBusy(save, ()=> CrmApi.save(b.id, body)); toast("Сохранено"); closeModal(); done(nb); }catch(e){ toast(e.message, true); }
   };
   document.getElementById("cb-add-deal").onclick = ()=>{ closeModal(); crmOpenDeal(b); };
@@ -9962,7 +9990,7 @@ const PAY_LABEL = {pending:"К оплате", submitted:"Подано", paid:"О
 const PAY_CLS = {pending:"s-w", submitted:"s-blue", paid:"s-ok", rejected:"s-m", refunded:"s-b"};
 // 25.11.2026: чеки из CRM (Cloudinary) — маленькие превью, по клику открывается оригинал
 const payThumb = u=> String(u).replace("/image/upload/", "/image/upload/c_fill,w_88,h_88,q_auto,f_auto/");
-const payChk = a=> (a&&a.length) ? `<div style="display:flex;gap:4px">${a.map(u=>`<a href="${escapeHtml(u)}" target="_blank" rel="noopener" title="Открыть чек"><img src="${escapeHtml(/res\.cloudinary\.com/.test(u)?payThumb(u):u)}" loading="lazy" alt="чек" style="width:40px;height:40px;object-fit:cover;border-radius:6px;border:1px solid #F1E1E8;display:block"></a>`).join("")}</div>` : `<span class="mut">—</span>`;
+const payChk = a=> (a&&a.length) ? `<div style="display:flex;gap:4px">${a.map(u=> /\.pdf(\?|$)/i.test(u) ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener" title="Открыть чек (PDF)" style="width:40px;height:40px;display:flex;align-items:center;justify-content:center;border:1px solid #F1E1E8;border-radius:6px">📄</a>` : `<a href="${escapeHtml(u)}" target="_blank" rel="noopener" title="Открыть чек"><img src="${escapeHtml(/res\.cloudinary\.com/.test(u)?payThumb(u):u)}" loading="lazy" alt="чек" style="width:40px;height:40px;object-fit:cover;border-radius:6px;border:1px solid #F1E1E8;display:block"></a>`).join("")}</div>` : `<span class="mut">—</span>`;
 const payMask = (s, keep)=>{ const v = String(s||""); return v.length > 8 ? v.slice(0,4)+" •••• "+v.slice(-(keep||4)) : (v || "—"); };
 crmPayLoad = async function(){ CRM.pay.loading = true; CRM.pay.err = null; CRM.pay.who = myWho(); crmRepaint();
   try{ if(!CRM.meta) CRM.meta = await CrmApi.meta(); CRM.pay.data = crmIsNina() ? await CrmApi.payments("all") : await apiFetch("/api/crm/payments/mine"); }catch(e){ CRM.pay.err = e.message; }
@@ -9988,7 +10016,7 @@ function tplCrmPayments(){
     <td><span class="pv-st ${PAY_CLS[p.status]||"s-m"}">${escapeHtml(PAY_LABEL[p.status]||p.status)}</span></td>
     <td class="mut" style="max-width:180px;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(p.notes||p.name||"")}">${escapeHtml(p.name||p.notes||"")}</td>
     <td>${/^https?:\/\//.test(p.approvalUrl||"") ? `<a href="${escapeHtml(p.approvalUrl)}" target="_blank" rel="noopener">🔗 Открыть</a>` : `<span class="mut">—</span>`}</td>
-    <td>${payChk(p.chkPay)}</td><td>${payChk(p.chkVideo)}</td>
+    <td>${payChk(p.chkPay)}${edit ? `<label class="btn btn-sm" style="cursor:pointer;margin-top:3px" title="Прикрепить чек — блогер получит его вместе с сообщением об оплате">🧾 Чек<input type="file" class="pay-rcpt" data-id="${escapeHtml(p.id)}" accept="image/*,.pdf" style="display:none"></label>` : ""}</td><td>${payChk(p.chkVideo)}</td>
     <td style="white-space:nowrap;text-align:right"><button class="btn btn-sm pay-copy" data-id="${escapeHtml(p.id)}" title="Скопировать строку для банка">⧉</button>
       ${edit && p.status==="pending" ? `<button class="btn btn-sm pay-set" data-id="${escapeHtml(p.id)}" data-st="submitted">+ Подано</button><button class="btn btn-sm pay-set" data-id="${escapeHtml(p.id)}" data-st="rejected">Отклонить</button>` : ""}
       ${edit && p.status==="submitted" ? `<button class="btn btn-sm btn-primary pay-set" data-id="${escapeHtml(p.id)}" data-st="paid">+ Оплачено</button>` : ""}
@@ -10025,6 +10053,8 @@ function wireCrmPayments(){
   const all = (CRM.pay.data && CRM.pay.data.items) || [], rp = ()=> crmRepaint();
   const visible = ()=>{ const base = all.filter(p=> PAY.tab==="ip" ? p.isIp : !p.isIp); let it = base.filter(p=> PAY.st==="all" || p.status===PAY.st); if(PAY.mgr) it = it.filter(p=> p.manager===PAY.mgr); return it; };
   { const pn = document.getElementById("pay-new"); if(pn) pn.onclick = ()=> modalPayNew({}); }
+  document.querySelectorAll(".pay-rcpt").forEach(i=> i.onchange = async ()=>{ const f = i.files[0]; if(!f) return; const fd = new FormData(); fd.append("file", f);
+    try{ const r = await apiFetch("/api/crm/payments/"+encodeURIComponent(i.dataset.id)+"/receipt", {method:"POST", body:fd}); toast(r.queued ? "Чек прикреплён и уйдёт блогеру" : "Чек прикреплён — уйдёт блогеру вместе с «оплачено»"); CRM.pay.data = null; crmRepaint(); }catch(e){ toast(e.message, true); } i.value = ""; });
   document.querySelectorAll(".pay-tab").forEach(b=> b.onclick = ()=>{ PAY.tab = b.dataset.k; PAY.sel.clear(); rp(); });
   document.querySelectorAll(".pay-st").forEach(b=> b.onclick = ()=>{ PAY.st = b.dataset.k; PAY.sel.clear(); rp(); });
   const mg = document.getElementById("pay-mgr"); if(mg) mg.onchange = ()=>{ PAY.mgr = mg.value; rp(); };
@@ -10398,7 +10428,8 @@ function deskGaps(){
     ["Нет даты выхода", mine.filter(d=> !d.plannedDate && !pub(d))],
     ["Вышло, но нет ссылки", mine.filter(d=> pub(d) && !d.reelsLink && !d.tiktokVideoLink && !d.storiesLink && !(Number(d.factReachStories)>0))], // 24.11.2026: сторис — папка Drive в storiesLink считается ссылкой
     // 23.11.2026: доп. видео без доплаты (у блогера есть другая интеграция с суммой или «доп» в названии) — сумма не нужна.
-    ["Нет суммы", mine.filter(d=> !pub(d) && !(Number(d.cost)>0) && d.coopType!=="За товар" && !/доп/i.test(String(d.blogerName||"")+" "+String(d.conditions||"")) && !microBloggerDeals(d.blogerName).some(x=> x.id!==d.id && Number(x.cost)>0))],
+    // 27.11.2026 (Нина): тип «Доп. видео» — суммы нет и не будет
+    ["Нет суммы", mine.filter(d=> !pub(d) && !(Number(d.cost)>0) && d.coopType!=="За товар" && !/доп/i.test(String(microCoopTypeOf(d)||d.coopType||"")) && !/доп/i.test(String(d.blogerName||"")+" "+String(d.conditions||"")) && !microBloggerDeals(d.blogerName).some(x=> x.id!==d.id && Number(x.cost)>0))],
     ["Товар не выбран", mine.filter(d=> !pub(d) && !String(d.product||"").trim())],
     ["Нет телефона блогера", mine.filter(d=> !pub(d) && !String(d.phone||"").replace(/\D/g,""))],
   ].filter(g=> g[1].length);
@@ -10523,7 +10554,7 @@ function modalChats(phone){
     list.querySelectorAll(".ch-row").forEach(el=> el.onclick = ()=>{ CHATS.phone = el.dataset.p; lastSig = ""; paintList(); loadMsgs(); }); };
   const loadList = async ()=>{ try{ const r = await apiFetch("/api/inbox"+(crmIsLeadName() && !UI.deskAll ? "?mine=1" : "")); items = r.items||[]; INBOX.data = r; INBOX.at = Date.now(); }catch(e){} paintList(); };
   const loadMsgs = async ()=>{ const r0 = items.find(x=> x.phone===CHATS.phone); if(!r0){ return; } const d = deal(r0.dealId);
-    head.innerHTML = `<div><b>${escapeHtml(r0.blogger||r0.phone)}</b> <span class="mut" style="font-size:12px">· ${escapeHtml((d&&d.product)||r0.product||"")} · ${r0.via==="chatapp"?"номер ChatApp":"общий номер"}</span></div><button class="btn btn-sm" onclick="openMicroById(${r0.dealId})">Карточка интеграции</button>`;
+    head.innerHTML = `<div><b>${escapeHtml(r0.blogger||r0.phone)}</b> <span class="mut" style="font-size:12px">· ${escapeHtml((d&&d.product)||r0.product||"")} · ${r0.via==="chatapp"?"номер ChatApp":"общий номер"}</span>${kaspiArtHint(d)}</div><button class="btn btn-sm" onclick="openMicroById(${r0.dealId})">Карточка интеграции</button>`;
     inp.disabled = false; send.disabled = false;
     try{ const r = await apiFetch('/api/coord/deal/'+r0.dealId+'/chat'); const list2 = (r.log||[]).filter(m=> m.dir!=="sys" || /ошибк|не отправ|ИИ/i.test(m.text));
       const sig = list2.length+"|"+(list2.length?list2[list2.length-1].at:""); if(sig===lastSig) return; lastSig = sig;
@@ -10539,7 +10570,7 @@ function modalChats(phone){
     catch(e){ toast("Не отправилось: "+e.message, true); } };
   send.onclick = doSend;
   document.querySelectorAll(".ch-ph").forEach(b=> b.onclick = ()=>{ if(inp.disabled){ toast("Сначала выберите диалог слева", true); return; } const r0 = items.find(x=> x.phone===CHATS.phone), d = r0 && deal(r0.dealId);
-    let t = CHAT_PHRASES[+b.dataset.i][1].replace("{имя}", UI.actorName||"").replace("{дата}", d && d.plannedDate ? ddmmStr(d.plannedDate) : "{дата}");
+    let t = CHAT_PHRASES[+b.dataset.i][1].replace("{имя}", UI.actorName||"").replace("{дата}", d && d.plannedDate ? ddmmStr(d.plannedDate) : "{дата}").replace("{артикул}", (d && kaspiArtFor(d)) || "{артикул}");
     inp.value = inp.value.trim() ? inp.value.trim()+"\n"+t : t; inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); });
   inp.onkeydown = e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); doSend(); } };
   q.oninput = paintList;
@@ -10559,7 +10590,7 @@ function deskAction(x){
   if(x.act==="wa") return wa ? deskSendBtn(d, x.wa, wa) : `<button class="btn btn-sm" onclick="openMicroById(${d.id})">Нет телефона — открыть</button>`;
   if(x.act==="tz") return microTzCell(d).replace('class="micro-tz-select"','class="micro-tz-select pv-inp desk-tz"');
   const ids = (x.deals||[d]).map(z=>z.id).join(",");
-  if(x.act==="pay") return `<button class="btn btn-sm btn-primary desk-pay" data-ids="${ids}">Подать на оплату · ${fmtNum(x.sum!=null?x.sum:d.cost)} ₸</button>`;
+  if(x.act==="pay") return `<button class="btn btn-sm btn-primary desk-pay" data-ids="${ids}" data-sum="${Number(x.sum!=null?x.sum:d.cost)||""}">Подать на оплату · ${fmtNum(x.sum!=null?x.sum:d.cost)} ₸</button>`;
   if(x.act==="avr") return `${wa?`<a class="btn btn-sm" target="_blank" rel="noopener" href="${escapeHtml(wa)}">Запросить АВР и ЭСФ</a>`:""}<button class="btn btn-sm desk-avr" data-ids="${ids}">Получены</button>`;
   if(x.act==="link") return `<input class="pv-inp desk-link" data-id="${d.id}" placeholder="Вставьте ссылку на Reels / TikTok" style="width:250px">`;
   return "";
@@ -10951,15 +10982,15 @@ function tplDeliveryReq(){
   </div>
   ${lead && sel.length ? `<div style="background:#FCE4EF;border-radius:12px;padding:10px 14px;margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>Выбрано: ${sel.length}</b><span class="mut" style="font-size:12px">${[...new Set(sel.map(r=>r.city).filter(Boolean))].join(", ")}</span>
     <button class="btn btn-sm btn-primary" id="dlv-logist">Скачать файл для логиста → «Подано логисту»</button><button class="btn btn-sm dlv-bulk" data-st="delivered">Доставлено</button><button class="btn btn-sm dlv-bulk" data-st="failed">Не доставлено</button><button class="btn btn-sm" id="dlv-clear">Снять</button></div>` : ""}
-  <div class="table-wrap" style="${MYDLV.loading?"opacity:.55":""}"><table>
+  <div class="table-wrap" style="${MYDLV.loading?"opacity:.55":""}"><table class="dlv-tbl">
     <thead><tr>${lead?`<th style="width:28px"><input type="checkbox" id="dlv-all" ${items.length && items.every(r=>DLV.sel.has(r.id))?"checked":""}></th>`:""}<th>Дата</th><th>Менеджер</th><th>Блогер</th><th>Город</th><th>Адрес</th><th>Что отправляем</th><th style="text-align:right">Себестоимость<br>в расходы</th><th style="text-align:right">Доставка</th><th>Статус</th><th></th></tr></thead>
     <tbody>${items.length ? items.map(r=>`<tr>
       ${lead?`<td><input type="checkbox" class="dlv-sel" data-id="${r.id}" ${DLV.sel.has(r.id)?"checked":""}></td>`:""}
       <td class="mut">${crmDate(r.createdAt)}</td><td>${escapeHtml(r.manager||"—")}</td><td>${r.dealId ? `<a href="#" onclick="openMicroById(${r.dealId});return false" style="font-weight:800;color:#2B2228">${escapeHtml(r.blogger||"—")}</a>` : `<b>${escapeHtml(r.blogger||"—")}</b>`}<div class="mut" style="font-size:11px">${escapeHtml(r.phone||"")}</div></td>
-      <td>${escapeHtml(r.city||"—")}</td><td style="max-width:200px">${escapeHtml(r.address||"")}</td><td style="max-width:240px">${what(r)}${r.note?`<div class="mut" style="font-size:11px">${escapeHtml(r.note)}</div>`:""}</td>
+      <td>${escapeHtml(r.city||"—")}</td><td class="wrap" style="min-width:160px;max-width:230px">${escapeHtml(r.address||"")}</td><td class="wrap" style="min-width:180px;max-width:280px">${what(r)}${r.note?`<div class="mut" style="font-size:11px">${escapeHtml(r.note)}</div>`:""}</td>
       <td style="text-align:right"><b>${fmtNum(r.productCost)} ₸</b></td><td style="text-align:right">${r.deliveryCost?fmtNum(r.deliveryCost)+" ₸":"—"}</td>
       <td><span class="pv-st ${DLV_CLS[r.status]||"s-m"}">${escapeHtml(DLV_LABEL[r.status]||r.status)}</span></td>
-      <td style="white-space:nowrap;text-align:right">${lead ? `${r.status!=="sent"&&r.status!=="delivered"?`<button class="btn btn-sm dlv-set" data-id="${r.id}" data-st="sent">Подано логисту</button>`:""}${r.status!=="delivered"?`<button class="btn btn-sm btn-primary dlv-set" data-id="${r.id}" data-st="delivered">Доставлено</button>`:""}${r.status!=="failed"&&r.status!=="delivered"?`<button class="btn btn-sm dlv-set" data-id="${r.id}" data-st="failed">Не доставлено</button>`:""}` : (r.status==="new" ? `<button class="btn btn-sm dlv-del" data-id="${r.id}">Отменить</button>` : "")}</td></tr>`).join("")
+      <td style="white-space:nowrap;text-align:right">${lead ? `${r.status!=="sent"&&r.status!=="delivered"?`<button class="btn btn-sm dlv-set" data-id="${r.id}" data-st="sent">Подано логисту</button>`:""}${r.status!=="delivered"?`<button class="btn btn-sm btn-primary dlv-set" data-id="${r.id}" data-st="delivered">Доставлено</button>`:""}${r.status!=="failed"&&r.status!=="delivered"?`<button class="btn btn-sm dlv-set" data-id="${r.id}" data-st="failed">Не доставлено</button>`:""}` : (r.status==="new" ? `<button class="btn btn-sm dlv-del" data-id="${r.id}">Отменить</button>` : "")}${lead || r.status!=="delivered" ? ` <button class="btn btn-sm dlv-edit" data-id="${r.id}" title="Изменить заявку: товары, адрес, телефон">✏️</button>` : ""}${lead ? ` <button class="btn btn-sm dlv-rm" data-id="${r.id}" title="Удалить заявку" style="color:var(--bad)">🗑</button>` : ""}</td></tr>`).join("")
       : `<tr><td colspan="11" class="empty">${MYDLV.loading?"Загружаю…":"Заявок нет"}</td></tr>`}</tbody></table></div>
   <div class="mut" style="font-size:12px;margin-top:8px">Себестоимость блогеру не возмещается — она только идёт в расходы интеграции (CPV, ROMI). Порядок: Новая → выделили и скачали файл для логиста (статус сам станет «Подано логисту») → «Доставлено» или «Не доставлено». «Доставлено» ставит в интеграции «товар доставлен». ${lead?"Excel — только у Саи и Нины.":""}</div>`;
 }
@@ -10976,6 +11007,11 @@ function wireDeliveryReq(){
   const setSt = async (ids, st, btn)=>{ try{ await withBusy(btn, ()=> apiFetch("/api/delivery-requests/status", {method:"POST", headers:jsonHeaders, body:JSON.stringify({ids, status:st})})); toast(DLV_LABEL[st]+": "+ids.length); DLV.sel.clear(); await DataManager.refresh(); myDlvLoad(); }catch(e){ toast(e.message, true); } };
   document.querySelectorAll(".dlv-set").forEach(b=> b.onclick = ()=> setSt([+b.dataset.id], b.dataset.st, b));
   document.querySelectorAll(".dlv-bulk").forEach(b=> b.onclick = ()=> setSt([...DLV.sel], b.dataset.st, b));
+  document.querySelectorAll(".dlv-edit").forEach(b=> b.onclick = ()=>{ const r = all.find(x=> x.id===+b.dataset.id); if(r) modalDlvNew({edit:r}); });
+  document.querySelectorAll(".dlv-rm").forEach(b=> b.onclick = ()=>{ const r = all.find(x=> x.id===+b.dataset.id); if(!r) return;
+    openModal(`<h3 style="margin:0 0 8px">Удалить заявку на доставку?</h3><div style="font-size:13px">${escapeHtml(r.blogger||"")} · ${escapeHtml(crmDate(r.createdAt))} · ${escapeHtml((r.items||[]).map(x=>x.name).join(", "))}</div><div class="mut" style="font-size:12px;margin-top:6px">Заявка удалится у всех, вернуть её нельзя.</div>
+      <div class="modal-actions"><button class="btn" onclick="closeModal()">Отмена</button><button class="btn btn-primary" id="dlv-rm-ok" style="background:var(--bad)">Удалить</button></div>`);
+    document.getElementById("dlv-rm-ok").onclick = async (e)=>{ try{ await withBusy(e.target, ()=> apiFetch("/api/delivery-requests/"+r.id, {method:"DELETE"})); closeModal(); toast("Заявка удалена"); DLV.sel.delete(r.id); myDlvLoad(); }catch(err){ toast(err.message, true); } }; });
   document.querySelectorAll(".dlv-del").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch("/api/delivery-requests/"+b.dataset.id, {method:"DELETE"})); toast("Заявка отменена"); myDlvLoad(); }catch(e){ toast(e.message, true); } });
   const lg = document.getElementById("dlv-logist"); if(lg) lg.onclick = async ()=>{ await crmDownload("/api/delivery-requests/export?logist=1&ids="+[...DLV.sel].join(","), "для_логиста.xlsx"); DLV.sel.clear(); setTimeout(myDlvLoad, 800); };
   const ex = document.getElementById("dlv-excel"); if(ex) ex.onclick = ()=> crmDownload("/api/delivery-requests/export?ids="+vis().map(r=>r.id).join(","), "заявки_на_доставку.xlsx");
@@ -11023,8 +11059,16 @@ let TZLIB = null;
 async function tzLibLoad(){ try{ TZLIB = await apiFetch("/api/tz-library"); }catch(e){ TZLIB = []; } if(UI.tab==="tzBase") render(); }
 function tzLibCatalog(base){
   if(TZLIB===null){ TZLIB = []; setTimeout(tzLibLoad, 0); }
-  if(!TZLIB.length) return base;
+  if(typeof TZT!=="undefined" && TZT===null){ TZT = []; setTimeout(tztLoad, 0); }
   const out = base.map(g=> Object.assign({}, g, {items:[...(g.items||[])]}));
+  // 27.11.2026 (Нина): все утверждённые ТЗ из «Базы ТЗ» сами попадают в справочник — менеджеры выбирают, а не вписывают вручную
+  { const nk = v=> String(v||"").trim().toLowerCase();
+    for(const x of (typeof TZT!=="undefined" && TZT) || []){ const hook = String(x.hook||"").trim(); if(!hook) continue;
+      const fam = String(x.family||"").trim(), prod = String(x.product||"").trim(), key = fam || prod || "Утверждённые ТЗ";
+      let g = out.find(y=> nk(y.group)===nk(key) || (prod && nk(y.group)===nk(prod)) || (fam && String(y.match||"").toLowerCase().split("|").includes(nk(fam))));
+      if(!g){ g = {group:key, all:false, match:[fam, prod].filter(Boolean).join("|"), items:[]}; out.push(g); }
+      if(!g.items.includes(hook)) g.items.push(hook); } }
+  if(!TZLIB.length) return out;
   for(const x of TZLIB){ if(!x.tpl || x.status==="draft" || !x.hook) continue;
     let g = out.find(y=> y.group===x.group); if(!g){ g = {group:x.group, all:false, match:x.match||"", items:[]}; out.push(g); }
     if(!g.items.includes(x.hook)) g.items.push(x.hook); }
@@ -11124,7 +11168,9 @@ function wireDesk(){
   const done = async (id, ch, msg)=>{ try{ await Api.updateMicroDeal(id, ch); const d = (DataManager.state.microInfluencerDeals||[]).find(x=>x.id===id); if(d) Object.assign(d, ch); renderDeskTab(); undoBar(msg, async ()=>{ const back = {}; Object.keys(ch).forEach(k=> back[k] = (k==="paymentStatus") ? "не оплачено" : k==="avrReceived" ? false : k==="videoStatus" ? "не опубликовано" : (d && k in d ? "" : "")); await Api.updateMicroDeal(id, back); if(d) Object.assign(d, back); renderDeskTab(); }); }catch(e){ toast(e.message,true); } };
   const doneMany = async (ids, ch, back, msg)=>{ try{ for(const id of ids){ await Api.updateMicroDeal(id, ch); const d = (DataManager.state.microInfluencerDeals||[]).find(x=>x.id===id); if(d) Object.assign(d, ch); } renderDeskTab();
       undoBar(msg, async ()=>{ for(const id of ids){ await Api.updateMicroDeal(id, back); const d = (DataManager.state.microInfluencerDeals||[]).find(x=>x.id===id); if(d) Object.assign(d, back); } renderDeskTab(); }); }catch(e){ toast(e.message,true); } };
-  document.querySelectorAll(".desk-pay").forEach(b=> b.onclick = ()=> doneMany(b.dataset.ids.split(",").map(Number), {paymentStatus:"к оплате"}, {paymentStatus:"не оплачено"}, "Подано на оплату"));
+  // 27.11.2026 (Нина): «Подать на оплату» открывает форму заявки — сумму можно поменять (меньше или больше суммы интеграции)
+  document.querySelectorAll(".desk-pay").forEach(b=> b.onclick = ()=>{ const ids = b.dataset.ids.split(",").map(Number), d = (DataManager.state.microInfluencerDeals||[]).find(x=> x.id===ids[0]); if(!d) return;
+    modalPayNew({deal:d, ids, amount: Number(b.dataset.sum)||""}); });
   document.querySelectorAll(".desk-avr").forEach(b=> b.onclick = ()=> doneMany(b.dataset.ids.split(",").map(Number), {avrReceived:true}, {avrReceived:false}, "АВР и ЭСФ получены"));
   document.querySelectorAll(".desk-link").forEach(inp=> inp.onkeydown = (e)=>{ if(e.key!=="Enter") return; const v = inp.value.trim(); if(!/^https?:\/\//.test(v)){ toast("Вставьте ссылку целиком", true); return; }
     const ch = /tiktok/i.test(v) ? {tiktokVideoLink:v, videoStatus:"опубликовано"} : {reelsLink:v, videoStatus:"опубликовано"}; const id = +inp.dataset.id; const d = (DataManager.state.microInfluencerDeals||[]).find(x=>x.id===id); if(d && !d.publishDate) ch.publishDate = todayStr() < String(d.plannedDate||"") ? todayStr() : (d.plannedDate||todayStr()); done(id, ch, "Ссылка сохранена"); });
@@ -11241,6 +11287,57 @@ function modalSendTz(tzId){
   $("st-nick").onchange = ()=>{ S.nick = bbNickNorm($("st-nick").value); S.dealId = null; paint(); };
 }
 
+// 27.11.2026 (Нина): «Артикулы» — к ШК товара привязан артикул Kaspi (номер карточки на kaspi.kz).
+// Заполняют все; если менеджер уже писал блогеру «артикул каспи 123…» по интеграции с одним ШК — это подсказка «из переписки».
+const KART = {data:null, at:0, q:"", only:""};
+async function kartLoad(){ KART.at = Date.now(); try{ KART.data = await apiFetch("/api/kaspi-articles"); }catch(e){ KART.data = KART.data || {items:{}, suggest:{}}; } if(UI.tab==="articles") render(); }
+function kartEnsure(){ if(!KART.data && !KART.loading){ KART.loading = true; kartLoad().finally(()=> KART.loading = false); } }
+function kaspiArtOfCode(code){ kartEnsure(); const D = KART.data || {}; const c = String(code||"").trim(); return (D.items && D.items[c] && D.items[c].article) || (D.suggest && D.suggest[c]) || ""; }
+function kaspiArtFor(d){ if(!d) return ""; for(const c of String(d.barcode||"").split(/[,;\s]+/).filter(Boolean)){ const a = kaspiArtOfCode(c); if(a) return a; } return ""; }
+function kaspiArtHint(d, block){ if(!d) return ""; const codes = String(d.barcode||"").split(/[,;\s]+/).filter(Boolean); if(!codes.length) return "";
+  const a = kaspiArtFor(d);
+  const body = a ? `🛒 Артикул Kaspi: <b>${escapeHtml(a)}</b> <a href="#" onclick="navigator.clipboard.writeText('${escapeHtml(a)}');toast('Артикул скопирован');return false">скопировать</a> · <a href="https://kaspi.kz/shop/p/-${encodeURIComponent(a)}/" target="_blank" rel="noopener">карточка</a>`
+    : `🛒 Артикул Kaspi для ШК ${escapeHtml(codes[0])} не заполнен — <a href="#" onclick="UI.tab='articles';KART.q='${escapeHtml(codes[0])}';closeModal&&closeModal();render();return false">заполнить</a>`;
+  return block ? `<div style="background:#FFF9E8;border:1px solid #F3E2B3;border-radius:10px;padding:7px 10px;font-size:12.5px;margin-bottom:10px">${body}<div class="mut" style="font-size:11.5px">Попросите блогера добавить артикул в описание под видео.</div></div>` : `<div style="font-size:12px;margin-top:2px">${body}</div>`;
+}
+function tplArticles(){
+  kartEnsure(); if(!PROD.list && !PROD.loading) prodLoad(); if(typeof ensureSkuCatalogLoaded==="function") ensureSkuCatalogLoaded();
+  if(KART.data && Date.now() - KART.at > 60000) setTimeout(kartLoad, 0);
+  const D = KART.data || {items:{}, suggest:{}}, q = KART.q.trim().toLowerCase();
+  const seen = new Map(); for(const r of prodRows()) if(r.code && !seen.has(r.code)) seen.set(r.code, r.name||"");
+  for(const [c, x] of Object.entries(D.items||{})) if(!seen.has(c)) seen.set(c, x.name||"");
+  // какие ШК сейчас в работе (есть интеграции без выхода) — наверх
+  const live = new Map(); for(const d of DataManager.state.microInfluencerDeals||[]){ if(microDealPublished(d)) continue; for(const c of String(d.barcode||"").split(/[,;\s]+/).filter(Boolean)) live.set(c, (live.get(c)||0)+1); }
+  let rows = [...seen.entries()].map(([code, name])=> ({code, name, art:(D.items[code]||{}).article||"", by:(D.items[code]||{}).by||"", sug:(D.suggest||{})[code]||"", live:live.get(code)||0}));
+  if(q) rows = rows.filter(x=> (x.code+" "+x.name+" "+x.art).toLowerCase().includes(q));
+  if(KART.only==="empty") rows = rows.filter(x=> !x.art); if(KART.only==="live") rows = rows.filter(x=> x.live);
+  rows.sort((a,b)=> (b.live>0)-(a.live>0) || (!a.art)-(!b.art) || b.live-a.live || String(a.name).localeCompare(String(b.name),"ru"));
+  const filled = [...seen.keys()].filter(c=> (D.items[c]||{}).article).length;
+  return `
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+    <div><h1 style="margin:0;font-size:22px;font-weight:800">Артикулы Kaspi</h1><div class="mut" style="margin-top:3px">ШК товара → номер карточки на kaspi.kz. Подсказка появляется в чате с блогером, в окне «Одобрить видео» и в быстрой фразе «Артикул».</div></div>
+    <div class="mut" style="font-size:12.5px">заполнено ${filled} из ${seen.size}</div>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+    <input id="ka-q" class="pv-inp" placeholder="🔍 товар, ШК или артикул" value="${escapeHtml(KART.q)}" style="min-width:260px">
+    ${[["","Все"],["live","Сейчас в работе"],["empty","Без артикула"]].map(([k,l])=>`<button class="pv-chip ka-only ${KART.only===k?"on":""}" data-k="${k}">${l}</button>`).join("")}
+  </div>
+  <div class="table-wrap"><table class="dlv-tbl"><thead><tr><th>Товар</th><th>ШК</th><th>В работе</th><th style="min-width:230px">Артикул Kaspi</th><th></th></tr></thead><tbody>
+  ${rows.slice(0,400).map(x=>`<tr><td class="wrap">${escapeHtml(x.name||"—")}</td><td class="mut">${escapeHtml(x.code)}</td><td>${x.live?`<span class="pv-st s-blue">${x.live}</span>`:`<span class="mut">—</span>`}</td>
+    <td><input class="pv-inp ka-art" data-c="${escapeHtml(x.code)}" data-n="${escapeHtml(x.name||"")}" value="${escapeHtml(x.art)}" placeholder="${x.sug?"из переписки: "+escapeHtml(x.sug):"номер с kaspi.kz"}" style="width:150px">${x.sug && !x.art ? ` <button class="btn btn-sm ka-sug" data-c="${escapeHtml(x.code)}" data-n="${escapeHtml(x.name||"")}" data-a="${escapeHtml(x.sug)}" title="Взять артикул из переписки">✓ ${escapeHtml(x.sug)}</button>` : ""}${x.by?`<div class="mut" style="font-size:11px">${escapeHtml(x.by)}</div>`:""}</td>
+    <td>${x.art?`<a href="https://kaspi.kz/shop/p/-${encodeURIComponent(x.art)}/" target="_blank" rel="noopener">открыть на Kaspi</a>`:""}</td></tr>`).join("") || `<tr><td colspan="5" class="empty">${KART.data?"Ничего не найдено":"Загружаю…"}</td></tr>`}
+  </tbody></table></div>
+  <div class="mut" style="font-size:12px;margin-top:8px">Артикул сохраняется, как только вы уйдёте из поля. ${rows.length>400?"Показаны первые 400 — уточните поиск.":""}</div>`;
+}
+function wireArticles(){
+  const q = document.getElementById("ka-q"); if(q){ q.oninput = ()=>{ KART.q = q.value; clearTimeout(KART.t); KART.t = setTimeout(()=>{ render(); const q2 = document.getElementById("ka-q"); if(q2){ q2.focus(); q2.setSelectionRange(q2.value.length, q2.value.length); } }, 300); }; }
+  document.querySelectorAll(".ka-only").forEach(b=> b.onclick = ()=>{ KART.only = b.dataset.k; render(); });
+  const save = async (code, name, article, el)=>{ try{ const r = await apiFetch("/api/kaspi-articles/"+encodeURIComponent(code), {method:"PUT", headers:jsonHeaders, body:JSON.stringify({article, name})});
+      KART.data = KART.data || {items:{}, suggest:{}}; if(r.item) KART.data.items[code] = r.item; else delete KART.data.items[code]; toast(article ? "Артикул сохранён" : "Артикул убран"); if(el && el.tagName==="BUTTON") render(); }catch(e){ toast(e.message, true); } };
+  document.querySelectorAll(".ka-art").forEach(i=> i.onchange = ()=> save(i.dataset.c, i.dataset.n, i.value.trim(), i));
+  document.querySelectorAll(".ka-sug").forEach(b=> b.onclick = ()=> save(b.dataset.c, b.dataset.n, b.dataset.a, b));
+}
+
 // 24.11.2026: готовые фразы в чате — клик вставляет текст, менеджер правит и отправляет.
 const CHAT_PHRASES = [
   ["Приветствие", "Добрый день! Меня зовут {имя}, я менеджер MIXIT 💚 Хотим предложить вам сотрудничество — расскажу подробнее?"],
@@ -11252,6 +11349,9 @@ const CHAT_PHRASES = [
   ["Статистика", "Пришлите, пожалуйста, скрины статистики (просмотры, охват, клики) через 3 дня после публикации."],
   ["Реквизиты", "Для оплаты пришлите, пожалуйста: ФИО, ИИН и номер Kaspi."],
   ["Реквизиты ИП", "Для оплаты по ИП пришлите, пожалуйста, реквизиты ИП (ИИН, IBAN, банк, БИК, КБе, адрес) — подготовим договор."],
+  // 27.11.2026 (Нина): запрос закрывающих документов по ИП и артикул Kaspi для описания под видео
+  ["Запросить АВР/ЭСФ", "Добрый день! Для закрытия оплаты по ИП пришлите, пожалуйста, АВР (акт выполненных работ) и выпишите ЭСФ (электронный счёт-фактуру) 🙏 Спасибо!"],
+  ["Артикул", "Для описания под видео: артикул на Kaspi — {артикул} 🙌"],
   ["Товар отправлен", "Товар отправили 📦 Как получите — напишите, пожалуйста."],
   ["Оплата", "Добрый день! Направили вам оплату 💚🙌"],
   ["Спасибо", "Спасибо за сотрудничество! Будем рады работать снова 💚"],
@@ -11267,6 +11367,7 @@ function wireDeskTab(){
   if(UI.tab==="deliveryReq"){ wireDeliveryReq(); return; }
   if(UI.tab==="contracts"){ wireContracts(); return; }
   if(UI.tab==="accounts"){ wireAccounts(); return; }
+  if(UI.tab==="articles"){ wireArticles(); return; }
   if(UI.tab==="crmProducts"){ wireCrmProducts(); return; }
   if(UI.tab==="desk"){ wireDesk(); return; }
   if(UI.tab==="control"){ wireControl(); return; }
