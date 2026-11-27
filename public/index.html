@@ -3682,10 +3682,12 @@ const MGR_TABS = [{id:"desk",label:"Рабочий стол"},{id:"crmBloggers",
 function isMgrOnly(){ return UI.role==="marketer" && UI.lvl==="manager"; }
 // 27.11.2026 (Нина): Ольга и Алтынай — крупные интеграции: всё как раньше + Блогеры, База ТЗ, Оплаты, Доставки (свои).
 function isLargeUser(){ return ["Ольга","Алтынай"].includes(UI.actorName); }
+// 27.11.2026 (Нина): руководство (Сауле, Мария, Константин) видит всё, но без Рабочего стола и без уведомлений от менеджеров.
+function isBoss(){ return UI.role==="marketer" && ["Сауле","Мария","Константин"].includes(UI.actorName); }
 // Чьи данные видит тимлид: себя и свою команду (null — без ограничений).
 function bbScopeNames(){ return UI.role==="marketer" && UI.lvl==="lead" && UI.actorName ? [UI.actorName].concat(UI.team||[]) : null; }
 function tabsForRole(){
-  const t = tabsForRoleRaw();
+  const t = tabsForRoleRaw().filter(x=> !(isBoss() && x.id==="desk"));
   if(UI.role==="marketer" && UI.actorName==="Нина") t.push({id:"accounts", label:"Учётки"});
   if(t.length && !t.some(x=> x.id===UI.tab)) UI.tab = t[0].id;
   return t;
@@ -10069,7 +10071,7 @@ function attentionItems(){
   return out.sort((a,b)=> b.sev-a.sev || String(a.d.plannedDate).localeCompare(String(b.d.plannedDate)));
 }
 function tplAttention(){
-  if(!UI.actorName || isLargeUser()) return "";
+  if(!UI.actorName || isLargeUser() || isBoss()) return "";
   const items = attentionItems();
   const col = s=> s>=3 ? "var(--bad)" : s===2 ? "var(--warn)" : "var(--action)";
   return `<div class="panel" style="margin-bottom:14px">
@@ -10523,6 +10525,7 @@ function deskAction(x){
 }
 // Блогер предложил другую дату — менеджер принимает или оставляет как было (23.11.2026: было в «колокольчике», теперь здесь и в карточке).
 function deskDateProposals(dealId){
+  if(isBoss()) return [];
   const c = DataManager.state.coord; if(!c || !Array.isArray(c.events)) return [];
   const deals = new Map((DataManager.state.microInfluencerDeals||[]).map(d=>[d.id, d]));
   return c.events.filter(e=> !e.read && e.proposedDate && (dealId ? e.dealId===dealId : (crmIsLeadName() || actorMatchesResponsible(UI.actorName||"", e.to))) && (!e.dealId || deals.has(e.dealId)))
@@ -16614,7 +16617,7 @@ document.addEventListener("DOMContentLoaded", async ()=>{
   loadSession();
   if(UI.authToken && UI.role && UI.role!=="driver"){
     try{ const me = await Api.me(); UI.canExport = !!me.canExport; UI.lvl = me.lvl || null; UI.team = me.team || []; if(me.name) saveActor(me.name); saveSession(); }catch(e){}
-    if(UI.actorName && !isLargeUser() && UI.tab==="dashboard") UI.tab = "desk";
+    if(UI.actorName && !isLargeUser() && !isBoss() && UI.tab==="dashboard") UI.tab = "desk";
   }
   try{
     await DataManager.load();
