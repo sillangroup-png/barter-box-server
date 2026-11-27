@@ -34,7 +34,7 @@ function createClient({getState,persist,fetchImpl=fetch,env=process.env}){
    if(!response.ok)throw Error('HTTP '+response.status);const result=await response.json();if(!result.id)throw Error('Ответ без ID запроса');Object.assign(row,{status:'received',remoteRequestId:result.id,url:origin+'/?flow_request='+encodeURIComponent(result.id),receivedAt:new Date().toISOString(),lastError:null});
   }catch(e){row.lastError=/^HTTP \d+$/.test(e.message)?e.message:'Ошибка связи с Blogery Audit';}persist();}
   // Готовые ТЗ из Blogery Audit (18.11.2026): забираем PDF, утверждаем версию в интеграции, включаем отправку блогеру в WhatsApp.
-  const base=String(env.BLOGERY_REQUESTS_URL||'').replace(/\/+$/,'');const waiting=store().filter(r=>['received','approved'].includes(r.status)&&r.remoteRequestId&&(!r.readyNextAt||r.readyNextAt<=Date.now())).slice(0,30);
+  const base=String(env.BLOGERY_REQUESTS_URL||'').replace(/\/+$/,'');const waiting=store().filter(r=>['received','approved'].includes(r.status)&&r.remoteRequestId&&(!r.readyNextAt||r.readyNextAt<=Date.now())).sort((a,b)=>(a.readyNextAt||0)-(b.readyNextAt||0)).slice(0,30);/* 27.11.2026: по очереди — раньше брались всегда первые 30 из 100+, новые запросы (Надира, Анастасия) не проверялись и готовые ТЗ не приходили */
   if(base&&waiting.length){for(const r of waiting)r.readyNextAt=Date.now()+60000;try{
    const resp=await fetchImpl(new URL(base+'/status'),{method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),headers:{Authorization:'Bearer '+env.BLOGERY_BRIDGE_SECRET,'Content-Type':'application/json'},body:JSON.stringify({ids:waiting.map(r=>r.remoteRequestId)})});
    const data=resp.ok?await resp.json():{};
