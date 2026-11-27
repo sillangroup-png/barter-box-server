@@ -3602,6 +3602,8 @@ const STAFF_GROUPS = [["Менеджеры",["Камила","Зарина","Ма
       </div>
       <button class="btn btn-primary" id="staff-login-btn" style="width:100%;justify-content:center">Войти</button>
     `;
+    // 27.11.2026: маркетологи входят только по личному логину — имя выбирать не нужно
+    if(role==="marketer"){ const f = document.getElementById("staff-actor-input").closest(".field"); if(f) f.style.display = "none"; }
     const submit = async ()=>{
       const login = document.getElementById("staff-login-input").value.trim();
       const password = document.getElementById("staff-password-input").value;
