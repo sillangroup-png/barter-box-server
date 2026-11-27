@@ -33,7 +33,10 @@
 //    один раз (строка крупных), вторая duplicate. Отменённые (cancelled) не считаются.
 // ============================================================================
 
-const PARAMS_VERSION = "attrib-v13.1-2026-11-20";
+const PARAMS_VERSION = "attrib-v13.2-2026-11-27";
+// v13.2 (27.11.2026, Madlen 7–8.11: охват не заполнен → брался медианный охват ВСЕХ выходов ≈9,7 тыс. и потолок 25 ₸/просмотр
+//   срезал вклад до ~242 тыс.): если охват не заполнен — сначала охват этого же блогера по другим выходам, потом медиана
+//   своего типа (крупные отдельно от микро); при охвате «по медиане» потолок по охвату не применяется.
 // v13 (20.11.2026, замечание Нины: «5 000 просмотров не принесут 500 000 продаж»; смены цен; Kaspi Жұма 5–8.11):
 // 1) потолок жёстче и по деньгам: не больше 1 покупки на 330 просмотров И не больше 25 ₸ вклада на просмотр
 //    (25 ₸ — 95% всех 831 выходов MIXIT в Blogery Audit; медиана 1,8 ₸). Потолок действует и когда охват оценён.
@@ -285,6 +288,12 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
   const ratios = placements.filter((p) => Number(p.reach) > 0 && Number(p.followers) > 0).map((p) => Number(p.reach) / Number(p.followers));
   const reachRatio = Math.min(3, Math.max(0.05, median(ratios) || 0.3));
   const medianReach = median(placements.map((p) => Number(p.reach)).filter((x) => x > 0)) || 10000;
+  const medianReachBySource = {};
+  for (const src of new Set(placements.map((p) => p.source))) medianReachBySource[src] = median(placements.filter((p) => p.source === src).map((p) => Number(p.reach)).filter((x) => x > 0)) || medianReach;
+  // Охват этого же блогера по другим выходам (ник без @, точек и подчёркиваний: @madlen = @_m_a_d_l_e_n).
+  const hkey = (h) => normalizeHandle(h).replace(/[^a-z0-9а-яё]/g, "");
+  const ownReach = new Map();
+  for (const p of placements) { const k = hkey(p.blogger_handle), r = Number(p.reach); if (k && r > 0) (ownReach.get(k) || ownReach.set(k, []).get(k)).push(r); }
 
   // --- 1. Кто участвует ---
   const eligible = [];
@@ -320,7 +329,8 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
     const followers = Math.max(0, ...members.map((m) => Number(m.followers) || 0));
     if (reaches.length) { primary.reachUsed = Math.max(...reaches); primary.reachEstimated = null; }
     else if (followers > 0) { primary.reachUsed = Math.round(followers * reachRatio); primary.reachEstimated = `охват не заполнен — оценка по подписчикам: ${fmt(followers)} × ${reachRatio.toFixed(2)} ≈ ${fmt(primary.reachUsed)}`; }
-    else { primary.reachUsed = Math.round(medianReach); primary.reachEstimated = `охват и подписчики не заполнены — взят медианный охват выходов ≈ ${fmt(primary.reachUsed)}`; }
+    else if (ownReach.has(hkey(primary.blogger_handle))) { primary.reachUsed = Math.round(median(ownReach.get(hkey(primary.blogger_handle)))); primary.reachEstimated = `охват не заполнен — взят охват этого блогера по другим выходам ≈ ${fmt(primary.reachUsed)}`; }
+    else { primary.reachUsed = Math.round(medianReachBySource[primary.source] || medianReach); primary.reachFromMedian = true; primary.reachEstimated = `охват и подписчики не заполнены — взят медианный охват ${primary.source === "barter_box_deals" ? "крупных" : "микро"} выходов ≈ ${fmt(primary.reachUsed)}`; }
     primary.weight = Math.sqrt(primary.reachUsed) * primary.format.coef;
     primary.duplicates = members.slice(1);
     primaries.push(primary);
@@ -537,7 +547,7 @@ function planAttribution({ placements, resolution, daily, weekdayFactor, listedS
       let uS = tl.u, kS = tl.k;
       let units = u0 + uT + uS, capped = false;
       // v13: потолок по охвату — и в покупках, и в тенге; действует и при оценённом охвате
-      if (units > 0 && m.reachUsed > 0) {
+      if (units > 0 && m.reachUsed > 0 && !m.reachFromMedian) {
         const kU = units > m.reachUsed * MAX_PURCHASES_PER_VIEW ? (m.reachUsed * MAX_PURCHASES_PER_VIEW) / units : 1;
         const kzt = (k0 + kT + kS) * kU;
         const kK = kzt > m.reachUsed * MAX_KZT_PER_VIEW ? (m.reachUsed * MAX_KZT_PER_VIEW) / kzt : 1;
