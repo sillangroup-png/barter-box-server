@@ -23,6 +23,9 @@ const { Pool } = require("pg");
 // переживают перезапуск/передеплой контейнера. Без переменных — как раньше,
 // рядом с server.js (локальный запуск, Docker с volume).
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
+// 27.11.2026 (Нина): личные учётки сотрудников — см. accounts.js
+const accountsMod = require("./accounts");
+let ACCOUNTS = null; try{ fs.mkdirSync(DATA_DIR, {recursive:true}); ACCOUNTS = accountsMod.createAccounts({dataDir: DATA_DIR}); }catch(e){ console.error("Учётки:", e.message); }
 const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
 const STATE_PATH = path.join(DATA_DIR, "state.json");
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -999,9 +1002,17 @@ app.post("/api/auth/login", (req,res)=>{
   const personal = PERSONAL_USERS.find(u=> u.login && u.password && u.login===login && u.password===password);
   if(personal){
     loginFails.delete(ip);
-    const token = signSession({role, name: personal.name, canExport: true});
+    const token = signSession({role, name: personal.name, canExport: true, lvl: accountsMod.lvlOf(personal.name), team: accountsMod.teamOf(personal.name)});
     return res.json({ok:true, token, name: personal.name, canExport: true});
   }
+  // Личные учётки сотрудников (пароль задан по ссылке-приглашению) — вход всегда как маркетолог
+  const acc = ACCOUNTS && login && password ? ACCOUNTS.verify(login, password) : null;
+  if(acc){
+    loginFails.delete(ip);
+    const token = signSession({role:"marketer", name: acc.name, canExport: EXPORT_NAMES.has(acc.name), lvl: acc.lvl, team: accountsMod.teamOf(acc.name)});
+    return res.json({ok:true, token, role:"marketer", name: acc.name, canExport: EXPORT_NAMES.has(acc.name)});
+  }
+  if(ACCOUNTS && actor && ACCOUNTS.hasPassword(actor)) return res.status(403).json({error: actor + " входит по своему логину и паролю, не через общий"});
   const personalNames = new Set(PERSONAL_USERS.filter(u=>u.login && u.password).map(u=>u.name));
   if(personalNames.has(actor)) return res.status(403).json({error: actor + " входит по своему логину и паролю, не через общий"});
   // Логин маркетолога "только просмотр" (см. MARKETER_VIEWERS) — отдельные учётки, которые
@@ -1038,7 +1049,8 @@ app.post("/api/auth/login", (req,res)=>{
 // Кто я: имя и права из подписанной сессии (браузер берёт их отсюда, а не из своей памяти).
 app.get("/api/auth/me", requireAuth, (req,res)=>{
   const s = req.session || {};
-  res.json({role: s.role, name: s.name || null, readOnly: !!s.readOnly, canExport: !!s.canExport, staff: STAFF_NAMES});
+  const lvl = s.lvl || accountsMod.lvlOf(s.name) || null;
+  res.json({role: s.role, name: s.name || null, readOnly: !!s.readOnly, canExport: !!s.canExport, staff: STAFF_NAMES, lvl, team: lvl==="lead" ? accountsMod.teamOf(s.name) : []});
 });
 
 // ---------- авторизация водителя (по номеру телефона, на который его добавили) ----------
@@ -1054,6 +1066,25 @@ app.post("/api/auth/driver-login", (req,res)=>{
   const token = signSession({role:"driver", driverCode: drv.code});
   res.json({ok:true, token, driverCode: drv.code, name: drv.name});
 });
+
+// ---------- Личные учётки: приглашения (делает Нина), задать пароль по ссылке ----------
+const accAdmin = (req,res)=>{ if((req.session||{}).name!=="Нина"){ res.status(403).json({error:"Учётками управляет Нина"}); return false; } if(!ACCOUNTS){ res.status(503).json({error:"Учётки недоступны"}); return false; } return true; };
+app.get("/api/accounts", requireAuth, async (req,res)=>{ if(!accAdmin(req,res)) return; await ACCOUNTS.ready; res.json(ACCOUNTS.list()); });
+app.post("/api/accounts/:login/invite", requireAuth, async (req,res)=>{ if(!accAdmin(req,res)) return;
+  try{ await ACCOUNTS.ready; const {token, user} = await ACCOUNTS.invite(req.params.login); const origin = (req.headers["x-forwarded-proto"]||"https")+"://"+req.headers.host;
+    res.json({ok:true, name:user.name, login:user.login, link: origin + "/?invite=" + token}); }catch(e){ res.status(400).json({error:e.message}); } });
+app.post("/api/accounts/:login/disable", requireAuth, async (req,res)=>{ if(!accAdmin(req,res)) return;
+  try{ await ACCOUNTS.ready; await ACCOUNTS.setDisabled(req.params.login, !!(req.body||{}).disabled); res.json({ok:true}); }catch(e){ res.status(400).json({error:e.message}); } });
+app.get("/api/auth/invite-info", async (req,res)=>{ if(!ACCOUNTS) return res.status(503).json({error:"Учётки недоступны"}); await ACCOUNTS.ready;
+  const u = ACCOUNTS.inviteUser(String(req.query.t||"")); if(!u) return res.status(404).json({error:"Ссылка недействительна или устарела — попросите Нину сделать новую"}); res.json({name:u.name, login:u.login}); });
+app.post("/api/auth/invite", async (req,res)=>{
+  const ip = String(req.headers["x-forwarded-for"] || req.ip || "").split(",")[0].trim();
+  if(loginBlocked(ip)) return res.status(429).json({error:"Слишком много попыток — подождите 15 минут"});
+  if(!ACCOUNTS) return res.status(503).json({error:"Учётки недоступны"});
+  try{ await ACCOUNTS.ready; const u = await ACCOUNTS.accept(String((req.body||{}).token||""), String((req.body||{}).password||""));
+    const token = signSession({role:"marketer", name:u.name, canExport: EXPORT_NAMES.has(u.name), lvl:u.lvl, team: accountsMod.teamOf(u.name)});
+    res.json({ok:true, token, role:"marketer", name:u.name, login:u.login, canExport: EXPORT_NAMES.has(u.name)}); }
+  catch(e){ loginFailed(ip); res.status(400).json({error:e.message}); } });
 
 app.post("/api/auth/logout", (req,res)=>{
   const token = getToken(req);
