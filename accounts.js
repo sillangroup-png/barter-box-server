@@ -16,6 +16,7 @@ const LIST = [
   { login: "saule", name: "Сауле", lvl: "admin" },
   { login: "mariya", name: "Мария", lvl: "admin" },
   { login: "konstantin", name: "Константин", lvl: "admin" },
+  { login: "ayauzhan", name: "Аяужан", lvl: "admin" }, // 27.11.2026: видит всё и выгружает, без рабочего стола
   { login: "kamila", name: "Камила", lvl: "manager" },
   { login: "zarina", name: "Зарина", lvl: "manager" },
   { login: "marina", name: "Марина", lvl: "manager" },

@@ -89,7 +89,7 @@ const PERSONAL_USERS = [
   {name:"Нина", login: process.env.NINA_LOGIN || null, password: process.env.NINA_PASSWORD || null},
   {name:"Сая",  login: process.env.SAYA_LOGIN || null, password: process.env.SAYA_PASSWORD || null},
 ];
-const EXPORT_NAMES = new Set(["Нина","Сая"]);
+const EXPORT_NAMES = new Set(["Нина","Сая","Аяужан"]); // 27.11.2026: Аяужан — выгрузки (сводный отчёт и др.)
 function normName(n){ return String(n||"").trim().replace(/\s+/g," ").slice(0,40); }
 // Простая защита от подбора пароля: 5 неверных попыток с одного IP — пауза 15 минут.
 const loginFails = new Map();
