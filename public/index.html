@@ -3609,7 +3609,8 @@ const STAFF_GROUPS = [["Менеджеры",["Камила","Зарина","Ма
         const data = await withBusy(btn, ()=> Api.login(role, login, password, actor));
         if(!data.name && !actor){ toast("Выберите ваше имя", true); return; }
         saveActor(data.name || actor);
-        UI.role = role; UI.authToken = data.token; UI.readOnly = !!data.readOnly; UI.canExport = !!data.canExport; saveSession(); UI.tab = (data.name||actor)==="Ольга" ? "dashboard" : "desk";
+        UI.role = data.role || role; UI.authToken = data.token; UI.readOnly = !!data.readOnly; UI.canExport = !!data.canExport; saveSession(); UI.tab = (data.name||actor)==="Ольга" ? "dashboard" : "desk";
+        try{ const me = await Api.me(); UI.lvl = me.lvl || null; UI.team = me.team || []; }catch(e){}
         await DataManager.load(); // токена не было до этого момента — предыдущая попытка загрузки данных 401'ится
         render();
         await maybeOpenFlowCrmProfile();
@@ -3672,11 +3673,22 @@ const MARKETER_TABS = [
   {id:"microCalendar",    label:"Планер блогеров"},
   {id:"report",           label:"Сводный отчёт"},
 ];
+// 27.11.2026 (Нина): менеджер видит свой рабочий стол, базу блогеров, базу ТЗ, интеграции микро/средние, планер,
+// свои оплаты, доставки и договоры. Дашборд, сводный отчёт, интеграции крупные, публикации, контроль, товары — нет.
+const MGR_TABS = [{id:"desk",label:"Рабочий стол"},{id:"crmBloggers",label:"Блогеры"},{id:"tzBase",label:"База ТЗ"},{id:"microInfluencers",label:"Интеграции микро/средние"},{id:"microCalendar",label:"Планер блогеров"},{id:"crmPayments",label:"Оплаты"},{id:"deliveryReq",label:"Доставки"},{id:"contracts",label:"Договоры"}];
+function isMgrOnly(){ return UI.role==="marketer" && UI.lvl==="manager"; }
 function tabsForRole(){
+  const t = tabsForRoleRaw();
+  if(UI.role==="marketer" && UI.actorName==="Нина") t.push({id:"accounts", label:"Учётки"});
+  if(t.length && !t.some(x=> x.id===UI.tab)) UI.tab = t[0].id;
+  return t;
+}
+function tabsForRoleRaw(){
   const base = UI.role==="marketer" ? MARKETER_TABS : MANAGER_TABS;
   if(UI.actorName==="Ольга") return base; // у Ольги интерфейс без изменений
+  if(isMgrOnly()) return MGR_TABS.slice();
   // Руководство (Мария, Сауле, Константин) — только обычные вкладки, без Рабочего стола, команд и оплат (прототип X9).
-  if(["Мария","Сауле","Константин"].includes(UI.actorName)) return [{id:"dashboard",label:"Дашборд"},{id:"publications",label:"Публикации"},{id:"influencerDeals",label:"Интеграции крупные"},{id:"microInfluencers",label:"Интеграции микро/средние"},{id:"control",label:"Контроль"},{id:"microCalendar",label:"Планер блогеров"},{id:"report",label:"Сводный отчёт"}];
+  // 27.11.2026: Мария, Сауле, Константин видят всё, как Нина (раньше — урезанный набор «руководства»)
   // Вкладки по прототипу: Дашборд · Рабочий стол · Блогеры · База ТЗ · Интеграции крупные · микро/средние · Планер.
   // Логистика (менеджер/логист) — свои вкладки после основных. Тимлидам — Товары, Публикации, Сводный; Нине — Оплаты.
   const lead = crmIsLeadName();
@@ -3777,6 +3789,7 @@ function renderDeskTab(){
   else if(UI.tab==="tzBase") main.innerHTML = tplTzBase();
   else if(UI.tab==="deliveryReq") main.innerHTML = tplDeliveryReq();
   else if(UI.tab==="contracts") main.innerHTML = tplContracts();
+  else if(UI.tab==="accounts") main.innerHTML = tplAccounts();
   else if(UI.tab==="control") main.innerHTML = tplControl();
   wireDeskTab();
   if(scrollPositions.length){
@@ -9996,7 +10009,7 @@ function dateCheckList(){
   return (DataManager.state.microInfluencerDeals||[]).filter(d=> !d.agreedDate && !d.datesChecked && !microDealPublished(d) && !d.publishDate
     && /^\d{4}-\d{2}-\d{2}/.test(d.plannedDate||"") && d.plannedDate >= today && (crmIsLeadName() || !UI.actorName || d.responsible===UI.actorName));
 }
-function crmIsLeadName(){ return ["Нина","Сая","Анеля","Сауле","Мария"].includes(UI.actorName); }
+function crmIsLeadName(){ return ["Нина","Сая","Анеля","Сауле","Мария","Константин"].includes(UI.actorName); }
 function tplDateCheckBanner(){
   const list = dateCheckList(); if(!list.length) return "";
   return `<div class="login-hint" style="margin:0 0 12px;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;text-align:left;background:#FFF6E3;border-color:#F6E2B8">
@@ -11200,6 +11213,7 @@ function wireDeskTab(){
   if(UI.tab==="crmPayments"){ wireCrmPayments(); return; }
   if(UI.tab==="deliveryReq"){ wireDeliveryReq(); return; }
   if(UI.tab==="contracts"){ wireContracts(); return; }
+  if(UI.tab==="accounts"){ wireAccounts(); return; }
   if(UI.tab==="crmProducts"){ wireCrmProducts(); return; }
   if(UI.tab==="desk"){ wireDesk(); return; }
   if(UI.tab==="control"){ wireControl(); return; }
@@ -12463,7 +12477,51 @@ function renderDriverOrderModal(){
 /* =========================================================================
    11. ГЛАВНЫЙ РЕНДЕР
    ========================================================================= */
+// ---------- Учётки (только Нина): ссылка-приглашение, по которой человек сам задаёт пароль ----------
+const ACC = {list:null, links:{}};
+const ACC_LVL = {admin:"видит всё", lead:"тимлид — своя команда", manager:"менеджер — только своё"};
+async function accLoad(){ try{ ACC.list = await apiFetch("/api/accounts"); ACC.err = null; }catch(e){ ACC.list = []; ACC.err = e.message; } if(UI.tab==="accounts") render(); }
+function tplAccounts(){
+  if(ACC.list===null){ ACC.list = []; setTimeout(accLoad, 0); }
+  const st = a=> a.disabled ? `<span class="pv-st s-bad">отключена</span>` : a.hasPassword ? `<span class="pv-st s-ok">пароль задан ${a.setAt?new Date(a.setAt).toLocaleDateString("ru-RU"):""}</span>` : a.invitePending ? `<span class="pv-st s-w">ссылка ждёт до ${new Date(a.inviteExp).toLocaleDateString("ru-RU")}</span>` : `<span class="pv-st">не заведена</span>`;
+  return `<div class="panel" style="padding:0;overflow:hidden"><div style="padding:14px 16px"><b style="font-size:15px">Учётки сотрудников</b>
+    <div class="mut" style="font-size:12px;margin-top:4px">Нажмите «Ссылка для входа» и отправьте её человеку лично (WhatsApp). По ссылке он сам задаёт пароль — вы его не видите. Ссылка одноразовая, действует 7 дней. Забыл пароль — сделайте новую ссылку. Пока пароль не задан, человек входит по-старому, через общий логин.</div>${ACC.err?`<div style="color:var(--bad);margin-top:6px">${escapeHtml(ACC.err)}</div>`:""}</div>
+    <table><thead><tr><th>Кто</th><th>Логин</th><th>Доступ</th><th>Статус</th><th></th></tr></thead><tbody>
+    ${(ACC.list||[]).map(a=> `<tr><td><b>${escapeHtml(a.name)}</b>${a.lead?`<div class="mut" style="font-size:11.5px">тимлид: ${escapeHtml(a.lead)}</div>`:""}</td><td><code>${escapeHtml(a.login)}</code></td><td class="mut">${escapeHtml(ACC_LVL[a.lvl]||a.lvl)}</td><td>${st(a)}</td>
+      <td style="text-align:right;white-space:nowrap"><button class="btn btn-sm btn-primary acc-inv" data-l="${escapeHtml(a.login)}">${a.hasPassword?"Новая ссылка (сброс пароля)":"Ссылка для входа"}</button> <button class="btn btn-sm acc-dis" data-l="${escapeHtml(a.login)}" data-d="${a.disabled?"0":"1"}">${a.disabled?"Включить":"Отключить"}</button>
+      ${ACC.links[a.login]?`<div style="margin-top:6px;display:flex;gap:6px;justify-content:flex-end"><input readonly value="${escapeHtml(ACC.links[a.login])}" style="width:300px;font-size:11.5px" onclick="this.select()"><button class="btn btn-sm acc-copy" data-l="${escapeHtml(a.login)}">Копировать</button></div>`:""}</td></tr>`).join("")}
+    </tbody></table>
+    <div class="mut" style="font-size:12px;padding:12px 16px">Нина и Сая входят по своим логинам, как раньше. Тимлиды: Нина — Мадина, Марина, Зарина, Камила; Сая — Надира, Анастасия, Сабрина, Оксана; Анеля — Ажар.</div></div>`;
+}
+function wireAccounts(){
+  document.querySelectorAll(".acc-inv").forEach(b=> b.onclick = async ()=>{ const l = b.dataset.l, a = (ACC.list||[]).find(x=> x.login===l);
+    if(a && a.hasPassword && !confirm("У "+a.name+" уже есть пароль. Новая ссылка позволит задать другой — старый перестанет действовать после смены. Сделать?")) return;
+    try{ const r = await withBusy(b, ()=> apiFetch("/api/accounts/"+encodeURIComponent(l)+"/invite", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"})); ACC.links[l] = r.link;
+      try{ await navigator.clipboard.writeText(r.link); toast("Ссылка для "+r.name+" скопирована — отправьте ей лично"); }catch(e){ toast("Ссылка готова — скопируйте её"); } accLoad(); }catch(e){ toast(e.message, true); } });
+  document.querySelectorAll(".acc-copy").forEach(b=> b.onclick = async ()=>{ try{ await navigator.clipboard.writeText(ACC.links[b.dataset.l]); toast("Скопировано"); }catch(e){ toast("Выделите и скопируйте вручную", true); } });
+  document.querySelectorAll(".acc-dis").forEach(b=> b.onclick = async ()=>{ try{ await withBusy(b, ()=> apiFetch("/api/accounts/"+encodeURIComponent(b.dataset.l)+"/disable", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({disabled: b.dataset.d==="1"})})); accLoad(); }catch(e){ toast(e.message, true); } });
+}
+function renderInvite(token){
+  const app = document.getElementById("app");
+  app.innerHTML = `<div class="login-wrap" style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px"><div class="panel" style="max-width:380px;width:100%;padding:22px">
+    <div class="logo" style="margin-bottom:10px"><span class="mark">BB</span> Barter Box</div><div id="inv-body" class="mut">Проверяю ссылку…</div></div></div>`;
+  fetch("/api/auth/invite-info?t="+encodeURIComponent(token)).then(r=> r.json().then(j=> ({ok:r.ok, j}))).then(({ok, j})=>{
+    const b = document.getElementById("inv-body"); if(!b) return;
+    if(!ok){ b.innerHTML = `<div style="color:var(--bad)">${escapeHtml(j.error||"Ссылка недействительна")}</div>`; return; }
+    b.className = ""; b.innerHTML = `<b style="font-size:16px">${escapeHtml(j.name)}, задайте пароль</b>
+      <div class="mut" style="font-size:12.5px;margin:6px 0 12px">Ваш логин: <b>${escapeHtml(j.login)}</b>. Пароль — минимум 8 символов, никому его не сообщайте.</div>
+      <input type="password" id="inv-p1" placeholder="Пароль" autocomplete="new-password" style="width:100%;margin-bottom:8px"><input type="password" id="inv-p2" placeholder="Повторите пароль" autocomplete="new-password" style="width:100%;margin-bottom:12px">
+      <button class="btn btn-primary" id="inv-ok" style="width:100%">Сохранить и войти</button>`;
+    document.getElementById("inv-ok").onclick = async ()=>{ const p1 = document.getElementById("inv-p1").value, p2 = document.getElementById("inv-p2").value;
+      if(p1.length < 8) return toast("Пароль — минимум 8 символов", true); if(p1 !== p2) return toast("Пароли не совпадают", true);
+      try{ const r = await fetch("/api/auth/invite", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({token, password:p1})}); const d = await r.json(); if(!r.ok) throw Error(d.error||"Не сохранилось");
+        history.replaceState(null, "", location.pathname); saveActor(d.name); UI.role = d.role || "marketer"; UI.authToken = d.token; UI.canExport = !!d.canExport; UI.readOnly = false; UI.tab = "desk"; saveSession();
+        try{ const me = await Api.me(); UI.lvl = me.lvl || null; UI.team = me.team || []; }catch(e){}
+        await DataManager.load(); render(); toast("Пароль сохранён. Дальше входите по логину «"+j.login+"» и этому паролю"); }catch(e){ toast(e.message, true); } };
+  }).catch(()=>{ const b = document.getElementById("inv-body"); if(b) b.textContent = "Нет связи с сервером"; });
+}
 function render(){
+  { const inv = new URLSearchParams(location.search).get("invite"); if(inv){ renderInvite(inv); return; } }
   if(!UI.role){ renderLogin(); return; }
   try{ document.body.classList.toggle("no-export", !UI.canExport); }catch(e){}
   if(UI.role==="manager" || UI.role==="marketer"){ renderDeskShell(); return; }
@@ -16537,7 +16595,7 @@ async function maybeOpenFlowCrmProfile(){const id=new URL(location.href).searchP
 document.addEventListener("DOMContentLoaded", async ()=>{
   loadSession();
   if(UI.authToken && UI.role && UI.role!=="driver"){
-    try{ const me = await Api.me(); UI.canExport = !!me.canExport; if(me.name) saveActor(me.name); saveSession(); }catch(e){}
+    try{ const me = await Api.me(); UI.canExport = !!me.canExport; UI.lvl = me.lvl || null; UI.team = me.team || []; if(me.name) saveActor(me.name); saveSession(); }catch(e){}
     if(UI.actorName && UI.actorName!=="Ольга" && UI.tab==="dashboard") UI.tab = "desk";
   }
   try{
