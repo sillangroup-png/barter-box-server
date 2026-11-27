@@ -12488,10 +12488,14 @@ function renderDriverOrderModal(){
    ========================================================================= */
 // ---------- Учётки (только Нина): ссылка-приглашение, по которой человек сам задаёт пароль ----------
 const ACC = {list:null, links:{}};
-const ACC_LVL = {admin:"видит всё", lead:"тимлид — своя команда", manager:"менеджер — только своё"};
-async function accLoad(){ try{ ACC.list = await apiFetch("/api/accounts"); ACC.err = null; }catch(e){ ACC.list = []; ACC.err = e.message; } if(UI.tab==="accounts") render(); }
+const ACC_LVL = {admin:"видит всё", lead:"тимлид — своя команда", manager:"менеджер — только своё", large:"крупные интеграции — своё"};
+// 27.11.2026: список всегда свежий с сервера (раньше показывался тот, что загрузился при первом открытии вкладки).
+async function accLoad(){ const was = JSON.stringify(ACC.list); ACC.at = Date.now(); try{ ACC.list = await apiFetch("/api/accounts"); ACC.err = null; }catch(e){ ACC.list = []; ACC.err = e.message; }
+  const typing = [...document.querySelectorAll(".acc-pw")].some(i=> i.value);
+  if(UI.tab==="accounts" && JSON.stringify(ACC.list)!==was && !typing) render(); }
 function tplAccounts(){
   if(ACC.list===null){ ACC.list = []; setTimeout(accLoad, 0); }
+  else if(Date.now() - (ACC.at||0) > 20000) setTimeout(accLoad, 0);
   const st = a=> a.disabled ? `<span class="pv-st s-bad">отключена</span>` : a.hasPassword ? `<span class="pv-st s-ok">пароль задан ${a.setAt?new Date(a.setAt).toLocaleDateString("ru-RU"):""}</span>` : a.invitePending ? `<span class="pv-st s-w">ссылка ждёт до ${new Date(a.inviteExp).toLocaleDateString("ru-RU")}</span>` : `<span class="pv-st">не заведена</span>`;
   return `<div class="panel" style="padding:0;overflow:hidden"><div style="padding:14px 16px"><b style="font-size:15px">Учётки сотрудников</b>
     <div class="mut" style="font-size:12px;margin-top:4px">У каждого свой логин (колонка «Логин») и пароль. Впишите пароль (или 🎲 — придумать) и нажмите «Задать пароль», потом передайте логин и пароль человеку лично. Вход: «Маркетолог» → свой логин и пароль, имя выбирать не нужно. Можно и иначе — «ссылка»: человек сам задаёт пароль по одноразовой ссылке. Пока пароль не задан, человек входит по-старому, через общий логин.</div>${ACC.err?`<div style="color:var(--bad);margin-top:6px">${escapeHtml(ACC.err)}</div>`:""}</div>
