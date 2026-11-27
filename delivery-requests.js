@@ -91,7 +91,8 @@ function mount(app, { getState, requireAuth, persist }) {
       const nick = norm(pick(r, 'ник', 'блогер')); if (!nick) continue;
       const m0 = pick(r, 'менеджер'); const manager = MGR[m0.toLowerCase()] || m0;
       const phone = pick(r, 'телефон').replace(/[^\d+]/g, ''); const day = /^\d{4}-\d{2}-\d{2}/.test(pick(r, 'дата')) ? pick(r, 'дата').slice(0, 10) : today();
-      if (all.some((x) => norm(x.blogger) === nick && String(x.phone || '').replace(/[^\d+]/g, '') === phone && x.status !== 'failed')) { skipped++; continue; }
+      // 27.11.2026: повтор — только тот же блогер+телефон В ТОТ ЖЕ ДЕНЬ (одному блогеру отправляют несколько раз за историю)
+      if (all.some((x) => norm(x.blogger) === nick && String(x.phone || '').replace(/[^\d+]/g, '') === phone && String(x.createdAt || '').slice(0, 10) === day && x.status !== 'failed')) { skipped++; continue; }
       const cands = deals.filter((d) => [d.instagramAccount, d.tiktokAccount, d.blogerName].some((v) => norm(v) === nick));
       const deal = cands.filter((d) => d.responsible === manager).sort((a, b) => b.id - a.id)[0] || cands.sort((a, b) => b.id - a.id)[0];
       const at = day + 'T09:00:00.000Z';
