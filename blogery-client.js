@@ -83,6 +83,20 @@ function createClient({getState,persist,fetchImpl=fetch,env=process.env}){
   app.get('/api/automation/brief-requests',requireAuth,staff,(req,res)=>{const st=getState();res.json({requests:store().filter(r=>r.status!=='cancelled').slice(-300).map(r=>({id:r.id,integrationId:r.integrationId,status:r.status,requestedBy:r.requestedBy,createdAt:r.createdAt||null,approvedAt:r.approvedAt||null,lastError:r.lastError||null,notes:(r.payload&&r.payload.notes)||''})),
    sent:(st.briefDelivery||[]).slice(-200).map(j=>({integrationId:j.integrationId,versionId:j.versionId,status:j.status,approvedBy:j.approvedBy||'',createdAt:j.createdAt||null,sentAt:j.sentAt||null}))});});
   app.get('/api/automation/brief-request/:id',requireAuth,staff,(req,res)=>res.json({request:store().filter(r=>r.integrationId===req.params.id&&r.status!=='cancelled').pop()||null,approved:findDeal(req.params.id).deal?.flowBriefHistory||[]}));
+  // 27.11.2026 (Нина): ТЗ из Claude без заявки — показываем «на рассмотрении» по блогеру, менеджер сам привязывает к интеграции.
+  const bridge=async(p,body)=>{const base=String(env.BLOGERY_REQUESTS_URL||'').replace(/\/+$/,'');if(!base||(env.BLOGERY_BRIDGE_SECRET||'').length<32)throw Error('Связь с Blogery Audit не настроена');
+   const r=await fetchImpl(new URL(base+p),{method:'POST',redirect:'error',signal:AbortSignal.timeout(60000),headers:{Authorization:'Bearer '+env.BLOGERY_BRIDGE_SECRET,'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+   const j=await r.json().catch(()=>({}));if(!r.ok)throw Error(j.error||('Blogery Audit: '+r.status));return j;};
+  app.get('/api/automation/brief-unlinked',requireAuth,staff,async(req,res)=>{try{res.json(await bridge('/review',{}));}catch(e){res.status(502).json({error:e.message,items:[]})}});
+  app.post('/api/automation/brief-attach',requireAuth,staff,async(req,res)=>{try{
+   const briefId=String(req.body?.briefId||''),iid=String(req.body?.integrationId||'');const {large,deal}=findDeal(iid);if(!deal)return res.status(404).json({error:'Интеграция не найдена'});
+   const out=await bridge('/attach',{briefId,integrationId:(large?'L':'')+String(deal.id),manager:deal.responsible||'',plannedDate:deal.plannedDate||'',format:large?(deal.platform||''):(deal.contentFormat||'')});
+   if(!out.id)throw Error(out.error||'Не привязалось');
+   let actor=req.session.name||'общий вход';try{actor=req.session.name||decodeURIComponent(req.headers['x-actor']||'')||actor}catch{}
+   if(!store().some(r=>r.remoteRequestId===out.id))store().push({id:crypto.randomUUID(),integrationId:(large?'L':'')+String(deal.id),status:'received',attempts:0,nextAt:Date.now(),remoteRequestId:out.id,readyNextAt:0,
+    requestedBy:actor+' · привязал ТЗ из Claude',receivedAt:new Date().toISOString(),payload:{integrationId:(large?'L':'')+String(deal.id),manager:deal.responsible,notes:'ТЗ из Claude, привязано в «Базе ТЗ»'}});
+   persist();res.json({ok:true,id:out.id,warning:out.error||null});drain().catch(()=>{});
+  }catch(e){res.status(400).json({error:e.message})}});
   const timer=setInterval(()=>drain().catch(()=>{}),30000);timer.unref();
  }
  return {request,drain,mount};
