@@ -9581,9 +9581,12 @@ crmParams = function(){ const f=CRM.f; const p={page:f.page, limit:50, sort:f.so
   for(const k of CRM_FILTER_KEYS){ const v=f[k]; if(v===true) p[k]="1"; else if(v) p[k]=v; } return p; };
 function crmIsLead(){ return !!UI.canExport; }
 // 27.11.2026 (Нина): иконки Instagram и TikTok у ника — клик открывает профиль (как в Blogger CRM)
-const CRM_IG_SVG = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#C13584" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="#C13584"/></svg>`;
-const CRM_TT_SVG = `<svg width="14" height="15" viewBox="0 0 24 24" fill="#111"><path d="M16.6 3c.4 2.3 1.8 3.8 4.1 4v3.2c-1.5.1-2.9-.4-4.1-1.2v6.4c0 3.5-2.6 5.9-5.9 5.9S4.8 18.9 4.8 15.6c0-3.6 3.1-6.2 6.7-5.7v3.3c-1.6-.4-3.4.6-3.4 2.4 0 1.4 1.1 2.5 2.5 2.5s2.6-1.1 2.6-2.8V3h3.4z"/></svg>`;
-function crmSocIcons(b){ const a = (u, svg, t)=> u ? ` <a href="${escapeHtml(u)}" target="_blank" rel="noopener" title="${t}" onclick="event.stopPropagation()" style="display:inline-flex;vertical-align:middle;margin-left:3px">${svg}</a>` : ""; return a(b.instagram, CRM_IG_SVG, "Открыть Instagram") + a(b.tiktok, CRM_TT_SVG, "Открыть TikTok"); }
+const CRM_IG_SVG = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2B2228" stroke-width="2.2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1.1" fill="#2B2228"/></svg>`;
+const CRM_WA_SVG = `<svg width="15" height="16" viewBox="0 0 24 24" fill="#1f8a62"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm5.3 14.2c-.2.6-1.3 1.2-1.8 1.2-.5.1-1 .1-3.3-.8-2.8-1.1-4.5-3.9-4.7-4.1-.1-.2-1.1-1.5-1.1-2.9s.7-2 1-2.3c.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5l.8 1.9c.1.2.1.4 0 .5l-.3.5-.4.4c-.1.1-.3.3-.1.6.2.3.8 1.3 1.7 2.1 1.2 1 2.1 1.3 2.4 1.5.3.1.5.1.6-.1l.9-1.1c.2-.3.4-.2.6-.1l1.8.9c.3.1.5.2.5.3.1.2.1.7-.1 1.3z"/></svg>`;
+const CRM_TT_SVG = `<svg width="14" height="15" viewBox="0 0 24 24" fill="#2B2228"><path d="M16.6 3c.4 2.3 1.8 3.8 4.1 4v3.2c-1.5.1-2.9-.4-4.1-1.2v6.4c0 3.5-2.6 5.9-5.9 5.9S4.8 18.9 4.8 15.6c0-3.6 3.1-6.2 6.7-5.7v3.3c-1.6-.4-3.4.6-3.4 2.4 0 1.4 1.1 2.5 2.5 2.5s2.6-1.1 2.6-2.8V3h3.4z"/></svg>`;
+function crmSocIcons(b, withWa){ const a = (u, svg, t)=> u ? ` <a href="${escapeHtml(u)}" target="_blank" rel="noopener" title="${t}" onclick="event.stopPropagation()" style="display:inline-flex;vertical-align:middle;margin-left:3px">${svg}</a>` : "";
+  const wa = withWa && b.whatsapp && String(b.whatsapp).replace(/\D/g,"").length >= 10 ? "https://wa.me/" + String(b.whatsapp).replace(/\D/g,"").replace(/^8(?=\d{10}$)/,"7") : "";
+  return (a(b.instagram, CRM_IG_SVG, "Открыть Instagram") + a(b.tiktok, CRM_TT_SVG, "Открыть TikTok") + a(wa, CRM_WA_SVG, "Написать в WhatsApp")) || (withWa ? `<span style="color:var(--ink-mute)">—</span>` : ""); }
 function crmCpv(v){ if(v==null) return `<span style="color:var(--ink-mute)">—</span>`; const c = v<=10 ? ["#e6f6ef","#1f8a62"] : v<=30 ? ["#f1ebfb","#7b4fc4"] : ["#fdecef","#c73a58"]; return `<span style="background:${c[0]};color:${c[1]};border-radius:20px;padding:2px 8px;font-weight:700;font-size:11.5px">${v}₸</span>`; }
 function crmMoney(v){ return v ? fmtNum(v)+"₸" : `<span style="color:var(--ink-mute)">—</span>`; }
 function crmNum(v){ return v ? fmtNum(v) : `<span style="color:var(--ink-mute)">—</span>`; }
@@ -9592,7 +9595,7 @@ function crmCell(k, b){
     case "status": return crmBadge(b.st);
     case "comment": return `<span title="${escapeHtml(b.lastComment||"")}">${escapeHtml((b.lastComment||"").slice(0,60)) || `<span style="color:var(--ink-mute)">—</span>`}</span>`;
     case "manager": return b.manager ? `<span class="badge badge-closed">${escapeHtml(b.manager)}</span>` : "—";
-    case "links": return [b.instagram?`<a href="${escapeHtml(b.instagram)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Instagram">IG</a>`:"", b.tiktok?`<a href="${escapeHtml(b.tiktok)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="TikTok">TT</a>`:""].filter(Boolean).join(" · ") || "—";
+    case "links": return `<span style="white-space:nowrap">${crmSocIcons(b, true)}</span>` || "—"; // 27.11.2026: иконки, как в Blogger CRM
     case "category": return b.category ? escapeHtml({blogger:"Блогер",visazhist:"Визажист",expert:"Эксперт"}[b.category]||b.category) : `<span style="color:var(--ink-mute)">—</span>`;
     case "followers": return crmNum(b.followers); case "reach": return crmNum(b.reach);
     case "followersTT": return crmNum(b.followersTT); case "reachTT": return crmNum(b.reachTT);
@@ -9696,7 +9699,7 @@ function tplCrmBloggers(){
       <tbody>${items.length ? items.map(b=>`<tr class="crm-row" data-id="${escapeHtml(b.id)}" style="cursor:pointer">
         <td><input type="checkbox" class="crm-sel" data-id="${escapeHtml(b.id)}" ${sel.has(b.id)?"checked":""}></td>
         <td><button class="crm-star" data-id="${escapeHtml(b.id)}" data-on="${b.exclusive?1:0}" title="${b.exclusive?"Эксклюзив":"Отметить звёздочкой"}" style="background:none;border:0;font-size:15px;line-height:1;cursor:${edit&&crmIsLead()?"pointer":"default"};color:${b.exclusive?"#F2B54A":"#CBB8C2"}">${b.exclusive?"★":"☆"}</button></td>
-        <td style="white-space:nowrap"><b>${escapeHtml(b.nick ? "@"+b.nick : (b.name||"—"))}</b>${crmSocIcons(b)}</td>
+        <td style="white-space:nowrap"><b>${escapeHtml(b.nick ? "@"+b.nick : (b.name||"—"))}</b></td>
         <td>${crmCatCell(b, edit)}</td>
         <td>${crmStatusCell(b, edit)}</td>
         <td style="max-width:210px;overflow:hidden;text-overflow:ellipsis">${edit ? `<span class="crm-icom" data-id="${escapeHtml(b.id)}" title="${escapeHtml(b.lastComment||"")}" style="cursor:text;${b.lastComment?"color:#6E6168":"color:#D6337E"}">${escapeHtml((b.lastComment||"добавить…").slice(0,40))}${(b.lastComment||"").length>40?"…":""}</span>` : `<span class="mut" title="${escapeHtml(b.lastComment||"")}">${escapeHtml((b.lastComment||"—").slice(0,40))}</span>`}</td>
@@ -9830,42 +9833,47 @@ async function modalCrmBlogger(id){
   const m = CRM.meta || {talk:{}, decline:{}};
   const edit = crmCutover();
   const isDecl = String(b.status||"").startsWith("declined");
-  const statusBtns = Object.entries(m.talk).map(([k,v])=>`<button class="btn btn-sm ${b.status===k?"btn-primary":"btn-ghost"} crm-st" data-st="${k}" ${edit?"":"disabled"}>${escapeHtml(v)}</button>`).join("");
-  const links = [b.instagram ? `<a href="${escapeHtml(b.instagram)}" target="_blank" rel="noopener">Instagram</a>` : "", b.tiktok ? `<a href="${escapeHtml(b.tiktok)}" target="_blank" rel="noopener">TikTok</a>` : "", b.whatsapp ? `<a href="https://wa.me/${escapeHtml(String(b.whatsapp).replace(/\D/g,""))}" target="_blank" rel="noopener">WhatsApp</a>` : ""].filter(Boolean).join(" · ");
+  // 27.11.2026 (Нина): карточка — как «Редактировать блогера» в Blogger CRM: Основное · Аудитория · Расценки · CPV · Категория · Работа · Реквизиты ИП
+  const dis = edit ? "" : "disabled";
+  const sec = t=> `<div style="grid-column:1/-1;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-mute);border-bottom:1px solid var(--line);padding:12px 0 6px;margin-top:2px">${t}</div>`;
+  const fv = v=> v==null ? "" : v;
+  const f = (id, label, val, ph, span, type)=> `<div class="field" style="grid-column:span ${span||2}"><label>${label}</label><input id="${id}" ${type?`type="${type}"`:""} value="${escapeHtml(String(fv(val)))}" placeholder="${escapeHtml(ph||"")}" ${dis}></div>`;
+  const stOpts = Object.entries(m.talk).map(([k,v])=>`<option value="${k}" ${b.status===k?"selected":""}>${escapeHtml(v)}</option>`).join("")
+    + Object.entries(m.decline).map(([k,v])=>`<option value="declined:${k}" ${isDecl && b.st.code===k?"selected":""}>Отказ: ${escapeHtml(v)}</option>`).join("")
+    + (!m.talk[b.status] && !isDecl && b.status ? `<option value="" selected>${escapeHtml(b.st.label||b.status)}</option>` : "");
+  const req = b.ipRequisites || {}, reqN = CRM_REQ_FIELDS.filter(([k])=> req[k]).length;
   openModal(`
     <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
-      <div><h3 style="margin:0">${escapeHtml(b.name || "@"+b.nick)}</h3><div style="font-size:12.5px;color:var(--ink-mute);margin-top:3px">${b.nick ? "@"+escapeHtml(b.nick)+" · " : ""}${links || "нет ссылок"}</div></div>
+      <div><h3 style="margin:0">Редактировать блогера</h3><div style="font-size:12.5px;color:var(--ink-mute);margin-top:3px">${escapeHtml(b.nick ? "@"+b.nick : (b.name||""))}${crmSocIcons(b)}</div></div>
       <div style="text-align:right">${crmBadge(b.st)}<div style="font-size:11.5px;color:var(--ink-mute);margin-top:4px">ведёт: ${escapeHtml(b.manager||"никто")}</div></div>
     </div>
     ${edit ? "" : `<div class="login-hint" style="margin-top:10px;text-align:left">Пока только просмотр — правки в старой CRM до переезда.</div>`}
-    <div style="margin-top:14px"><div style="font-size:11.3px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;margin-bottom:6px">Статус переговоров</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${statusBtns}
-        <select id="cb-decline" ${edit?"":"disabled"} style="max-width:240px;border:1px solid var(--line-2);border-radius:10px;padding:6px 10px;background:#fff"><option value="">${isDecl ? "Отказ: " + escapeHtml(m.decline[b.st.code]||"") : "Отказ — причина…"}</option>${Object.entries(m.decline).map(([k,v])=>`<option value="${k}">Отказ: ${escapeHtml(v)}</option>`).join("")}</select>
+    <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px 12px">
+      ${sec("Основное")}
+      ${f("cb-name","Ник *", b.name || (b.nick?"@"+b.nick:""), "@blogger_name")}${f("cb-ig","Ссылка Instagram", b.instagram, "https://instagram.com/…")}${f("cb-tt","Ссылка TikTok", b.tiktok, "https://tiktok.com/@…")}
+      ${f("cb-wa",`ВЦ блогера <span style="font-weight:400;color:var(--ink-mute);text-transform:none">(номер WhatsApp)</span>`, b.whatsapp, "+7 700 000 00 00", 6)}
+      ${sec("Аудитория")}
+      <div style="grid-column:1/-1;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px 12px">
+        ${f("cb-fol","Подп. Инст", b.followers, "", 1, "number")}${f("cb-reach","Охват Инст", b.reach, "", 1, "number")}${f("cb-reachst","Охват сторис", b.storiesReach, "просмотры", 1, "number")}${f("cb-folt","Подп. ТТ", b.followersTT, "", 1, "number")}${f("cb-reachtt","Охват ТТ", b.reachTT, "", 1, "number")}
       </div>
-      <div style="font-size:11.5px;color:var(--ink-mute);margin-top:5px">«В работе», «Вышло» и «Работали» ставятся сами по интеграциям — с месяцем.${b.st.note ? " Примечание CRM: " + escapeHtml(b.st.note) : ""}</div>
+      ${f("cb-er","ER % (engagement rate)", b.er, "напр. 3.5", 6)}
+      ${sec("Расценки (₸)")}
+      <div style="grid-column:1/-1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px 12px">
+        ${f("cb-pr","Рилс", b.price.reels, "", 1, "number")}${f("cb-pt","TikTok", b.price.tiktok, "", 1, "number")}${f("cb-pb","Рилс+ТТ", b.price.both, "", 1, "number")}${f("cb-ps","Сторис", b.price.stories, "", 1, "number")}
+      </div>
+      <div id="cb-cpv" style="grid-column:1/-1;background:#F8F5F7;border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-top:8px"></div>
+      ${sec("Категория")}
+      <div class="field" style="grid-column:1/-1"><label>Категория</label><select id="cb-cat" ${dis}>${CRM_CATS.map(c=>`<option value="${c[0]}" ${c[0]===(b.category||"")?"selected":""}>${c[0]?c[1]:"— Не выбрано —"}</option>`).join("")}${b.category && !CRM_CATS.some(c=>c[0]===b.category) ? `<option selected>${escapeHtml(b.category)}</option>` : ""}</select></div>
+      ${sec("Работа")}
+      <div class="field" style="grid-column:span 3"><label>Статус</label><select id="cb-status" ${dis}>${stOpts}</select></div>
+      <div class="field" style="grid-column:span 3"><label>Менеджер</label><select id="cb-manager" ${dis}><option value="">— Не назначен —</option>${CRM_STAFF.map(n=>`<option ${n===b.manager?"selected":""}>${n}</option>`).join("")}${b.manager && !CRM_STAFF.includes(b.manager) ? `<option selected>${escapeHtml(b.manager)}</option>` : ""}</select></div>
+      ${f("cb-mig",`Инста менеджера <span style="font-weight:400;color:var(--ink-mute);text-transform:none">(с какой писали)</span>`, b.managerInstagram, "@my_account", 3)}${f("cb-mwa",`ВЦ менеджера <span style="font-weight:400;color:var(--ink-mute);text-transform:none">(с какого номера)</span>`, b.managerWhatsapp, "+7 700 000 00 00", 3)}
+      ${f("cb-comment","Последний комментарий", b.lastComment, "Кратко о статусе…", 6)}
+      <div class="field" style="grid-column:1/-1"><label>Заметки</label><textarea id="cb-notes" rows="3" placeholder="Дополнительная информация…" ${dis}>${escapeHtml(b.notes||"")}</textarea></div>
+      <details style="grid-column:1/-1;border-top:1px solid var(--line);padding-top:8px"><summary style="cursor:pointer;font-size:12px;font-weight:700;text-transform:uppercase;color:var(--ink-mute)">Реквизиты ИП и документы <span style="font-weight:400;text-transform:none">· заполнено ${reqN} из ${CRM_REQ_FIELDS.length}</span></summary>
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px;margin-top:8px">${CRM_REQ_FIELDS.map(([k,l,ph])=>`<div class="field"><label>${l}</label><input class="cb-req" data-k="${k}" value="${escapeHtml(req[k]||"")}" placeholder="${escapeHtml(ph)}" ${dis}></div>`).join("")}</div></details>
     </div>
-    <div class="form-row" style="margin-top:14px">
-      <div class="field"><label>Менеджер</label><select id="cb-manager" ${edit?"":"disabled"}><option value="">— никто —</option>${CRM_STAFF.map(n=>`<option ${n===b.manager?"selected":""}>${n}</option>`).join("")}${b.manager && !CRM_STAFF.includes(b.manager) ? `<option selected>${escapeHtml(b.manager)}</option>` : ""}</select></div>
-      ${crmField("WhatsApp блогера", "cb-wa", b.whatsapp, {ph:"+7 7xx xxx xx xx"})}
-      ${crmField("Подписчики IG", "cb-fol", b.followers, {type:"number"})}
-      ${crmField("Охват reels", "cb-reach", b.reach, {type:"number"})}
-      ${crmField("Охват TikTok", "cb-reachtt", b.reachTT, {type:"number"})}
-      ${crmField("Охват сторис", "cb-reachst", b.storiesReach, {type:"number"})}
-      ${crmField("Цена reels, ₸", "cb-pr", b.price.reels, {type:"number"})}
-      ${crmField("Цена TikTok, ₸", "cb-pt", b.price.tiktok, {type:"number"})}
-      ${crmField("Цена reels+TikTok, ₸", "cb-pb", b.price.both, {type:"number"})}
-      ${crmField("Цена сторис, ₸", "cb-ps", b.price.stories, {type:"number"})}
-      <div id="cb-cpv" style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12.5px"></div>
-      ${crmField("Подписчики TikTok", "cb-folt", b.followersTT, {type:"number"})}
-      ${crmField("ER, %", "cb-er", b.er, {ph:"напр. 3.5"})}
-      ${crmField("Ссылка Instagram", "cb-ig", b.instagram, {ph:"https://instagram.com/…"})}
-      ${crmField("Ссылка TikTok", "cb-tt", b.tiktok, {ph:"https://tiktok.com/@…"})}
-      ${crmField("Инста менеджера (с какой писали)", "cb-mig", b.managerInstagram, {ph:"@my_account"})}
-      ${crmField("ВЦ менеджера (с какого номера)", "cb-mwa", b.managerWhatsapp, {ph:"+7 7xx xxx xx xx"})}
-      ${crmField("Последний комментарий", "cb-comment", b.lastComment, {area:true, rows:2})}
-      ${crmField("Заметки", "cb-notes", b.notes, {area:true, rows:2})}
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:6px">
+    <div style="display:grid;grid-template-columns:1fr;gap:14px;margin-top:14px;padding-top:10px;border-top:1px solid var(--line)">
       <div><div style="display:flex;justify-content:space-between;align-items:center"><b>Интеграции · ${b.dealList.length}</b><button class="btn btn-ghost btn-sm" id="cb-add-deal">+ Интеграция</button></div>
         ${b.dealList.length ? `<div style="font-size:12.5px;margin-top:6px">${b.dealList.slice(0,8).map(d=>`<div style="padding:5px 0;border-bottom:1px solid var(--line)">${escapeHtml(d.date||"без даты")} · ${escapeHtml(d.product||"—")} · <span style="color:${d.cancelled?"var(--bad)":d.done?"var(--ok)":"var(--warn)"}">${d.cancelled?"отменена":d.done?"вышла":"в работе"}</span>${d.manager?` · ${escapeHtml(d.manager)}`:""}</div>`).join("")}</div>` : `<div style="font-size:12.5px;color:var(--ink-mute);margin-top:6px">Интеграций в Barter Box ещё нет</div>`}
       </div>
@@ -9890,15 +9898,21 @@ async function modalCrmBlogger(id){
   // 27.11.2026 (Нина): CPV считается сам, как в Blogger CRM — цена ÷ охват, меняется прямо при вводе
   const cpvBox = ()=>{ const el = document.getElementById("cb-cpv"); if(!el) return; const n = id=> Number((document.getElementById(id)||{}).value)||0;
     const c = (p, r)=> p && r ? +(p/r).toFixed(2) : null, ri = n("cb-reach"), rt = n("cb-reachtt"), rs = n("cb-reachst");
-    const L = [["CPV рилс", c(n("cb-pr"), ri)], ["CPV ТТ", c(n("cb-pt"), rt)], ["CPV рилс+ТТ", c(n("cb-pb"), ri + rt)], ["CPV сторис", c(n("cb-ps"), rs || ri)]];
-    el.innerHTML = `<b style="font-size:12px;color:var(--ink-mute)">CPV:</b> ` + L.map(([l, v])=> `<span>${l} ${crmCpv(v)}</span>`).join(" "); };
+    const L = [["Рилс", c(n("cb-pr"), ri)], ["TikTok", c(n("cb-pt"), rt)], ["Рилс+ТТ", c(n("cb-pb"), ri + rt)], ["Сторис", c(n("cb-ps"), rs || ri)]].filter(x=> x[1]!=null);
+    const col = v=> v<=10 ? "#1f8a62" : v<=30 ? "#7b4fc4" : "#c73a58";
+    el.innerHTML = `<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-mute);margin-bottom:8px">CPV (₸ за просмотр)</div>`
+      + (L.length ? `<div style="display:flex;gap:10px;flex-wrap:wrap">${L.map(([l, v])=> `<div style="background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 22px;text-align:center;min-width:96px"><div style="font-size:11px;color:var(--ink-mute)">${l}</div><div style="font-size:16px;font-weight:800;color:${col(v)}">${v} ₸</div></div>`).join("")}</div>` : `<div class="mut" style="font-size:12.5px">Впишите цену и охват — CPV посчитается сам</div>`)
+      + `<div class="mut" style="font-size:11px;margin-top:8px">До 10 ₸ — отлично · 10–30 ₸ — нормально · выше 30 ₸ — дорого</div>`; };
   ["cb-reach","cb-reachtt","cb-reachst","cb-pr","cb-pt","cb-pb","cb-ps"].forEach(id=>{ const el = document.getElementById(id); if(el) el.addEventListener("input", cpvBox); }); cpvBox();
   const save = document.getElementById("cb-save");
   if(save) save.onclick = async ()=>{
     const v = id=> document.getElementById(id).value;
     const body = { manager: v("cb-manager"), whatsapp: v("cb-wa"), followers: v("cb-fol"), reach: v("cb-reach"), reachTT: v("cb-reachtt"), storiesReach: v("cb-reachst"),
       priceReels: v("cb-pr"), priceTiktok: v("cb-pt"), priceBoth: v("cb-pb"), priceStories: v("cb-ps"), lastComment: v("cb-comment"), notes: v("cb-notes"),
-      followersTT: v("cb-folt"), er: v("cb-er"), instagram: v("cb-ig"), tiktok: v("cb-tt"), managerInstagram: v("cb-mig"), managerWhatsapp: v("cb-mwa") };
+      followersTT: v("cb-folt"), er: v("cb-er"), instagram: v("cb-ig"), tiktok: v("cb-tt"), managerInstagram: v("cb-mig"), managerWhatsapp: v("cb-mwa"), category: v("cb-cat") };
+    const nm = v("cb-name").trim(); if(!nm) return toast("Укажите ник", true); if(nm !== (b.name || (b.nick?"@"+b.nick:""))) body.name = nm;
+    const st = v("cb-status"); if(st && st.startsWith("declined:")){ if(!(isDecl && b.st.code===st.slice(9))){ body.status = "declined"; body.declineReason = st.slice(9); } } else if(st && st!==b.status) body.status = st;
+    const rq = {}; document.querySelectorAll(".cb-req").forEach(i=>{ rq[i.dataset.k] = i.value.trim(); }); if(CRM_REQ_FIELDS.some(([k])=> (rq[k]||"") !== (req[k]||""))) body.ipRequisites = rq;
     try{ const nb = await withBusy(save, ()=> CrmApi.save(b.id, body)); toast("Сохранено"); closeModal(); done(nb); }catch(e){ toast(e.message, true); }
   };
   document.getElementById("cb-add-deal").onclick = ()=>{ closeModal(); crmOpenDeal(b); };
@@ -10016,7 +10030,7 @@ function tplCrmPayments(){
     <td><span class="pv-st ${PAY_CLS[p.status]||"s-m"}">${escapeHtml(PAY_LABEL[p.status]||p.status)}</span></td>
     <td class="mut" style="max-width:180px;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(p.notes||p.name||"")}">${escapeHtml(p.name||p.notes||"")}</td>
     <td>${/^https?:\/\//.test(p.approvalUrl||"") ? `<a href="${escapeHtml(p.approvalUrl)}" target="_blank" rel="noopener">🔗 Открыть</a>` : `<span class="mut">—</span>`}</td>
-    <td>${payChk(p.chkPay)}${edit ? `<label class="btn btn-sm" style="cursor:pointer;margin-top:3px" title="Прикрепить чек — блогер получит его вместе с сообщением об оплате">🧾 Чек<input type="file" class="pay-rcpt" data-id="${escapeHtml(p.id)}" accept="image/*,.pdf" style="display:none"></label>` : ""}</td><td>${payChk(p.chkVideo)}</td>
+    <td>${payChk(p.chkPay)}${edit && !(p.chkPay||[]).length ? `<label class="btn btn-sm" style="cursor:pointer;margin-top:3px" title="Прикрепить чек — блогер получит его вместе с сообщением об оплате">🧾 Чек<input type="file" class="pay-rcpt" data-id="${escapeHtml(p.id)}" accept="image/*,.pdf" style="display:none"></label>` : ""}</td><td>${payChk(p.chkVideo)}</td>
     <td style="white-space:nowrap;text-align:right"><button class="btn btn-sm pay-copy" data-id="${escapeHtml(p.id)}" title="Скопировать строку для банка">⧉</button>
       ${edit && p.status==="pending" ? `<button class="btn btn-sm pay-set" data-id="${escapeHtml(p.id)}" data-st="submitted">+ Подано</button><button class="btn btn-sm pay-set" data-id="${escapeHtml(p.id)}" data-st="rejected">Отклонить</button>` : ""}
       ${edit && p.status==="submitted" ? `<button class="btn btn-sm btn-primary pay-set" data-id="${escapeHtml(p.id)}" data-st="paid">+ Оплачено</button>` : ""}
