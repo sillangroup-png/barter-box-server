@@ -90,6 +90,14 @@ function createAccounts({ dataDir }) {
     await save(u.login);
     return u;
   }
+  // Нина задаёт пароль сама (без ссылки)
+  async function setPassword(login, password) {
+    const u = byLogin(login); if (!u) throw Error("Нет такой учётки");
+    const pw = String(password || ""); if (pw.length < 8) throw Error("Пароль — минимум 8 символов");
+    const salt = crypto.randomBytes(16).toString("hex");
+    rows[u.login] = { ...(rows[u.login] || {}), salt, hash: scrypt(pw, salt), set_at: new Date().toISOString(), invite_hash: null, invite_exp: null, disabled: false };
+    await save(u.login); return u;
+  }
   async function setDisabled(login, disabled) {
     const u = byLogin(login); if (!u) throw Error("Нет такой учётки");
     rows[u.login] = { ...(rows[u.login] || {}), disabled: !!disabled }; await save(u.login); return u;
@@ -98,7 +106,7 @@ function createAccounts({ dataDir }) {
     return LIST.map((u) => { const x = rows[u.login] || {}; return { login: u.login, name: u.name, lvl: u.lvl, lead: u.lvl === "manager" ? leadOf(u.name) : null,
       hasPassword: !!x.hash, setAt: x.set_at || null, invitePending: !!(x.invite_hash && new Date(x.invite_exp).getTime() > Date.now()), inviteExp: x.invite_exp || null, disabled: !!x.disabled }; });
   }
-  return { ready, verify, hasPassword, invite, inviteUser, accept, setDisabled, list };
+  return { ready, verify, hasPassword, invite, inviteUser, accept, setPassword, setDisabled, list };
 }
 
 module.exports = { createAccounts, lvlOf, teamOf, leadOf, TEAMS };

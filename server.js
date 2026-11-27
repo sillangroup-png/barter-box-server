@@ -1073,6 +1073,8 @@ app.get("/api/accounts", requireAuth, async (req,res)=>{ if(!accAdmin(req,res)) 
 app.post("/api/accounts/:login/invite", requireAuth, async (req,res)=>{ if(!accAdmin(req,res)) return;
   try{ await ACCOUNTS.ready; const {token, user} = await ACCOUNTS.invite(req.params.login); const origin = (req.headers["x-forwarded-proto"]||"https")+"://"+req.headers.host;
     res.json({ok:true, name:user.name, login:user.login, link: origin + "/?invite=" + token}); }catch(e){ res.status(400).json({error:e.message}); } });
+app.post("/api/accounts/:login/password", requireAuth, async (req,res)=>{ if(!accAdmin(req,res)) return;
+  try{ await ACCOUNTS.ready; const u = await ACCOUNTS.setPassword(req.params.login, (req.body||{}).password); res.json({ok:true, name:u.name, login:u.login}); }catch(e){ res.status(400).json({error:e.message}); } });
 app.post("/api/accounts/:login/disable", requireAuth, async (req,res)=>{ if(!accAdmin(req,res)) return;
   try{ await ACCOUNTS.ready; await ACCOUNTS.setDisabled(req.params.login, !!(req.body||{}).disabled); res.json({ok:true}); }catch(e){ res.status(400).json({error:e.message}); } });
 app.get("/api/auth/invite-info", async (req,res)=>{ if(!ACCOUNTS) return res.status(503).json({error:"Учётки недоступны"}); await ACCOUNTS.ready;
