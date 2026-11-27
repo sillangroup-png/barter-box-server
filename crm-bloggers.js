@@ -38,7 +38,7 @@ function declineCode(status, reason) {
   return 'other';
 }
 
-function mount(app, { getState, requireAuth, kostPool, persist, env = process.env }) {
+function mount(app, { getState, requireAuth, kostPool, persist, dataDir, env = process.env }) {
   // 23.11.2026: статус оплаты в интеграции ставится сам — подали заявку → «к оплате», Нина отметила → «оплачено».
   const PAY_TO_DEAL = { pending: 'к оплате', submitted: 'к оплате', approved: 'к оплате', paid: 'оплачено' };
   const syncDealPay = (dealId, s) => { const v = PAY_TO_DEAL[s]; if (!dealId || !v) return; const d = ((getState() || {}).microInfluencerDeals || []).find((x) => String(x.id) === String(dealId)); if (d && d.paymentStatus !== v) { d.paymentStatus = v; if (v === 'оплачено') { d.paidAt = new Date().toISOString(); d.paidMsgSent = null; d.paidSkip = true; d.paidMsgNote = null; d.paidMsgErr = null; d.paidMsgTries = 0; d.paidMsgAuto = false; } if (persist) persist(); } };
@@ -514,6 +514,35 @@ function mount(app, { getState, requireAuth, kostPool, persist, env = process.en
       chkPay: rcpt(d.receipts_video).concat(rcpt(d.receipts)), chkVideo: rcpt(d.receipts_product),
       createdAt: d.created_at || null, updatedAt: d.updated_at || null, paidBy: d.paid_by || null };
   }
+  // 27.11.2026 (Нина): чек к заявке на оплату — блогер получит его вместе с сообщением «Направили вам оплату».
+  // Файл лежит в данных Barter Box; ссылка со случайным именем, без входа — чтобы WhatsApp смог его забрать.
+  const RC_DIR = dataDir ? require('path').join(dataDir, 'receipts') : null;
+  app.get('/rc/:f', (req, res) => {
+    if (!RC_DIR || !/^[a-f0-9]{32}\.(jpg|jpeg|png|webp|heic|pdf)$/.test(req.params.f)) return res.status(404).end();
+    res.sendFile(require('path').join(RC_DIR, req.params.f), (err) => { if (err && !res.headersSent) res.status(404).end(); });
+  });
+  const rcUpload = require('multer')({ storage: require('multer').memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+  app.post('/api/crm/payments/:id/receipt', requireAuth, rcUpload.single('file'), async (req, res) => {
+    if (!need(res)) return; if (!canExportReq(req)) return res.status(403).json({ error: 'Чеки прикрепляют Нина и Сая' });
+    if (!RC_DIR) return res.status(503).json({ error: 'Нет папки для файлов' });
+    const f = req.file; if (!f) return res.status(400).json({ error: 'Нет файла' });
+    const ext = (/pdf/i.test(f.mimetype) || /\.pdf$/i.test(f.originalname || '')) ? 'pdf' : /png/i.test(f.mimetype) ? 'png' : /webp/i.test(f.mimetype) ? 'webp' : /heic/i.test(f.mimetype) ? 'heic' : 'jpg';
+    if (!/^image\//.test(f.mimetype) && ext !== 'pdf') return res.status(400).json({ error: 'Нужна картинка или PDF' });
+    try {
+      const r = await pool.query('select id, status, data from crm.payments where id=$1 and not deleted', [req.params.id]); if (!r.rows[0]) return res.status(404).json({ error: 'Заявка не найдена' });
+      const fs = require('fs'); fs.mkdirSync(RC_DIR, { recursive: true });
+      const name = require('crypto').randomBytes(16).toString('hex') + '.' + ext; fs.writeFileSync(require('path').join(RC_DIR, name), f.buffer);
+      const base = String(env.PUBLIC_URL || env.RENDER_EXTERNAL_URL || ('https://' + req.get('host'))).replace(/\/+$/, '');
+      const url = base + '/rc/' + name, d = r.rows[0].data || {};
+      d.receipts_video = (Array.isArray(d.receipts_video) ? d.receipts_video : []).concat({ url, name: String(f.originalname || '').slice(0, 120), at: new Date().toISOString(), by: req.session.name || '' });
+      d.updated_at = new Date().toISOString();
+      await pool.query('update crm.payments set data=$2, updated_at=now() where id=$1', [req.params.id, d]);
+      // уже оплачено и сообщение ушло (или в очереди) — чек догонит его
+      let queued = false; const st = getState() || {}; const e = (st.crmPaidQueue || []).find((x) => x.id === req.params.id);
+      if (e && r.rows[0].status === 'paid') { e.receipts = (e.receipts || []).concat(url); queued = true; if (persist) persist(); }
+      res.json({ ok: true, url, queued });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
   app.get('/api/crm/payments', requireAuth, async (req, res) => {
     if (!need(res)) return;
     if (!isNina(req)) return res.status(403).json({ error: 'Оплаты видит только Нина' });
@@ -690,7 +719,7 @@ function mount(app, { getState, requireAuth, kostPool, persist, env = process.en
     if (!pool || payWatching) return; payWatching = true;
     try {
       const st = getState() || {};
-      const r = await pool.query("select p.id, p.status, p.blogger_id, p.created_at, p.manager, p.data->>'amount' amount, p.data->>'bb_deal_id' bb, p.data->'flow_integration_ids' fi, b.data->>'instagram_url' ig, b.data->>'tiktok_url' tt, b.data->>'blogger_whatsapp' wa from crm.payments p left join crm.bloggers b on b.id = p.blogger_id where not p.deleted and p.created_at > now() - interval '120 days'");
+      const r = await pool.query("select p.id, p.status, p.blogger_id, p.created_at, p.manager, p.data->>'amount' amount, p.data->>'bb_deal_id' bb, p.data->'flow_integration_ids' fi, p.data->'receipts_video' rv, p.data->'receipts' rr, b.data->>'instagram_url' ig, b.data->>'tiktok_url' tt, b.data->>'blogger_whatsapp' wa from crm.payments p left join crm.bloggers b on b.id = p.blogger_id where not p.deleted and p.created_at > now() - interval '120 days'");
       const seen = st.crmPaySeen && typeof st.crmPaySeen === 'object' ? st.crmPaySeen : null, next = {};
       for (const x of r.rows) next[x.id] = x.status;
       if (!seen) { st.crmPaySeen = next; if (persist) persist(); return; } // первый запуск: только запоминаем, по старым не пишем
@@ -702,7 +731,7 @@ function mount(app, { getState, requireAuth, kostPool, persist, env = process.en
         if (was === undefined && Date.now() - Date.parse(x.created_at) > 3 * 864e5) continue;
         const dealIds = [x.bb, ...(Array.isArray(x.fi) ? x.fi : [])].filter(Boolean).map(String); // 25.11: и связанные с интеграцией тоже
         if (q.some((e) => e.id === x.id)) continue;
-        q.push({ id: x.id, bloggerId: String(x.blogger_id || ''), nicks: [nickOf(x.ig), nickOf(x.tt)].filter(Boolean), wa: x.wa || '', manager: managerName(x.manager) || '', amount: Number(x.amount) || 0, dealIds, at: new Date().toISOString() });
+        q.push({ id: x.id, bloggerId: String(x.blogger_id || ''), nicks: [nickOf(x.ig), nickOf(x.tt)].filter(Boolean), wa: x.wa || '', manager: managerName(x.manager) || '', amount: Number(x.amount) || 0, dealIds, receipts: rcpt(x.rv).concat(rcpt(x.rr)), at: new Date().toISOString() });
       }
       if (q.length > 400) q.splice(0, q.length - 400);
       st.crmPaySeen = next;

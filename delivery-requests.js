@@ -69,6 +69,27 @@ function mount(app, { getState, requireAuth, persist }) {
     if (!ids.length || !STATUS[s]) return res.status(400).json({ error: 'Нужны заявки и статус' });
     res.json({ ok: true, n: setStatus(req, ids, s) });
   });
+  // 27.11.2026 (Нина): заявку можно поправить — товары (добавить / заменить), адрес, телефон, город, комментарий.
+  // Сая и Нина — любую; менеджер — свою, пока она не доставлена.
+  app.patch('/api/delivery-requests/:id', requireAuth, (req, res) => {
+    if (!isStaff(req)) return res.status(403).json({ error: 'Нет доступа' });
+    const st = getState(); const r = list().find((x) => x.id === +req.params.id); if (!r) return res.status(404).json({ error: 'Нет заявки' });
+    const me = req.session.name; const own = r.createdBy === me || r.manager === me;
+    if (!(isLead(req) || (own && r.status !== 'delivered'))) return res.status(403).json({ error: 'Править можно свою заявку, пока она не доставлена' });
+    const b = req.body || {};
+    if (Array.isArray(b.items)) {
+      const items = b.items.map((x) => ({ name: String(x.name || '').slice(0, 200), code: String(x.code || '').slice(0, 60), qty: Math.max(1, parseInt(x.qty, 10) || 1), cost: num(x.cost) })).filter((x) => x.name || x.code);
+      if (!items.length) return res.status(400).json({ error: 'Добавьте, что отправляем' });
+      r.items = items; r.productCost = items.reduce((s, x) => s + x.cost * x.qty, 0);
+    }
+    for (const [k, n] of [['address', 300], ['phone', 40], ['city', 80], ['note', 500], ['blogger', 120]]) if (b[k] !== undefined) r[k] = String(b[k] || '').slice(0, n);
+    if (b.deliveryCost !== undefined) r.deliveryCost = num(b.deliveryCost);
+    if (b.dealId !== undefined) { const d = b.dealId ? (st.microInfluencerDeals || []).find((x) => x.id === +b.dealId) : null; r.dealId = d ? d.id : null; }
+    const deal = r.dealId ? (st.microInfluencerDeals || []).find((x) => x.id === r.dealId) : null;
+    if (deal && Array.isArray(b.items)) deal.productCost = r.productCost;
+    r.history = (r.history || []).concat({ at: new Date().toISOString(), by: me, status: r.status, edit: true });
+    persist(); res.json(view(r));
+  });
   app.delete('/api/delivery-requests/:id', requireAuth, (req, res) => {
     const all = list(); const i = all.findIndex((r) => r.id === +req.params.id); if (i < 0) return res.status(404).json({ error: 'Нет заявки' });
     const r = all[i]; if (!(isLead(req) || (r.createdBy === req.session.name && r.status === 'new'))) return res.status(403).json({ error: 'Отменить можно только свою новую заявку' });

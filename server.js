@@ -978,7 +978,7 @@ automationFlow.mount(app, {getState:()=>state, persist:()=>persist(), requireAut
 require("./lifecycle").mount(app,{getState:()=>state,persist:()=>persist(),requireAuth});
 require("./blogery-client").createClient({getState:()=>state,persist:()=>persist()}).mount(app,requireAuth);
 require("./crm-link").mount(app,{getState:()=>state,persist:()=>persist(),requireAuth});
-require("./crm-bloggers").mount(app,{getState:()=>state,requireAuth,kostPool:pgPool,persist:()=>persist()});
+require("./crm-bloggers").mount(app,{getState:()=>state,requireAuth,kostPool:pgPool,persist:()=>persist(),dataDir:DATA_DIR});
 require("./pub-check").mount(app,{getState:()=>state,requireAuth,persist:()=>persist()}); // 23.11.2026: в 23:55 сам ищет вышедшие ролики
 require("./delivery-requests").mount(app,{getState:()=>state,requireAuth,persist});
 require("./finance-client").createFinanceClient({getState:()=>state,persist:()=>persist()}).mount(app,requireAuth);
@@ -1683,9 +1683,21 @@ app.post("/api/micro-influencer-deals", requireAuth, (req,res)=>{
   if(flowSelection) Object.assign(deal,{flowGoods:flowSelection.items,flowGoodsCostMinor:flowSelection.costMinor,productCost:flowSelection.costMinor/100});
   deal.createdAt = new Date().toISOString(); // дата покупки — для бюджета месяца (24.11.2026)
   state.microInfluencerDeals.push(deal);
+  bbFillSiblingPhones(deal);
+  if(!String(deal.phone||"").replace(/\D/g,"")){ const keys = new Set(bbNickKeys(deal)); const sib = keys.size && state.microInfluencerDeals.find(x=> x!==deal && String(x.phone||"").replace(/\D/g,"").length >= 10 && bbNickKeys(x).some(k=> keys.has(k))); if(sib) deal.phone = sib.phone; }
   persist();
   res.json(deal);
 });
+// 27.11.2026 (Нина): блогер-«пакетник» — телефон вписали в одну интеграцию, в остальных его нет.
+// Совпадение по нику / ссылке Instagram / TikTok → номер проставляется в интеграции этого блогера, где он пустой.
+function bbNickKeys(d){ return [d && d.instagramAccount, d && d.tiktokAccount, d && d.blogerName].map(v=>{ let x = String(v||"").trim().toLowerCase(); const m = x.match(/(?:instagram\.com|tiktok\.com)\/@?([^/?#\s]+)/); x = m ? m[1] : x.replace(/^@/,"").split(/[\s/?#]/)[0]; return x.replace(/[^\w.]/g,""); }).filter(x=> x.length >= 3); }
+function bbFillSiblingPhones(src){
+  const ph = String((src && src.phone) || "").trim(); if(!ph || ph.replace(/\D/g,"").length < 10) return 0;
+  const keys = new Set(bbNickKeys(src)); if(!keys.size) return 0; let n = 0;
+  for(const d of state.microInfluencerDeals || []){ if(d === src || String(d.phone||"").replace(/\D/g,"")) continue; if(bbNickKeys(d).some(k=> keys.has(k))){ d.phone = ph; n++; } }
+  return n;
+}
+setTimeout(()=>{ try{ let n = 0; for(const d of (state.microInfluencerDeals || []).slice()) n += bbFillSiblingPhones(d); if(n){ console.log("Телефоны пакетников проставлены:", n); persist(); } }catch(e){ console.error("Телефоны пакетников:", e.message); } }, 25000).unref();
 app.patch("/api/micro-influencer-deals/:id", requireAuth, (req,res)=>{
   const d = state.microInfluencerDeals.find(d=>d.id===+req.params.id);
   if(!d) return res.status(404).json({error:"not found"});
@@ -1712,6 +1724,7 @@ app.patch("/api/micro-influencer-deals/:id", requireAuth, (req,res)=>{
   { const from = String(d.plannedDate||"").slice(0,10), to = "plannedDate" in body ? String(body.plannedDate||"").slice(0,10) : from;
     if(from && to !== from){ d.planHistory = (Array.isArray(d.planHistory) ? d.planHistory : []).concat([{ at:new Date().toISOString(), from, to, by:(req.session && req.session.name) || "" }]).slice(-30); } }
   Object.assign(d, body);
+  if("phone" in body || "instagramAccount" in body || "tiktokAccount" in body || "blogerName" in body) bbFillSiblingPhones(d);
   persist();
   res.json(d);
 });
@@ -2127,6 +2140,28 @@ app.put("/api/micro-tz-catalog", requireAuth, (req,res)=>{
   state.tzCatalog = clean;
   persist();
   res.json(clean);
+});
+// 27.11.2026 (Нина): «Артикулы» — ШК товара → артикул Kaspi (номер карточки). Заполняет любой менеджер.
+// suggest — артикулы, которые менеджеры уже писали блогерам («артикул каспи 185758435») по интеграции с одним ШК.
+app.get("/api/kaspi-articles", requireAuth, (req,res)=>{
+  const items = state.kaspiArticles && typeof state.kaspiArticles === "object" ? state.kaspiArticles : {};
+  const votes = {}, byId = new Map((state.microInfluencerDeals||[]).map(d=> [d.id, d]));
+  const log = (state.coord && Array.isArray(state.coord.log)) ? state.coord.log : [];
+  for(const l of log.slice(-20000)){ if(l.dir !== "out") continue; const m = String(l.text||"").match(/артикул[^\d\n]{0,25}(\d{6,12})/i); if(!m) continue;
+    const d = byId.get(l.dealId); if(!d) continue; const codes = String(d.barcode||"").split(/[,;\s]+/).filter(Boolean); if(codes.length !== 1) continue;
+    const v = votes[codes[0]] || (votes[codes[0]] = {}); v[m[1]] = (v[m[1]]||0) + 1; }
+  const suggest = {}; for(const [c, v] of Object.entries(votes)){ if(items[c] && items[c].article) continue; suggest[c] = Object.entries(v).sort((a,b)=> b[1]-a[1])[0][0]; }
+  res.json({ items, suggest });
+});
+app.put("/api/kaspi-articles/:code", requireAuth, (req,res)=>{
+  const s = req.session || {}; if((s.role !== "marketer" && s.role !== "manager") || s.readOnly) return res.status(403).json({error:"Нет доступа"});
+  const code = String(req.params.code||"").trim().slice(0,60); if(!code) return res.status(400).json({error:"Нет ШК"});
+  const art = String((req.body||{}).article||"").replace(/\D/g,"").slice(0,14);
+  if(!state.kaspiArticles || typeof state.kaspiArticles !== "object") state.kaspiArticles = {};
+  if(!art){ delete state.kaspiArticles[code]; persist(); return res.json({ok:true, item:null}); }
+  if(art.length < 5) return res.status(400).json({error:"Артикул Kaspi — это номер из 6–12 цифр"});
+  state.kaspiArticles[code] = { article: art, name: String((req.body||{}).name||"").slice(0,200), by: s.name || "", at: new Date().toISOString() };
+  persist(); res.json({ok:true, item: state.kaspiArticles[code]});
 });
 app.get("/api/sku-catalog", requireAuth, async (req,res)=>{
   const fresh = skuCatalogCache.items && Date.now() - skuCatalogCache.at < 6*3600*1000;

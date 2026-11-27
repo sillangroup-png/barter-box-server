@@ -723,8 +723,28 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
   // 24.11.2026: оплата отмечена в Blogger CRM (без связи с интеграцией) → state.crmPaidQueue (crm-bloggers.js).
   // Статус интеграции не трогаем; находим блогера по ID CRM / нику, номер — из его интеграций (иначе WhatsApp из CRM).
   const nickKey = (v) => String(v || "").replace(/#.*$/, "").replace(/[?].*$/, "").replace(/\/+$/, "").split("/").pop().replace("@", "").trim().toLowerCase();
+  // 27.11.2026 (Нина): чек оплаты (если прикреплён к заявке) уходит блогеру следом за «Направили вам оплату» — файлом.
+  async function sendPaidReceipts(e, target) {
+    const urls = (e.receipts || []).filter((u) => !(e.rcSent || []).includes(u)).slice(0, 4); if (!urls.length || !target) return;
+    const n = waNumber(target.phone); if (!n) return;
+    for (const u of urls) {
+      const fileName = /\.pdf(\?|$)/i.test(u) ? "Чек об оплате.pdf" : "Чек об оплате.jpg";
+      try {
+        let via;
+        if (chatappFor(target.phone)) { await chatapp.send({ chatId: n, contentUri: u, fileName, caption: "Чек об оплате 🧾" }); via = "через ChatApp"; }
+        else if (transport() === "wazzup") { const ch = await chanInfo(); await wazzupSend({ channelId: ch.id, chatType: "whatsapp", chatId: n, contentUri: u, crmMessageId: `bb-rcpt-${target.id}-${Date.now()}` }); via = `через Wazzup (${ch.phone})`; }
+        else { const r = await sendNow(target, "Чек об оплате 🧾 " + u); via = r.via; }
+        e.rcSent = (e.rcSent || []).concat(u); log(target.id, "out", `[оплата из CRM, авто] ${via}: чек об оплате ${u}`);
+      } catch (err) { e.rcErr = String(err.message || err).slice(0, 200); e.rcTries = (e.rcTries || 0) + 1; break; }
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+  }
   async function crmPaidSweep() {
     const st = getState(), q = Array.isArray(st.crmPaidQueue) ? st.crmPaidQueue : [];
+    // чеки, прикреплённые уже после сообщения об оплате (в течение 3 дней)
+    for (const e of q.filter((x) => x.sent && x.dealId && (x.receipts || []).some((u) => !(x.rcSent || []).includes(u)) && (x.rcTries || 0) < 3 && Date.now() - Date.parse(x.done || x.at) < 3 * 24 * H).slice(0, 10)) {
+      const t = (st.microInfluencerDeals || []).find((d) => d.id === e.dealId); if (t && waNumber(t.phone)) { await sendPaidReceipts(e, t); persist(); }
+    }
     const todo = q.filter((e) => !e.done && (e.tries || 0) < 3);
     if (!todo.length) return;
     const all = st.microInfluencerDeals || [];
@@ -745,8 +765,9 @@ module.exports = function mountCoordinator(app, { getState, persist, requireAuth
       try {
         const t = paidText(); const r = await sendNow(target, t);
         log(deal ? deal.id : null, "out", `[оплата из CRM, авто] ${r.via}: ${t}`);
-        e.done = new Date().toISOString(); e.sent = true;
+        e.done = new Date().toISOString(); e.sent = true; e.dealId = target.id;
         if (deal) { deal.crmPaidMsgAt = e.done; deal.crmPaidMsgAmount = e.amount; }
+        await sendPaidReceipts(e, target);
       } catch (err) { e.tries = err.permanent ? 3 : (e.tries || 0) + 1; e.err = String(err.message || err).slice(0, 200); }
       persist();
       await new Promise((r) => setTimeout(r, 1500));
