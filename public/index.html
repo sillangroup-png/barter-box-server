@@ -2714,6 +2714,8 @@ function microPlanPerResponsible(month, responsible){
 // Общий план команды на месяц (только с октября 2026; раньше — сумма личных планов).
 function microTeamPlan(month){
   if(!month || month < MICRO_PLAN_V2_FROM_MONTH) return null;
+  const sc = bbScopeNames(); // тимлиду — план своей команды (сумма личных планов)
+  if(sc) return { bloggers: sc.reduce((a,n)=> a + (microPlanPerResponsible(month, n) || 0), 0), integrations: sc.reduce((a,n)=> a + (microIntPlanFor(month, n) || 0), 0) };
   return {
     bloggers: planValue(month, "team", "micro", "bloggers") || MICRO_TEAM_PLAN_BLOGGERS,
     integrations: planValue(month, "team", "micro", "integrations") || MICRO_TEAM_PLAN_INTEGRATIONS,
@@ -2766,7 +2768,8 @@ function microResponsibleSummary(month){
     // С октября 2026 нулевые строки — только у менеджеров из текущего списка плана
     // (MICRO_PLAN_BY_MANAGER): ушедшие (Алтынай, Эльмира) не висят пустыми строками. Любой
     // менеджер, у которого в месяце есть интеграции, всё равно показывается (новый — с планом 40).
-    const zeroRowNames = (month && month >= MICRO_PLAN_V2_FROM_MONTH) ? Object.keys(microPlanTableFor(month)) : microKnownResponsibles();
+    let zeroRowNames = (month && month >= MICRO_PLAN_V2_FROM_MONTH) ? Object.keys(microPlanTableFor(month)) : microKnownResponsibles();
+    const sc = bbScopeNames(); if(sc) zeroRowNames = zeroRowNames.filter(n=> sc.includes(n));
     zeroRowNames.forEach(name=>{
       if(!map[name]) map[name] = {responsible:name, bloggers:new Map(), forProduct:new Set(), problem:new Set(), dealsCount:0, inProgress:0, published:0, totalReach:0, reachNoViral:0, viralCount:0};
     });
@@ -3579,7 +3582,7 @@ function renderLogin(){
     document.querySelectorAll(".role-btn").forEach(b=>b.classList.remove("selected"));
     document.getElementById(id).classList.add("selected");
   }
-const STAFF_GROUPS = [["Менеджеры",["Камила","Зарина","Марина","Сабрина","Надира","Мадина","Оксана","Анастасия","Ажар"]],["Тимлид",["Анеля"]],["Руководство",["Сауле","Мария"]],["Крупные",["Ольга"]],["Свой логин",["Нина","Сая"]]];
+const STAFF_GROUPS = [["Менеджеры",["Камила","Зарина","Марина","Сабрина","Надира","Мадина","Оксана","Анастасия","Ажар"]],["Тимлид",["Анеля"]],["Руководство",["Сауле","Мария"]],["Крупные",["Ольга","Алтынай"]],["Свой логин",["Нина","Сая"]]];
   function renderStaffLoginForm(role){
     selectRoleBtn(role==="manager" ? "pick-manager" : "pick-marketer");
     const body = document.getElementById("login-body");
@@ -3609,7 +3612,7 @@ const STAFF_GROUPS = [["Менеджеры",["Камила","Зарина","Ма
         const data = await withBusy(btn, ()=> Api.login(role, login, password, actor));
         if(!data.name && !actor){ toast("Выберите ваше имя", true); return; }
         saveActor(data.name || actor);
-        UI.role = data.role || role; UI.authToken = data.token; UI.readOnly = !!data.readOnly; UI.canExport = !!data.canExport; saveSession(); UI.tab = (data.name||actor)==="Ольга" ? "dashboard" : "desk";
+        UI.role = data.role || role; UI.authToken = data.token; UI.readOnly = !!data.readOnly; UI.canExport = !!data.canExport; saveSession(); UI.tab = ["Ольга","Алтынай"].includes(data.name||actor) ? "dashboard" : "desk";
         try{ const me = await Api.me(); UI.lvl = me.lvl || null; UI.team = me.team || []; }catch(e){}
         await DataManager.load(); // токена не было до этого момента — предыдущая попытка загрузки данных 401'ится
         render();
@@ -3677,6 +3680,10 @@ const MARKETER_TABS = [
 // свои оплаты, доставки и договоры. Дашборд, сводный отчёт, интеграции крупные, публикации, контроль, товары — нет.
 const MGR_TABS = [{id:"desk",label:"Рабочий стол"},{id:"crmBloggers",label:"Блогеры"},{id:"tzBase",label:"База ТЗ"},{id:"microInfluencers",label:"Интеграции микро/средние"},{id:"microCalendar",label:"Планер блогеров"},{id:"crmPayments",label:"Оплаты"},{id:"deliveryReq",label:"Доставки"},{id:"contracts",label:"Договоры"}];
 function isMgrOnly(){ return UI.role==="marketer" && UI.lvl==="manager"; }
+// 27.11.2026 (Нина): Ольга и Алтынай — крупные интеграции: всё как раньше + Блогеры, База ТЗ, Оплаты, Доставки (свои).
+function isLargeUser(){ return ["Ольга","Алтынай"].includes(UI.actorName); }
+// Чьи данные видит тимлид: себя и свою команду (null — без ограничений).
+function bbScopeNames(){ return UI.role==="marketer" && UI.lvl==="lead" && UI.actorName ? [UI.actorName].concat(UI.team||[]) : null; }
 function tabsForRole(){
   const t = tabsForRoleRaw();
   if(UI.role==="marketer" && UI.actorName==="Нина") t.push({id:"accounts", label:"Учётки"});
@@ -3685,7 +3692,7 @@ function tabsForRole(){
 }
 function tabsForRoleRaw(){
   const base = UI.role==="marketer" ? MARKETER_TABS : MANAGER_TABS;
-  if(UI.actorName==="Ольга") return base; // у Ольги интерфейс без изменений
+  if(isLargeUser()) return UI.role==="marketer" ? [base[0], {id:"crmBloggers",label:"Блогеры"}, {id:"tzBase",label:"База ТЗ"}, ...base.slice(1), {id:"crmPayments", label:"Оплаты"}, {id:"deliveryReq", label:"Доставки"}] : base;
   if(isMgrOnly()) return MGR_TABS.slice();
   // Руководство (Мария, Сауле, Константин) — только обычные вкладки, без Рабочего стола, команд и оплат (прототип X9).
   // 27.11.2026: Мария, Сауле, Константин видят всё, как Нина (раньше — урезанный набор «руководства»)
@@ -10062,7 +10069,7 @@ function attentionItems(){
   return out.sort((a,b)=> b.sev-a.sev || String(a.d.plannedDate).localeCompare(String(b.d.plannedDate)));
 }
 function tplAttention(){
-  if(!UI.actorName || UI.actorName==="Ольга") return "";
+  if(!UI.actorName || isLargeUser()) return "";
   const items = attentionItems();
   const col = s=> s>=3 ? "var(--bad)" : s===2 ? "var(--warn)" : "var(--action)";
   return `<div class="panel" style="margin-bottom:14px">
@@ -10543,7 +10550,9 @@ const tzbCanApprove = d=> TZB_ALL.includes(UI.actorName) || UI.actorName===tzbLe
 const tzbFrom = v=>{ const m = String(v.approvedBy||"").match(/Claude\s*·\s*(.+)$/i); return m ? "от "+m[1].trim()+" через Claude, ждёт проверки" : String(v.approvedBy||""); };
 const tzbNeedsLead = v=> /^(на проверке|Claude)/i.test(String(v&&v.approvedBy||"")) && !(v&&v.leadApprovedBy);
 async function tzbLoad(){ TZB.loading = true; try{ TZB.data = await apiFetch("/api/automation/brief-requests"); TZB.err = null; }catch(e){ TZB.err = e.message; TZB.data = {requests:[], sent:[]}; }
-  try{ TZB.unl = ((await apiFetch("/api/automation/brief-unlinked")) || {}).items || []; }catch(e){ TZB.unl = []; } TZB.loading = false; if(UI.tab==="tzBase") render(); }
+  try{ TZB.unl = ((await apiFetch("/api/automation/brief-unlinked")) || {}).items || []; }catch(e){ TZB.unl = []; }
+  { const me = UI.actorName, sc = bbScopeNames() || ((isMgrOnly() || isLargeUser()) && me ? [me] : null); // ТЗ на рассмотрении — только своё / своей команды
+    if(sc) TZB.unl = TZB.unl.filter(u=> sc.includes(tzbAuthor(u.author)) || tzbCands(u.handle).some(d=> sc.includes(String(d.responsible||"").trim()))); } TZB.loading = false; if(UI.tab==="tzBase") render(); }
 // 27.11.2026 (Нина): ТЗ из Claude без интеграции — «на рассмотрении» по блогеру; менеджер выбирает интеграцию и привязывает
 const TZB_AUTHOR = {nadira:"Надира", anastasia:"Анастасия", saya:"Сая", oksana:"Оксана", sabrina:"Сабрина", kamila:"Камила", zarina:"Зарина", marina:"Марина", madina:"Мадина", nina:"Нина", anelya:"Анеля", anelia:"Анеля", azhar:"Ажар", saule:"Сауле"};
 const tzbAuthor = a=> TZB_AUTHOR[String(a||"").toLowerCase()] || String(a||"—");
@@ -16601,7 +16610,7 @@ document.addEventListener("DOMContentLoaded", async ()=>{
   loadSession();
   if(UI.authToken && UI.role && UI.role!=="driver"){
     try{ const me = await Api.me(); UI.canExport = !!me.canExport; UI.lvl = me.lvl || null; UI.team = me.team || []; if(me.name) saveActor(me.name); saveSession(); }catch(e){}
-    if(UI.actorName && UI.actorName!=="Ольга" && UI.tab==="dashboard") UI.tab = "desk";
+    if(UI.actorName && !isLargeUser() && UI.tab==="dashboard") UI.tab = "desk";
   }
   try{
     await DataManager.load();
