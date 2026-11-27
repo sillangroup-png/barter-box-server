@@ -8519,6 +8519,16 @@ async function videoAction(id, action, after, comment){
     try{ await apiFetch("/api/coord/deal/"+id+"/ai-review", {method:"POST"}); toast("🤖 ИИ разбирает видео — 1–2 минуты"); await DataManager.refresh(); if(after) after(); else render(); }catch(err){ toast(err.message, true); }
     return;
   }
+  // 27.11.2026 Нина: при одобрении менеджер сам выбирает, писать ли блогеру.
+  if(action === "approve" && comment === undefined){
+    openModal(`<h3 style="margin:0 0 8px">✅ Одобрить видео</h3><div class="mut" style="margin-bottom:12px">Написать блогеру «Спасибо! Видео согласовано ✅ … пришлите ссылку»? Если напишете сами — выберите «Только одобрить».</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap"><button class="btn" id="va-only">Только одобрить</button><button class="btn btn-primary" id="va-notify">Одобрить и написать блогеру</button></div>`);
+    const go = async (notify, b)=>{ try{ const r = await withBusy(b, ()=> apiFetch("/api/coord/deal/"+id+"/video", {method:"POST", headers:jsonHeaders, body:JSON.stringify({action:"approve", notify})})); closeModal();
+      const S = VIDEO_STAGE[r.stage] || {}; toast(`${S.icon||""} ${S.label||"готово"}${r.sent ? " · " + r.sent : " · блогеру не писали"}`); await DataManager.refresh(); if(after) after(); else render(); }catch(err){ toast(err.message, true); } };
+    document.getElementById("va-only").onclick = e=> go(false, e.target);
+    document.getElementById("va-notify").onclick = e=> go(true, e.target);
+    return;
+  }
   const needNote = action === "to_lead" || ((action === "revise" || action === "reshoot") && videoStageOf(d) === "lead");
   if(needNote && comment === undefined) return modalVideoNote(d, action, after);
   try{
