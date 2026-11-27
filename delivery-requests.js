@@ -21,7 +21,8 @@ function mount(app, { getState, requireAuth, persist }) {
     // 27.11.2026: тимлид — заявки своей команды, Нина и руководство — все, остальные — свои.
     const sc = req.app.locals.bbScopeNames ? req.app.locals.bbScopeNames(req) : (isLead(req) ? null : [name]);
     const own = (r) => r.createdBy === name || r.manager === name;
-    const items = req.query.mine === '1' ? all.filter(own) : (!sc ? all : all.filter((r) => own(r) || sc.includes(r.createdBy) || sc.includes(r.manager)));
+    // Сая (как и Нина) ведёт все доставки — видит все заявки.
+    const items = req.query.mine === '1' ? all.filter(own) : (!sc || isLead(req) ? all : all.filter((r) => own(r) || sc.includes(r.createdBy) || sc.includes(r.manager)));
     res.json({ lead: isLead(req), items: items.slice().reverse().map(view) });
   });
 
