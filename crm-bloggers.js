@@ -316,7 +316,9 @@ function mount(app, { getState, requireAuth, kostPool, persist, env = process.en
       }
       if (body.manager !== undefined) { manager = body.manager ? managerKey(String(body.manager)) : null; b.assigned_manager_id = manager && !manager.startsWith('bb:') ? await crmUserId(client, manager) : null; b.manager_name_bb = body.manager || null; }
       if (body.exclusive !== undefined) { if (!canExportReq(req)) throw Object.assign(new Error('Звёздочку ставят Нина и Сая'), { code: 400 }); b.is_exclusive = !!body.exclusive; }
-      const fields = { lastComment: 'last_comment', notes: 'notes', whatsapp: 'blogger_whatsapp', category: 'category', name: 'name', instagram: 'instagram_url', tiktok: 'tiktok_url' };
+      const fields = { lastComment: 'last_comment', notes: 'notes', whatsapp: 'blogger_whatsapp', category: 'category', name: 'name', instagram: 'instagram_url', tiktok: 'tiktok_url', managerInstagram: 'manager_instagram', managerWhatsapp: 'manager_whatsapp' };
+      if (body.er !== undefined) b.er = num(body.er);
+      if (body.ipRequisites && typeof body.ipRequisites === 'object') { const R = ['name', 'iin', 'head', 'address', 'iban', 'bank', 'bik', 'kbe', 'phone', 'email']; b.ip_requisites = Object.fromEntries(R.map((k) => [k, str(body.ipRequisites[k], 300) || ''])); }
       for (const [k, f] of Object.entries(fields)) if (body[k] !== undefined) b[f] = str(body[k], 2000);
       const nums = { followers: 'instagram_followers', followersTT: 'tiktok_followers', reach: 'instagram_avg_reach', reachTT: 'tiktok_avg_reach', storiesReach: 'stories_avg_reach',
         priceReels: 'price_reels', priceTiktok: 'price_tiktok', priceBoth: 'price_both', priceStories: 'price_stories' };
@@ -340,23 +342,31 @@ function mount(app, { getState, requireAuth, kostPool, persist, env = process.en
   app.post('/api/crm/bloggers', requireAuth, async (req, res) => {
     if (!canStaff(req) || !need(res) || !(await requireCutover(res))) return;
     const body = req.body || {};
-    const nick = nickOf(body.instagram) || nickOf(body.tiktok);
-    if (!nick) return res.status(400).json({ error: 'Нужна ссылка на Instagram или TikTok' });
+    // 27.11.2026: форма как в старой CRM — ник обязателен, ссылки по желанию
+    const nick = nickOf(body.instagram) || nickOf(body.tiktok) || (String(body.name || '').trim().replace(/^@/, '').toLowerCase() || null);
+    if (!nick) return res.status(400).json({ error: 'Укажите ник блогера' });
     try {
       const dup = await pool.query('select id, data, manager from crm.bloggers where nick=$1 and not deleted limit 1', [nick]);
       if (dup.rows[0]) return res.status(409).json({ error: 'Такой блогер уже есть — ведёт ' + (managerName(dup.rows[0].manager) || 'никто'), id: dup.rows[0].id });
       const id = require('crypto').randomUUID();
       const now = new Date().toISOString();
-      const manager = managerKey(req.session.name);
+      const mName = str(body.manager) || req.session.name || null; const manager = managerKey(mName);
+      const st0 = TALK[body.status] ? body.status : 'new';
+      const REQ = ['name', 'iin', 'head', 'address', 'iban', 'bank', 'bik', 'kbe', 'phone', 'email'];
+      const ipReq = body.ipRequisites && typeof body.ipRequisites === 'object' ? Object.fromEntries(REQ.map((k) => [k, str(body.ipRequisites[k], 300) || ''])) : null;
       const b = { id, name: str(body.name) || '@' + nick, instagram_url: str(body.instagram), tiktok_url: str(body.tiktok), instagram_followers: num(body.followers), tiktok_followers: num(body.followersTT),
-        instagram_avg_reach: num(body.reach), tiktok_avg_reach: num(body.reachTT), price_reels: num(body.priceReels), price_tiktok: num(body.priceTiktok), price_both: null, price_stories: num(body.priceStories),
-        status: 'new', decline_reason: null, category: str(body.category), blogger_whatsapp: str(body.whatsapp), last_comment: str(body.lastComment, 2000), notes: null,
-        assigned_manager_id: null, manager_name_bb: req.session.name || null, in_work: false, created_at: now, updated_at: now, created_by: req.session.name || null };
+        instagram_avg_reach: num(body.reach), tiktok_avg_reach: num(body.reachTT), price_reels: num(body.priceReels), price_tiktok: num(body.priceTiktok), price_both: num(body.priceBoth), price_stories: num(body.priceStories),
+        stories_avg_reach: num(body.storiesReach), er: num(body.er), manager_instagram: str(body.managerInstagram), manager_whatsapp: str(body.managerWhatsapp),
+        ip_requisites: ipReq && Object.values(ipReq).some(Boolean) ? ipReq : undefined,
+        status: st0, decline_reason: null, category: str(body.category), blogger_whatsapp: str(body.whatsapp), last_comment: str(body.lastComment, 2000), notes: str(body.notes, 4000),
+        assigned_manager_id: null, manager_name_bb: mName, in_work: false, created_at: now, updated_at: now, created_by: req.session.name || null };
       b.assigned_manager_id = manager && !manager.startsWith('bb:') ? await crmUserId(pool, manager) : null;
       b.cpv_reels = b.price_reels && b.instagram_avg_reach ? +(b.price_reels / b.instagram_avg_reach).toFixed(2) : null;
       b.cpv_tiktok = b.price_tiktok && b.tiktok_avg_reach ? +(b.price_tiktok / b.tiktok_avg_reach).toFixed(2) : null;
-      await pool.query('insert into crm.bloggers(id,data,status,manager,nick,search) values ($1,$2,$3,$4,$5,$6)', [id, b, 'new', manager, nick, searchOf(b)]);
-      await pool.query('insert into crm.status_log(blogger_id,status,actor) values ($1,$2,$3)', [id, 'new', req.session.name || null]);
+      b.cpv_both = b.price_both && (b.instagram_avg_reach || b.tiktok_avg_reach) ? +(b.price_both / ((b.instagram_avg_reach || 0) + (b.tiktok_avg_reach || 0))).toFixed(2) : null;
+      b.cpv_stories = b.price_stories && (b.stories_avg_reach || b.instagram_avg_reach) ? +(b.price_stories / (b.stories_avg_reach || b.instagram_avg_reach)).toFixed(2) : null;
+      await pool.query('insert into crm.bloggers(id,data,status,manager,nick,search) values ($1,$2,$3,$4,$5,$6)', [id, b, st0, manager, nick, searchOf(b)]);
+      await pool.query('insert into crm.status_log(blogger_id,status,actor) values ($1,$2,$3)', [id, st0, req.session.name || null]);
       const row = await pool.query('select id, data, status, manager, nick from crm.bloggers where id=$1', [id]);
       res.json(view(row.rows[0]));
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -609,7 +619,10 @@ function mount(app, { getState, requireAuth, kostPool, persist, env = process.en
       const d = { id, blogger_id: b.bloggerId, manager_id: manager && !manager.startsWith('bb:') ? await crmUserId(pool, manager) : null, manager_name_bb: req.session.name || null,
         recipient_name: str(b.recipient), iin: str(b.iin, 20), kaspi: str(b.kaspi, 40), payment_name: str(b.name), amount, amount_video: num(b.amountVideo), amount_product: num(b.amountProduct),
         is_ip: !!b.isIp, notes: str(b.notes, 1000), status: 'pending', created_at: now, updated_at: now, created_by_bb: req.session.name || null, bb_deal_id: str(b.dealId, 80) };
-      await pool.query('insert into crm.payments(id,data,status,blogger_id,manager,created_at) values ($1,$2,$3,$4,$5,$6)', [id, d, 'pending', b.bloggerId, manager, now]); syncDealPay(b.dealId, 'pending');
+      // 27.11.2026: заявка может быть за несколько интеграций или вовсе без интеграции
+      const extra = Array.isArray(b.dealIds) ? b.dealIds.map(String).filter((x) => x && x !== String(b.dealId || '')).slice(0, 20) : [];
+      if (extra.length) d.flow_integration_ids = extra;
+      await pool.query('insert into crm.payments(id,data,status,blogger_id,manager,created_at) values ($1,$2,$3,$4,$5,$6)', [id, d, 'pending', b.bloggerId, manager, now]); syncDealPay(b.dealId, 'pending'); for (const x of extra) syncDealPay(x, 'pending');
       res.json({ ok: true, id });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
